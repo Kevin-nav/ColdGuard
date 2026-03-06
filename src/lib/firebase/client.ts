@@ -1,3 +1,4 @@
+/* eslint-disable import/no-duplicates */
 import { FirebaseApp, getApp, getApps, initializeApp } from "firebase/app";
 import { Auth, initializeAuth } from "firebase/auth";
 // @ts-expect-error – Metro resolves this via the "react-native" field in

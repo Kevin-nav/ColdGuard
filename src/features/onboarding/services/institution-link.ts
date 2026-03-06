@@ -31,7 +31,6 @@ export function parseInstitutionCode(qrValue: string) {
 }
 
 async function runInstitutionLink<T>(action: () => Promise<T>) {
-  const convex = getConvexClient();
   let attempt = 0;
   let lastError: unknown = null;
 

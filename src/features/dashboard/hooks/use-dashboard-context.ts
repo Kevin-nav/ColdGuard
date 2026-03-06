@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { getDevicesForInstitution, type DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
-import { getProfileSnapshot, type ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
+import { type ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
 import { useDashboardBootstrap } from "../providers/dashboard-bootstrap";
 import { seedDashboardDataForInstitution } from "../services/dashboard-seed";
 import { ensureLocalProfileForUser } from "../services/profile-hydration";
@@ -51,13 +51,11 @@ export function useDashboardContext(): DashboardContextState {
       setScreenError(null);
 
       try {
-        const nextProfile =
-          (await getProfileSnapshot()) ??
-          (await ensureLocalProfileForUser({
-            firebaseUid: user.uid,
-            email: user.email,
-            displayName: user.displayName,
-          }));
+        const nextProfile = await ensureLocalProfileForUser({
+          firebaseUid: user.uid,
+          email: user.email,
+          displayName: user.displayName,
+        });
 
         if (!isMounted) return;
         setProfile(nextProfile);

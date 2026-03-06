@@ -1,6 +1,7 @@
 import { api } from "../../../../convex/_generated/api";
 import { getConvexClient } from "../../../lib/convex/client";
 import {
+  clearProfileSnapshot,
   getProfileSnapshot,
   saveProfileSnapshot,
   type ProfileSnapshot,
@@ -12,8 +13,11 @@ export async function ensureLocalProfileForUser(args: {
   displayName?: string | null;
 }): Promise<ProfileSnapshot | null> {
   const cached = await getProfileSnapshot();
-  if (cached) {
+  if (cached?.firebaseUid === args.firebaseUid) {
     return cached;
+  }
+  if (cached) {
+    await clearProfileSnapshot();
   }
 
   const convex = getConvexClient();

@@ -9,7 +9,7 @@ import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
-import { spacing, typography } from "../../src/theme/tokens";
+import { spacing } from "../../src/theme/tokens";
 import { Badge } from "../../src/features/dashboard/components/badge";
 import { DeviceRecord } from "../../src/lib/storage/sqlite/device-repository";
 

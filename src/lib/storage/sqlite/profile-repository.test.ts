@@ -1,3 +1,9 @@
+import {
+  clearProfileSnapshot,
+  getProfileSnapshot,
+  saveProfileSnapshot,
+} from "./profile-repository";
+
 const mockRunAsync: jest.Mock<any, any> = jest.fn(async () => undefined);
 const mockGetFirstAsync: jest.Mock<any, any> = jest.fn(async () => null);
 
@@ -10,12 +16,6 @@ jest.mock("./client", () => ({
     getFirstAsync: mockGetFirstAsync,
   })),
 }));
-
-const {
-  clearProfileSnapshot,
-  getProfileSnapshot,
-  saveProfileSnapshot,
-} = require("./profile-repository");
 
 beforeEach(() => {
   jest.clearAllMocks();

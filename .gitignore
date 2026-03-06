@@ -60,6 +60,9 @@ coverage/
 *.sqlite3
 *.db-journal
 
+# separate web app
+/coldguard-web/
+
 # Firebase
 google-services.json
 GoogleService-Info.plist

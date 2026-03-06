@@ -1,3 +1,5 @@
+import { hasGoogleClientConfig, isGoogleProvider } from "./google-auth";
+
 jest.mock("firebase/auth", () => ({
   GoogleAuthProvider: {
     credential: jest.fn(),
@@ -8,8 +10,6 @@ jest.mock("firebase/auth", () => ({
 jest.mock("../../../lib/firebase/client", () => ({
   getFirebaseAuth: jest.fn(() => ({})),
 }));
-
-const { hasGoogleClientConfig, isGoogleProvider } = require("./google-auth");
 
 test("identifies google provider", () => {
   expect(isGoogleProvider("google.com")).toBe(true);

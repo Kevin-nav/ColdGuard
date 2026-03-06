@@ -1,3 +1,5 @@
+import { getRecentReadingsForInstitution, saveReadings } from "./reading-repository";
+
 const mockRunAsync: jest.Mock<any, any> = jest.fn(async () => undefined);
 const mockGetAllAsync: jest.Mock<any, any> = jest.fn(async () => []);
 
@@ -7,8 +9,6 @@ jest.mock("./client", () => ({
     getAllAsync: mockGetAllAsync,
   })),
 }));
-
-const { getRecentReadingsForInstitution, saveReadings } = require("./reading-repository");
 
 beforeEach(() => {
   jest.clearAllMocks();

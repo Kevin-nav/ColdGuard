@@ -1,12 +1,12 @@
+import { openDatabaseAsync } from "expo-sqlite";
+import { initializeSQLite, resetSQLiteForTests } from "./client";
+import { SQLITE_SCHEMA_STATEMENTS } from "./schema";
+
 jest.mock("expo-sqlite", () => ({
   openDatabaseAsync: jest.fn(async () => ({
     execAsync: jest.fn(async () => undefined),
   })),
 }));
-
-const { openDatabaseAsync } = require("expo-sqlite");
-const { initializeSQLite, resetSQLiteForTests } = require("./client");
-const { SQLITE_SCHEMA_STATEMENTS } = require("./schema");
 
 beforeEach(() => {
   jest.clearAllMocks();

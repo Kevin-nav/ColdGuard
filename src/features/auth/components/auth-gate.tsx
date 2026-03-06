@@ -1,4 +1,4 @@
-import { Text, View } from "react-native";
+import { Text } from "react-native";
 import { useTheme } from "../../../theme/theme-provider";
 import { AuthStage } from "../state/auth-state";
 

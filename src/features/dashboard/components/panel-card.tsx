@@ -1,7 +1,8 @@
 import { ReactNode, useMemo } from "react";
-import { Pressable, type PressableProps, StyleSheet, View } from "react-native";
+import { type PressableProps, View } from "react-native";
 import { createSharedStyles } from "../../../theme/shared-styles";
 import { useTheme } from "../../../theme/theme-provider";
+import { AnimatedPressable } from "../../../components/animated-pressable";
 
 type BaseProps = {
   children: ReactNode;
@@ -25,13 +26,13 @@ export function PanelCard(props: PanelCardProps) {
 
   if (props.interactive) {
     return (
-      <Pressable
+      <AnimatedPressable
         onPress={props.onPress}
-        style={({ pressed }) => [shared.card, pressed ? styles.pressed : null]}
+        style={shared.card}
         testID={props.testID}
       >
         {props.children}
-      </Pressable>
+      </AnimatedPressable>
     );
   }
 
@@ -41,9 +42,3 @@ export function PanelCard(props: PanelCardProps) {
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  pressed: {
-    opacity: 0.82,
-  },
-});

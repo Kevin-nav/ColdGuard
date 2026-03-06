@@ -2,6 +2,8 @@
 
 # dependencies
 node_modules/
+.pnp
+.pnp.js
 
 # Expo
 .expo/
@@ -17,6 +19,7 @@ expo-env.d.ts
 *.p12
 *.key
 *.mobileprovision
+*.keystore
 
 # Metro
 .metro-health-check*
@@ -28,15 +31,43 @@ yarn-error.*
 
 # macOS
 .DS_Store
-*.pem
 
-# local env files
-.env*.local
-auth_details.md
-
-# typescript
-*.tsbuildinfo
+# Windows
+Thumbs.db
+Desktop.ini
 
 # generated native folders
 /ios
 /android
+
+# local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+auth_details.md
+
+# testing
+coverage/
+
+# typescript
+*.tsbuildinfo
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Firebase
+google-services.json
+GoogleService-Info.plist
+firebase-debug.log
+firebase-debug.env
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo

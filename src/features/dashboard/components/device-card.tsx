@@ -1,11 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
 import { useTheme } from "../../../theme/theme-provider";
 import { spacing, typography } from "../../../theme/tokens";
 import { Badge } from "./badge";
 import { MetricRow } from "./metric-row";
 import { PanelCard } from "./panel-card";
+import { AnimatedPressable } from "../../../components/animated-pressable";
 
 function getStatusColor(status: DeviceRecord["mktStatus"], colors: ReturnType<typeof useTheme>["colors"]) {
   switch (status) {
@@ -66,9 +67,9 @@ export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }
 
   if (props.onPress) {
     return (
-      <TouchableOpacity activeOpacity={0.7} onPress={props.onPress}>
+      <AnimatedPressable onPress={props.onPress}>
         {cardContent}
-      </TouchableOpacity>
+      </AnimatedPressable>
     );
   }
 

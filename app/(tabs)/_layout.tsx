@@ -4,6 +4,7 @@ import { ActivityIndicator, View } from "react-native";
 import { TopNav } from "../../src/features/dashboard/components/top-nav";
 import { useAuthSession } from "../../src/features/auth/providers/auth-provider";
 import { useTheme } from "../../src/theme/theme-provider";
+import { AnimatedPressable } from "../../src/components/animated-pressable";
 
 function TabIcon(props: {
   color: string;
@@ -43,6 +44,7 @@ export default function TabsLayout() {
       screenOptions={{
         headerShown: true,
         header: () => <TopNav />,
+        tabBarButton: (props) => <AnimatedPressable {...(props as any)} />,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textSecondary,
         tabBarLabelStyle: {

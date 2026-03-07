@@ -39,7 +39,7 @@ jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockGetProfileSnapshot.mockResolvedValue({
+  const profile = {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
@@ -47,8 +47,9 @@ beforeEach(() => {
     staffId: "KB1001",
     role: "Supervisor",
     lastUpdatedAt: 1,
-  });
-  mockEnsureLocalProfileForUser.mockResolvedValue(null);
+  };
+  mockGetProfileSnapshot.mockResolvedValue(profile);
+  mockEnsureLocalProfileForUser.mockResolvedValue(profile);
 });
 
 test("renders the personal-only profile screen", async () => {

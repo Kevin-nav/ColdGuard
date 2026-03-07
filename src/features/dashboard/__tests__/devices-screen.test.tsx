@@ -42,7 +42,7 @@ jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockGetProfileSnapshot.mockResolvedValue({
+  const profile = {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
@@ -50,7 +50,8 @@ beforeEach(() => {
     staffId: "KB1001",
     role: "Nurse",
     lastUpdatedAt: 1,
-  });
+  };
+  mockGetProfileSnapshot.mockResolvedValue(profile);
   mockGetDevicesForInstitution.mockResolvedValue([
     {
       id: "d1",
@@ -64,7 +65,7 @@ beforeEach(() => {
       lastSeenAt: Date.now() - 60_000,
     },
   ]);
-  mockEnsureLocalProfileForUser.mockResolvedValue(null);
+  mockEnsureLocalProfileForUser.mockResolvedValue(profile);
   mockSeedDashboardDataForInstitution.mockResolvedValue([]);
 });
 
@@ -74,5 +75,5 @@ test("renders the dedicated devices workspace", async () => {
   await waitFor(() => expect(ui.getByText("Devices")).toBeTruthy());
   expect(ui.getByTestId("devices-scroll-view")).toBeTruthy();
   expect(ui.getByText("Cold Room Alpha")).toBeTruthy();
-  expect(ui.getByText(/Nurse scope/)).toBeTruthy();
+  expect(ui.getByText(/Nurse access/)).toBeTruthy();
 });

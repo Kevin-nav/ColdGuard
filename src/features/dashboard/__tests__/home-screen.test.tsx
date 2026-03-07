@@ -6,6 +6,7 @@ const mockGetProfileSnapshot = jest.fn();
 const mockGetDevicesForInstitution = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockSeedDashboardDataForInstitution = jest.fn();
+const mockUseNotificationInbox = jest.fn();
 
 jest.mock("expo-router", () => ({
   router: { push: (path: string) => mockPush(path) },
@@ -45,6 +46,10 @@ jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
     mockSeedDashboardDataForInstitution(institutionName),
 }));
 
+jest.mock("../../../../src/features/notifications/hooks/use-notification-inbox", () => ({
+  useNotificationInbox: () => mockUseNotificationInbox(),
+}));
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockGetProfileSnapshot.mockResolvedValue({
@@ -69,8 +74,32 @@ beforeEach(() => {
       lastSeenAt: Date.now() - 60_000,
     },
   ]);
-  mockEnsureLocalProfileForUser.mockResolvedValue(null);
+  mockEnsureLocalProfileForUser.mockResolvedValue({
+    firebaseUid: "u1",
+    displayName: "Akosua Mensah",
+    email: "akosua@example.com",
+    institutionName: "Korle-Bu Teaching Hospital",
+    staffId: "KB1001",
+    role: "Nurse",
+    lastUpdatedAt: 1,
+  });
   mockSeedDashboardDataForInstitution.mockResolvedValue([]);
+  mockUseNotificationInbox.mockReturnValue({
+    activeIncidents: [
+      {
+        id: "incident-1",
+        deviceNickname: "Cold Room Alpha",
+        incidentType: "temperature",
+        severity: "critical",
+        title: "Temperature excursion critical",
+        body: "Cold Room Alpha remains outside the safe range and needs intervention.",
+        status: "open",
+        readAt: null,
+        lastTriggeredAt: Date.now(),
+      },
+    ],
+    markRead: jest.fn(),
+  });
 });
 
 test("renders the nurse dashboard with profile and devices", async () => {
@@ -78,14 +107,25 @@ test("renders the nurse dashboard with profile and devices", async () => {
 
   await waitFor(() => expect(ui.getByText("ColdGuard Dashboard")).toBeTruthy());
   expect(ui.getByTestId("dashboard-scroll-view")).toBeTruthy();
-  expect(ui.getByText("Akosua Mensah")).toBeTruthy();
+  expect(ui.getByText("Welcome back, Akosua")).toBeTruthy();
   expect(ui.getByText("Cold Room Alpha")).toBeTruthy();
+  expect(ui.getByText("Recent incidents")).toBeTruthy();
+  expect(ui.getByText("Temperature excursion critical")).toBeTruthy();
   expect(ui.getByText("Quick actions")).toBeTruthy();
   expect(ui.queryByText("Staff Management")).toBeNull();
 });
 
 test("renders supervisor-only management actions", async () => {
   mockGetProfileSnapshot.mockResolvedValue({
+    firebaseUid: "u1",
+    displayName: "Yaw Boateng",
+    email: "yaw@example.com",
+    institutionName: "Korle-Bu Teaching Hospital",
+    staffId: "KB1002",
+    role: "Supervisor",
+    lastUpdatedAt: 1,
+  });
+  mockEnsureLocalProfileForUser.mockResolvedValue({
     firebaseUid: "u1",
     displayName: "Yaw Boateng",
     email: "yaw@example.com",

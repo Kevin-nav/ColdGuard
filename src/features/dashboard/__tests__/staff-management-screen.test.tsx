@@ -44,11 +44,19 @@ jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockEnsureLocalProfileForUser.mockResolvedValue(null);
+  mockEnsureLocalProfileForUser.mockImplementation(async (args: any) => ({
+    firebaseUid: args.firebaseUid,
+    displayName: args.displayName ?? "ColdGuard User",
+    email: args.email ?? "user@example.com",
+    institutionName: "Korle-Bu Teaching Hospital",
+    staffId: "KB1001",
+    role: "Nurse",
+    lastUpdatedAt: 1,
+  }));
 });
 
 test("blocks nurse access to staff management", async () => {
-  mockGetProfileSnapshot.mockResolvedValue({
+  mockEnsureLocalProfileForUser.mockResolvedValue({
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
@@ -66,7 +74,7 @@ test("blocks nurse access to staff management", async () => {
 });
 
 test("lets supervisors open the dedicated staff management workspace", async () => {
-  mockGetProfileSnapshot.mockResolvedValue({
+  mockEnsureLocalProfileForUser.mockResolvedValue({
     firebaseUid: "u1",
     displayName: "Yaw Boateng",
     email: "yaw@example.com",

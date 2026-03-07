@@ -5,6 +5,7 @@ const mockGetProfileSnapshot = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockSignOut = jest.fn(() => Promise.resolve());
 const mockReplace = jest.fn();
+const mockUseNotificationPreferences = jest.fn();
 
 jest.mock("expo-router", () => ({
   router: { replace: (path: string) => mockReplace(path) },
@@ -51,6 +52,10 @@ jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
   seedDashboardDataForInstitution: jest.fn(() => Promise.resolve([])),
 }));
 
+jest.mock("../../../../src/features/notifications/hooks/use-notification-preferences", () => ({
+  useNotificationPreferences: () => mockUseNotificationPreferences(),
+}));
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockGetProfileSnapshot.mockResolvedValue({
@@ -62,13 +67,36 @@ beforeEach(() => {
     role: "Nurse",
     lastUpdatedAt: 1,
   });
-  mockEnsureLocalProfileForUser.mockResolvedValue(null);
+  mockEnsureLocalProfileForUser.mockResolvedValue({
+    firebaseUid: "u1",
+    displayName: "Akosua Mensah",
+    email: "akosua@example.com",
+    institutionName: "Korle-Bu Teaching Hospital",
+    staffId: "KB1001",
+    role: "Nurse",
+    lastUpdatedAt: 1,
+  });
+  mockUseNotificationPreferences.mockReturnValue({
+    permissionStatus: "granted",
+    preferences: {
+      warningPushEnabled: true,
+      warningLocalEnabled: true,
+      recoveryPushEnabled: true,
+      quietHoursStart: null,
+      quietHoursEnd: null,
+      lastUpdatedAt: 1,
+    },
+    requestPermissions: jest.fn(),
+    savePreferences: jest.fn(() => Promise.resolve()),
+  });
 });
 
 test("renders settings and signs out", async () => {
   const ui = render(<SettingsScreen />);
 
   await waitFor(() => expect(ui.getByText("Settings")).toBeTruthy());
+  expect(ui.getByText("Alert delivery")).toBeTruthy();
+  expect(ui.getByText("Warning push alerts")).toBeTruthy();
   fireEvent.press(ui.getByText("Sign out"));
 
   await waitFor(() => expect(mockSignOut).toHaveBeenCalled());

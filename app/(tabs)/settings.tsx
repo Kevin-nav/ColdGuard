@@ -7,16 +7,21 @@ import { DashboardPage } from "../../src/features/dashboard/components/dashboard
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
+import { useNotificationPreferences } from "../../src/features/notifications/hooks/use-notification-preferences";
 import { getFirebaseAuth } from "../../src/lib/firebase/client";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
+import { spacing } from "../../src/theme/tokens";
 
 export default function SettingsScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createSharedStyles(colors), [colors]);
   const localStyles = useMemo(() => createLocalStyles(), []);
   const { error, isLoading, profile } = useDashboardContext();
+  const { permissionStatus, preferences, requestPermissions, savePreferences } =
+    useNotificationPreferences();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [isSavingPrefs, setIsSavingPrefs] = useState(false);
 
   async function handleSignOut() {
     if (isSigningOut) return;
@@ -27,6 +32,28 @@ export default function SettingsScreen() {
       router.replace("/(auth)/login");
     } finally {
       setIsSigningOut(false);
+    }
+  }
+
+  async function handleTogglePreference(
+    key: "recoveryPushEnabled" | "warningLocalEnabled" | "warningPushEnabled",
+  ) {
+    if (!preferences || isSavingPrefs) return;
+
+    setIsSavingPrefs(true);
+    try {
+      await savePreferences({
+        warningPushEnabled:
+          key === "warningPushEnabled" ? !preferences.warningPushEnabled : preferences.warningPushEnabled,
+        warningLocalEnabled:
+          key === "warningLocalEnabled" ? !preferences.warningLocalEnabled : preferences.warningLocalEnabled,
+        recoveryPushEnabled:
+          key === "recoveryPushEnabled" ? !preferences.recoveryPushEnabled : preferences.recoveryPushEnabled,
+        quietHoursStart: preferences.quietHoursStart,
+        quietHoursEnd: preferences.quietHoursEnd,
+      });
+    } finally {
+      setIsSavingPrefs(false);
     }
   }
 
@@ -65,7 +92,52 @@ export default function SettingsScreen() {
       </DashboardSection>
 
       <DashboardSection
-        description="Minimal now, but intentionally separated from the dashboard."
+        description="Control how warnings and recoveries reach this device."
+        eyebrow="Notifications"
+        title="Alert delivery"
+      >
+        <PanelCard>
+          <Text style={styles.bodyText}>
+            Push permission: {formatPermissionStatus(permissionStatus)}
+          </Text>
+          <Text style={styles.bodyText}>
+            Critical safety alerts remain mandatory once system delivery is enabled.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => void requestPermissions()}
+            style={({ pressed }) => [
+              styles.secondaryButton,
+              localStyles.prefButton,
+              pressed ? { backgroundColor: colors.surfaceMuted } : null,
+            ]}
+          >
+            <Text style={styles.secondaryButtonText}>Register this device for push</Text>
+          </Pressable>
+
+          <PreferenceRow
+            isEnabled={preferences?.warningPushEnabled ?? false}
+            isSaving={isSavingPrefs}
+            label="Warning push alerts"
+            onPress={() => void handleTogglePreference("warningPushEnabled")}
+          />
+          <PreferenceRow
+            isEnabled={preferences?.warningLocalEnabled ?? false}
+            isSaving={isSavingPrefs}
+            label="Local warning alerts"
+            onPress={() => void handleTogglePreference("warningLocalEnabled")}
+          />
+          <PreferenceRow
+            isEnabled={preferences?.recoveryPushEnabled ?? false}
+            isSaving={isSavingPrefs}
+            label="Recovery push alerts"
+            onPress={() => void handleTogglePreference("recoveryPushEnabled")}
+          />
+        </PanelCard>
+      </DashboardSection>
+
+      <DashboardSection
+        description="Sign out of the current account securely."
         eyebrow="Account"
         title="Session controls"
       >
@@ -107,5 +179,57 @@ function createLocalStyles() {
       flexDirection: "row",
       justifyContent: "center",
     },
+    prefButton: {
+      marginTop: spacing.md,
+    },
+    prefRow: {
+      alignItems: "center",
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginTop: spacing.md,
+    },
   });
+}
+
+function PreferenceRow(props: {
+  isEnabled: boolean;
+  isSaving: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createSharedStyles(colors), [colors]);
+  const localStyles = useMemo(() => createLocalStyles(), []);
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={props.onPress}
+      style={({ pressed }) => [
+        localStyles.prefRow,
+        pressed ? { opacity: 0.75 } : null,
+      ]}
+    >
+      <Text style={styles.bodyText}>{props.label}</Text>
+      <View style={{ alignItems: "center", flexDirection: "row", gap: 8 }}>
+        {props.isSaving ? <ActivityIndicator color={colors.primary} size="small" /> : null}
+        <Ionicons
+          color={props.isEnabled ? colors.success : colors.textSecondary}
+          name={props.isEnabled ? "checkmark-circle" : "ellipse-outline"}
+          size={20}
+        />
+      </View>
+    </Pressable>
+  );
+}
+
+function formatPermissionStatus(status: string) {
+  switch (status) {
+    case "granted":
+      return "Granted";
+    case "denied":
+      return "Denied";
+    default:
+      return "Not requested";
+  }
 }

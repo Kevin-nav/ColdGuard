@@ -24,16 +24,23 @@ export default function Index() {
         return;
       }
 
-      const profile =
-        (await getProfileSnapshot()) ??
-        (await ensureLocalProfileForUser({
-          firebaseUid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-        }));
+      try {
+        const profile =
+          (await getProfileSnapshot()) ??
+          (await ensureLocalProfileForUser({
+            firebaseUid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+          }));
 
-      if (!isMounted) return;
-      setRoute(profile?.institutionName ? "/(tabs)/home" : "/(onboarding)/link-institution");
+        if (!isMounted) return;
+        setRoute(profile?.institutionName ? "/(tabs)/home" : "/(onboarding)/link-institution");
+      } catch (error) {
+        console.error("Failed to resolve start route.", error);
+        if (!isMounted) return;
+        setRoute("/(auth)/login");
+        return;
+      }
     }
 
     void resolveStartRoute();

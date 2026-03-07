@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Tabs, router } from "expo-router";
+import { Redirect, Tabs } from "expo-router";
 import { ActivityIndicator, View } from "react-native";
 import { TopNav } from "../../src/features/dashboard/components/top-nav";
 import { useAuthSession } from "../../src/features/auth/providers/auth-provider";
@@ -35,8 +35,7 @@ export default function TabsLayout() {
   }
 
   if (!user?.uid) {
-    router.replace("/(auth)/login");
-    return null;
+    return <Redirect href="/(auth)/login" />;
   }
 
   return (

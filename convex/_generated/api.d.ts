@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as passcodes from "../passcodes.js";
 import type * as seeds from "../seeds.js";
 import type * as users from "../users.js";
 
@@ -18,6 +19,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  passcodes: typeof passcodes;
   seeds: typeof seeds;
   users: typeof users;
 }>;

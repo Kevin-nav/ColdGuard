@@ -1,4 +1,5 @@
 import { mutation } from "./_generated/server";
+import { hashInstitutionPasscode } from "./passcodes";
 
 const DEMO_INSTITUTIONS = [
   {
@@ -107,14 +108,14 @@ export const seedDemoInstitutions = mutation({
           await ctx.db.insert("institutionCredentials", {
             institutionId,
             staffId: credential.staffId,
-            passcode: credential.passcode,
+            passcode: await hashInstitutionPasscode(credential.passcode),
             displayName: credential.displayName,
             role: credential.role,
             isActive: true,
           });
         } else {
           await ctx.db.patch(existingCredential._id, {
-            passcode: credential.passcode,
+            passcode: await hashInstitutionPasscode(credential.passcode),
             displayName: credential.displayName,
             role: credential.role,
             isActive: true,

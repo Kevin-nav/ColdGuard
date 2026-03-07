@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { hashInstitutionPasscode, isHashedPasscode, verifyInstitutionPasscode } from "./passcodes";
 
 function invalidInstitutionCodeError() {
   return new Error("INSTITUTION_CODE_NOT_RECOGNIZED");
@@ -169,12 +170,22 @@ export const linkInstitutionByCredentials = mutation({
       )
       .unique();
 
-    if (!credential || credential.passcode !== args.passcode) {
+    const normalizedPasscode = args.passcode.trim();
+    const isValidCredential =
+      credential && (await verifyInstitutionPasscode(credential.passcode, normalizedPasscode));
+
+    if (!credential || !isValidCredential) {
       throw invalidInstitutionCredentialError();
     }
 
     if (!credential.isActive) {
       throw inactiveInstitutionCredentialError();
+    }
+
+    if (!isHashedPasscode(credential.passcode)) {
+      await ctx.db.patch(credential._id, {
+        passcode: await hashInstitutionPasscode(normalizedPasscode),
+      });
     }
 
     await ctx.db.patch(user._id, {

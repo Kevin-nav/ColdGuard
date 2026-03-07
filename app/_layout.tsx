@@ -3,6 +3,7 @@ import { View } from "react-native";
 import { AuthProvider } from "../src/features/auth/providers/auth-provider";
 import { DashboardBootstrapProvider } from "../src/features/dashboard/providers/dashboard-bootstrap";
 import { NetworkBanner } from "../src/features/network/components/network-banner";
+import { NotificationProvider } from "../src/features/notifications/providers/notification-provider";
 import { ThemeProvider, useTheme } from "../src/theme/theme-provider";
 
 function ThemedShell() {
@@ -21,7 +22,9 @@ export default function RootLayout() {
     <ThemeProvider>
       <DashboardBootstrapProvider>
         <AuthProvider>
-          <ThemedShell />
+          <NotificationProvider>
+            <ThemedShell />
+          </NotificationProvider>
         </AuthProvider>
       </DashboardBootstrapProvider>
     </ThemeProvider>

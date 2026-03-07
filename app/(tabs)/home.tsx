@@ -9,6 +9,8 @@ import { DeviceCard } from "../../src/features/dashboard/components/device-card"
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { StatusStrip } from "../../src/features/dashboard/components/status-strip";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
+import { NotificationListItem } from "../../src/features/notifications/components/notification-list-item";
+import { useNotificationInbox } from "../../src/features/notifications/hooks/use-notification-inbox";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
 import { spacing } from "../../src/theme/tokens";
@@ -19,6 +21,7 @@ export default function HomeScreen() {
   const shared = useMemo(() => createSharedStyles(colors), [colors]);
   const { alertCount, devices, error, isLoading, profile, safeCount, warningCount } =
     useDashboardContext();
+  const { activeIncidents, markRead } = useNotificationInbox();
 
   if (error) {
     return (
@@ -107,6 +110,31 @@ export default function HomeScreen() {
 
       <AnimatedEntry delay={200}>
         <DashboardSection
+          description="The highest-priority incidents that currently need staff attention."
+          eyebrow="Incidents"
+          title="Recent incidents"
+        >
+          {activeIncidents.length === 0 ? (
+            <PanelCard>
+              <Text style={shared.helperText}>No active notification incidents right now.</Text>
+            </PanelCard>
+          ) : (
+            activeIncidents.slice(0, 3).map((incident) => (
+              <NotificationListItem
+                incident={incident}
+                key={incident.id}
+                onPress={() => {
+                  void markRead(incident.id);
+                  router.push(`/incident/${incident.id}`);
+                }}
+              />
+            ))
+          )}
+        </DashboardSection>
+      </AnimatedEntry>
+
+      <AnimatedEntry delay={300}>
+        <DashboardSection
           description="Quick access to your most important tasks."
           eyebrow="Navigation"
           title="Quick actions"
@@ -115,7 +143,7 @@ export default function HomeScreen() {
         </DashboardSection>
       </AnimatedEntry>
 
-      <AnimatedEntry delay={300}>
+      <AnimatedEntry delay={400}>
         <DashboardSection
           description="Recently active or flagged units."
           eyebrow="Devices"
@@ -140,7 +168,7 @@ export default function HomeScreen() {
       </AnimatedEntry>
 
       {profile.role === "Supervisor" ? (
-        <AnimatedEntry delay={400}>
+        <AnimatedEntry delay={500}>
           <DashboardSection
             description="Supervisor tools and administrative actions."
             eyebrow="Supervisor"

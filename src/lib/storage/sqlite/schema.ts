@@ -46,4 +46,41 @@ export const SQLITE_SCHEMA_STATEMENTS = [
       updated_at INTEGER NOT NULL
     );
   `,
+  `
+    CREATE TABLE IF NOT EXISTS notification_cache (
+      incident_id TEXT PRIMARY KEY NOT NULL,
+      institution_name TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      device_nickname TEXT NOT NULL,
+      incident_type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      first_triggered_at INTEGER NOT NULL,
+      last_triggered_at INTEGER NOT NULL,
+      acknowledged_at INTEGER,
+      resolved_at INTEGER,
+      last_synced_at INTEGER NOT NULL
+    );
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS notification_state_cache (
+      incident_id TEXT PRIMARY KEY NOT NULL,
+      read_at INTEGER,
+      archived_at INTEGER,
+      last_viewed_version INTEGER NOT NULL DEFAULT 0
+    );
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS notification_preferences_cache (
+      id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+      warning_push_enabled INTEGER NOT NULL,
+      warning_local_enabled INTEGER NOT NULL,
+      recovery_push_enabled INTEGER NOT NULL,
+      quiet_hours_start TEXT,
+      quiet_hours_end TEXT,
+      last_updated_at INTEGER NOT NULL
+    );
+  `,
 ];

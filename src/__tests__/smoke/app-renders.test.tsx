@@ -89,6 +89,37 @@ test("falls back to login when startup profile resolution throws", async () => {
   consoleErrorSpy.mockRestore();
 });
 
+test("ignores cached profiles from a different firebase user at startup", async () => {
+  jest.mocked(useAuthSession).mockReturnValue({
+    isLoading: false,
+    providerId: null,
+    user: {
+      uid: "u2",
+      email: "user@example.com",
+      displayName: "User Two",
+    } as any,
+  });
+  jest.mocked(getProfileSnapshot).mockResolvedValue({
+    firebaseUid: "u1",
+    institutionName: "Wrong Institution",
+  } as any);
+  jest.mocked(ensureLocalProfileForUser).mockResolvedValue({
+    firebaseUid: "u2",
+    institutionName: "Correct Institution",
+  } as any);
+
+  render(<Index />);
+
+  await waitFor(() => {
+    expect(jest.mocked(ensureLocalProfileForUser)).toHaveBeenCalledWith({
+      firebaseUid: "u2",
+      email: "user@example.com",
+      displayName: "User Two",
+    });
+  });
+  expect(mockRedirect).toHaveBeenCalledWith({ href: "/(tabs)/home" });
+});
+
 test("tabs layout redirects declaratively when there is no authenticated user", () => {
   jest.mocked(useAuthSession).mockReturnValue({
     isLoading: false,

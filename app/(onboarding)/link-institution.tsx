@@ -79,7 +79,6 @@ export default function LinkInstitutionScreen() {
     setMessage(null);
     try {
       const result = await linkInstitutionFromQr({
-        firebaseUid: user.uid,
         qrPayload: qrPayload.trim(),
       });
 
@@ -136,7 +135,6 @@ export default function LinkInstitutionScreen() {
     setMessage(null);
     try {
       const result = await linkInstitutionWithCredentials({
-        firebaseUid: user.uid,
         institutionId: selectedInstitutionId,
         staffId,
         passcode,

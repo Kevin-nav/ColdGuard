@@ -8,7 +8,7 @@ const INSTITUTION_QR_PREFIX = "coldguard://institution/";
 
 export type LinkableInstitution = {
   id: string;
-  code: string;
+  hasQr: boolean;
   name: string;
   district: string | null;
   region: string | null;
@@ -60,7 +60,6 @@ export async function listLinkableInstitutions(): Promise<LinkableInstitution[]>
 }
 
 export async function linkInstitutionFromQr(args: {
-  firebaseUid: string;
   qrPayload: string;
 }): Promise<InstitutionLinkResult> {
   const institutionCode = parseInstitutionCode(args.qrPayload.trim());
@@ -68,7 +67,6 @@ export async function linkInstitutionFromQr(args: {
   const result = await runInstitutionLink(async () => {
     const convex = getConvexClient();
     return await convex.mutation((api as any).users.linkInstitutionByQr, {
-      firebaseUid: args.firebaseUid,
       institutionCode,
     });
   });
@@ -78,7 +76,6 @@ export async function linkInstitutionFromQr(args: {
 }
 
 export async function linkInstitutionWithCredentials(args: {
-  firebaseUid: string;
   institutionId: string;
   staffId: string;
   passcode: string;
@@ -86,7 +83,6 @@ export async function linkInstitutionWithCredentials(args: {
   const result = await runInstitutionLink(async () => {
     const convex = getConvexClient();
     return await convex.mutation((api as any).users.linkInstitutionByCredentials, {
-      firebaseUid: args.firebaseUid,
       institutionId: args.institutionId as any,
       staffId: args.staffId.trim(),
       passcode: args.passcode.trim(),

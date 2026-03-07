@@ -38,7 +38,7 @@ beforeEach(() => {
   mockListLinkableInstitutions.mockResolvedValue([
     {
       id: "inst-1",
-      code: "korlebu-demo",
+      hasQr: true,
       name: "Korle-Bu Teaching Hospital",
       district: "Ablekuma South",
       region: "Greater Accra",
@@ -86,7 +86,6 @@ test("submits qr linking path", async () => {
 
   await waitFor(() =>
     expect(mockLinkInstitutionFromQr).toHaveBeenCalledWith({
-      firebaseUid: "firebase-user-1",
       qrPayload: "coldguard://institution/korlebu-demo",
     }),
   );
@@ -124,7 +123,6 @@ test("submits credential linking path", async () => {
 
   await waitFor(() =>
     expect(mockLinkInstitutionWithCredentials).toHaveBeenCalledWith({
-      firebaseUid: "firebase-user-1",
       institutionId: "inst-1",
       passcode: "482913",
       staffId: "KB1001",

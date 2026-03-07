@@ -1,5 +1,6 @@
 import { onAuthStateChanged, User } from "firebase/auth";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { getConvexClient } from "../../../lib/convex/client";
 import { getFirebaseAuth } from "../../../lib/firebase/client";
 import { bootstrapUserInConvex } from "../services/user-bootstrap";
 
@@ -33,9 +34,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    const convex = getConvexClient();
+
+    if (!user) {
+      convex.clearAuth();
+      return;
+    }
+
+    convex.setAuth(async () => await user.getIdToken());
+
+    return () => {
+      convex.clearAuth();
+    };
+  }, [user]);
+
+  useEffect(() => {
     if (!user) return;
     void bootstrapUserInConvex({
-      firebaseUid: user.uid,
       email: user.email,
       displayName: user.displayName,
     });

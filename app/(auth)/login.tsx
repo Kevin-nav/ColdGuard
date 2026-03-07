@@ -82,7 +82,6 @@ export default function LoginScreen() {
       try {
         const user = await signInWithGoogleIdToken(idToken);
         await bootstrapUserInConvex({
-          firebaseUid: user.uid,
           email: user.email,
           displayName: user.displayName,
         });
@@ -104,7 +103,6 @@ export default function LoginScreen() {
     try {
       const user = await signInWithEmailPassword(email.trim(), password);
       await bootstrapUserInConvex({
-        firebaseUid: user.uid,
         email: user.email,
         displayName: user.displayName,
       });
@@ -123,7 +121,6 @@ export default function LoginScreen() {
     try {
       const user = await registerWithEmailPassword(email.trim(), password);
       await bootstrapUserInConvex({
-        firebaseUid: user.uid,
         email: user.email,
         displayName: user.displayName,
       });

@@ -1,6 +1,9 @@
 import { makeUserBootstrapPayload } from "./user-bootstrap";
 
-test("creates payload with firebase uid", () => {
-  const payload = makeUserBootstrapPayload("uid_1", "nurse@clinic.org");
-  expect(payload.firebaseUid).toBe("uid_1");
+test("creates payload without caller-supplied firebase uid", () => {
+  const payload = makeUserBootstrapPayload("nurse@clinic.org", "Akosua Mensah");
+  expect(payload).toEqual({
+    email: "nurse@clinic.org",
+    displayName: "Akosua Mensah",
+  });
 });

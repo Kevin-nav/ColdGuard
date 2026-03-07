@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { getNextCredentialAttemptState, isCredentialAttemptLocked } from "./credential-throttle";
 import { hashInstitutionPasscode, isHashedPasscode, verifyInstitutionPasscode } from "./passcodes";
 
 function invalidInstitutionCodeError() {
@@ -14,16 +15,28 @@ function inactiveInstitutionCredentialError() {
   return new Error("INACTIVE_INSTITUTION_CREDENTIAL");
 }
 
+function institutionCredentialLockedError() {
+  return new Error("INSTITUTION_CREDENTIAL_LOCKED");
+}
+
+async function getAuthenticatedFirebaseUid(ctx: { auth: { getUserIdentity(): Promise<{ subject: string } | null> } }) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity?.subject) {
+    throw new Error("UNAUTHENTICATED");
+  }
+  return identity.subject;
+}
+
 export const upsertByFirebaseUid = mutation({
   args: {
-    firebaseUid: v.string(),
     email: v.optional(v.string()),
     displayName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
     const existing = await ctx.db
       .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", args.firebaseUid))
+      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
       .unique();
 
     if (existing) {
@@ -35,7 +48,7 @@ export const upsertByFirebaseUid = mutation({
     }
 
     return await ctx.db.insert("users", {
-      firebaseUid: args.firebaseUid,
+      firebaseUid,
       email: args.email,
       displayName: args.displayName,
     });
@@ -43,25 +56,23 @@ export const upsertByFirebaseUid = mutation({
 });
 
 export const getByFirebaseUid = query({
-  args: {
-    firebaseUid: v.string(),
-  },
-  handler: async (ctx, args) => {
+  args: {},
+  handler: async (ctx) => {
+    const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
     return await ctx.db
       .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", args.firebaseUid))
+      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
       .unique();
   },
 });
 
 export const getLinkedProfileByFirebaseUid = query({
-  args: {
-    firebaseUid: v.string(),
-  },
-  handler: async (ctx, args) => {
+  args: {},
+  handler: async (ctx) => {
+    const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
     const user = await ctx.db
       .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", args.firebaseUid))
+      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
       .unique();
 
     if (!user || !user.institutionId) {
@@ -91,8 +102,8 @@ export const listInstitutions = query({
     return institutions
       .map((institution) => ({
         id: institution._id,
-        code: institution.code,
         name: institution.name,
+        hasQr: true,
         district: institution.district ?? null,
         region: institution.region ?? null,
       }))
@@ -102,13 +113,13 @@ export const listInstitutions = query({
 
 export const linkInstitutionByQr = mutation({
   args: {
-    firebaseUid: v.string(),
     institutionCode: v.string(),
   },
   handler: async (ctx, args) => {
+    const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
     const user = await ctx.db
       .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", args.firebaseUid))
+      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
       .unique();
 
     if (!user) {
@@ -143,15 +154,15 @@ export const linkInstitutionByQr = mutation({
 
 export const linkInstitutionByCredentials = mutation({
   args: {
-    firebaseUid: v.string(),
     institutionId: v.id("institutions"),
     staffId: v.string(),
     passcode: v.string(),
   },
   handler: async (ctx, args) => {
+    const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
     const user = await ctx.db
       .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", args.firebaseUid))
+      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
       .unique();
 
     if (!user) {
@@ -169,17 +180,42 @@ export const linkInstitutionByCredentials = mutation({
         q.eq("institutionId", args.institutionId).eq("staffId", args.staffId),
       )
       .unique();
+    const attemptRecord = await ctx.db
+      .query("institutionCredentialAttempts")
+      .withIndex("by_institution_staff_id", (q) =>
+        q.eq("institutionId", args.institutionId).eq("staffId", args.staffId),
+      )
+      .unique();
+    const now = Date.now();
+
+    if (isCredentialAttemptLocked(attemptRecord, now)) {
+      throw institutionCredentialLockedError();
+    }
 
     const normalizedPasscode = args.passcode.trim();
     const isValidCredential =
       credential && (await verifyInstitutionPasscode(credential.passcode, normalizedPasscode));
 
     if (!credential || !isValidCredential) {
+      const nextAttemptState = getNextCredentialAttemptState(attemptRecord, now);
+      if (attemptRecord) {
+        await ctx.db.patch(attemptRecord._id, nextAttemptState);
+      } else {
+        await ctx.db.insert("institutionCredentialAttempts", {
+          institutionId: args.institutionId,
+          staffId: args.staffId,
+          ...nextAttemptState,
+        });
+      }
       throw invalidInstitutionCredentialError();
     }
 
     if (!credential.isActive) {
       throw inactiveInstitutionCredentialError();
+    }
+
+    if (attemptRecord) {
+      await ctx.db.delete(attemptRecord._id);
     }
 
     if (!isHashedPasscode(credential.passcode)) {

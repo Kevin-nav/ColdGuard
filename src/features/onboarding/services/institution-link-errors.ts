@@ -8,6 +8,8 @@ export function mapInstitutionLinkError(error: unknown) {
       return "This institution code was not recognized.";
     case "INVALID_INSTITUTION_CREDENTIALS":
       return "Staff ID or passcode is incorrect.";
+    case "INSTITUTION_CREDENTIAL_LOCKED":
+      return "Too many attempts. Wait a moment and try again.";
     case "INACTIVE_INSTITUTION_CREDENTIAL":
       return "This nurse credential has been disabled. Contact your supervisor.";
     case "OFFLINE":

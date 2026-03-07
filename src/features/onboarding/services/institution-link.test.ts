@@ -41,7 +41,6 @@ test("parses clinic code from qr payload", () => {
 test("rejects invalid qr payloads", async () => {
   await expect(
     linkInstitutionFromQr({
-      firebaseUid: "u1",
       qrPayload: "https://example.com/qr",
     }),
   ).rejects.toThrow("INVALID_QR_PAYLOAD");
@@ -49,11 +48,11 @@ test("rejects invalid qr payloads", async () => {
 
 test("lists institutions from convex", async () => {
   mockQuery.mockResolvedValue([
-    { id: "i1", code: "korlebu-demo", name: "Korle-Bu Teaching Hospital", district: null, region: null },
+    { id: "i1", hasQr: true, name: "Korle-Bu Teaching Hospital", district: null, region: null },
   ]);
 
   await expect(listLinkableInstitutions()).resolves.toEqual([
-    { id: "i1", code: "korlebu-demo", name: "Korle-Bu Teaching Hospital", district: null, region: null },
+    { id: "i1", hasQr: true, name: "Korle-Bu Teaching Hospital", district: null, region: null },
   ]);
 });
 
@@ -69,7 +68,6 @@ test("links institution by qr and stores handshake token", async () => {
 
   await expect(
     linkInstitutionFromQr({
-      firebaseUid: "u1",
       qrPayload: "coldguard://institution/korlebu-demo",
     }),
   ).resolves.toEqual({
@@ -82,7 +80,6 @@ test("links institution by qr and stores handshake token", async () => {
   });
 
   expect(mockMutation).toHaveBeenCalledWith(expect.anything(), {
-    firebaseUid: "u1",
     institutionCode: "korlebu-demo",
   });
   expect(mockSaveClinicHandshakeToken).toHaveBeenCalledWith("token-1");
@@ -100,7 +97,6 @@ test("links institution by nurse credentials and stores handshake token", async 
 
   await expect(
     linkInstitutionWithCredentials({
-      firebaseUid: "u2",
       institutionId: "i2",
       staffId: "TM2001",
       passcode: "203844",
@@ -115,7 +111,6 @@ test("links institution by nurse credentials and stores handshake token", async 
   });
 
   expect(mockMutation).toHaveBeenCalledWith(expect.anything(), {
-    firebaseUid: "u2",
     institutionId: "i2",
     passcode: "203844",
     staffId: "TM2001",
@@ -132,6 +127,9 @@ test("maps institution linking errors to user-facing copy", () => {
   );
   expect(mapInstitutionLinkError(new Error("INVALID_INSTITUTION_CREDENTIALS"))).toBe(
     "Staff ID or passcode is incorrect.",
+  );
+  expect(mapInstitutionLinkError(new Error("INSTITUTION_CREDENTIAL_LOCKED"))).toBe(
+    "Too many attempts. Wait a moment and try again.",
   );
   expect(mapInstitutionLinkError(new Error("INACTIVE_INSTITUTION_CREDENTIAL"))).toBe(
     "This nurse credential has been disabled. Contact your supervisor.",

@@ -34,10 +34,7 @@ export function InstitutionList(props: InstitutionListProps) {
               <Text style={[styles.selected, { color: props.colors.primary }]}>Selected institution</Text>
             ) : null}
             <Text style={[styles.meta, { color: props.colors.textSecondary }]}>
-              {location || institution.code}
-            </Text>
-            <Text style={[styles.meta, { color: props.colors.textSecondary }]}>
-              Code: {institution.code}
+              {location || "Tap to select this facility"}
             </Text>
           </Pressable>
         );

@@ -25,13 +25,15 @@ export default function Index() {
       }
 
       try {
+        const cachedProfile = await getProfileSnapshot();
         const profile =
-          (await getProfileSnapshot()) ??
-          (await ensureLocalProfileForUser({
-            firebaseUid: user.uid,
-            email: user.email,
-            displayName: user.displayName,
-          }));
+          cachedProfile?.firebaseUid === user.uid
+            ? cachedProfile
+            : await ensureLocalProfileForUser({
+                firebaseUid: user.uid,
+                email: user.email,
+                displayName: user.displayName,
+              });
 
         if (!isMounted) return;
         setRoute(profile?.institutionName ? "/(tabs)/home" : "/(onboarding)/link-institution");

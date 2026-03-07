@@ -14,12 +14,16 @@ function bytesToHex(bytes: Uint8Array) {
 function hexToBytes(hex: string) {
   const normalized = hex.trim();
   if (normalized.length % 2 !== 0) {
-    throw new Error("Invalid hex input.");
+    return null;
   }
 
   const bytes = new Uint8Array(normalized.length / 2);
   for (let index = 0; index < normalized.length; index += 2) {
-    bytes[index / 2] = Number.parseInt(normalized.slice(index, index + 2), 16);
+    const parsed = Number.parseInt(normalized.slice(index, index + 2), 16);
+    if (Number.isNaN(parsed)) {
+      return null;
+    }
+    bytes[index / 2] = parsed;
   }
   return bytes;
 }
@@ -81,6 +85,12 @@ export async function verifyInstitutionPasscode(storedPasscode: string, inputPas
     return false;
   }
 
-  const derivedHash = await derivePasscodeHash(normalizedInput, hexToBytes(saltHex));
-  return constantTimeEqual(derivedHash, hexToBytes(expectedHashHex));
+  const saltBytes = hexToBytes(saltHex);
+  const expectedHashBytes = hexToBytes(expectedHashHex);
+  if (!saltBytes || !expectedHashBytes) {
+    return false;
+  }
+
+  const derivedHash = await derivePasscodeHash(normalizedInput, saltBytes);
+  return constantTimeEqual(derivedHash, expectedHashBytes);
 }

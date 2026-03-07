@@ -18,6 +18,13 @@ export default defineSchema({
     role: v.optional(v.string()),
     isActive: v.boolean(),
   }).index("by_institution_staff_id", ["institutionId", "staffId"]),
+  institutionCredentialAttempts: defineTable({
+    institutionId: v.id("institutions"),
+    staffId: v.string(),
+    failedAttempts: v.number(),
+    lastFailedAt: v.number(),
+    lockoutUntil: v.number(),
+  }).index("by_institution_staff_id", ["institutionId", "staffId"]),
   users: defineTable({
     firebaseUid: v.string(),
     email: v.optional(v.string()),

@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { hashInstitutionPasscode } from "./passcodes";
 
 const DEMO_INSTITUTIONS = [
@@ -70,7 +70,7 @@ const DEMO_INSTITUTIONS = [
   },
 ] as const;
 
-export const seedDemoInstitutions = mutation({
+export const seedDemoInstitutions = internalMutation({
   args: {},
   handler: async (ctx) => {
     const seeded = [];

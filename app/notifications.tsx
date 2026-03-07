@@ -16,6 +16,7 @@ export default function NotificationsScreen() {
   const shared = useMemo(() => createSharedStyles(colors), [colors]);
   const { error: dashboardError, isLoading: dashboardLoading, profile } = useDashboardContext();
   const inbox = useNotificationInbox();
+  const { markRead } = inbox;
 
   if (dashboardError) {
     return (
@@ -53,7 +54,12 @@ export default function NotificationsScreen() {
               <NotificationListItem
                 key={incident.id}
                 incident={incident}
-                onPress={() => router.push(`/incident/${incident.id}`)}
+                onPress={() => {
+                  void (async () => {
+                    await markRead(incident.id);
+                    router.push(`/incident/${incident.id}`);
+                  })();
+                }}
               />
             ))}
           </View>

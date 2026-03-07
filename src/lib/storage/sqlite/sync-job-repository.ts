@@ -87,11 +87,19 @@ export async function deleteSyncJob(jobId: string) {
 }
 
 function mapSyncJobRow(row: SyncJobRow): SyncJobRecord {
+  let payload: unknown = null;
+
+  try {
+    payload = JSON.parse(row.payload_json);
+  } catch (error) {
+    console.error(`Failed to parse sync job payload for ${row.id}.`, error);
+  }
+
   return {
     createdAt: row.created_at,
     id: row.id,
     jobType: row.job_type,
-    payload: JSON.parse(row.payload_json),
+    payload,
     status: row.status,
     updatedAt: row.updated_at,
   };

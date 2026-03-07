@@ -35,6 +35,7 @@ export default function IncidentDetailScreen() {
   const shared = useMemo(() => createSharedStyles(colors), [colors]);
   const { isLoading: dashboardLoading } = useDashboardContext();
   const inbox = useNotificationInbox();
+  const { acknowledgeIncident, getIncidentById, incidents, isLoading, markRead, resolveIncident } = inbox;
   const [incident, setIncident] = useState<NotificationIncidentRecord | null>(null);
 
   useEffect(() => {
@@ -42,10 +43,10 @@ export default function IncidentDetailScreen() {
 
     async function loadIncident() {
       if (!id) return;
-      const cached = inbox.incidents.find((entry) => entry.id === id) ?? (await inbox.getIncidentById(id));
+      const cached = incidents.find((entry) => entry.id === id) ?? (await getIncidentById(id));
       if (!active || !cached) return;
       setIncident(cached);
-      await inbox.markRead(cached.id);
+      await markRead(cached.id);
     }
 
     void loadIncident();
@@ -53,9 +54,9 @@ export default function IncidentDetailScreen() {
     return () => {
       active = false;
     };
-  }, [id, inbox]);
+  }, [getIncidentById, id, incidents, markRead]);
 
-  if (dashboardLoading || inbox.isLoading) {
+  if (dashboardLoading || isLoading) {
     return (
       <DashboardPage>
         <ActivityIndicator color={colors.primary} />
@@ -103,7 +104,7 @@ export default function IncidentDetailScreen() {
           <IncidentActionBar
             incident={incident}
             onAcknowledge={async () => {
-              await inbox.acknowledgeIncident(incident.id);
+              await acknowledgeIncident(incident.id);
               setIncident((current) =>
                 current
                   ? {
@@ -115,7 +116,7 @@ export default function IncidentDetailScreen() {
               );
             }}
             onResolve={async () => {
-              await inbox.resolveIncident(incident.id);
+              await resolveIncident(incident.id);
               setIncident((current) =>
                 current
                   ? {

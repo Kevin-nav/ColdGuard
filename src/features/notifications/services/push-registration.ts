@@ -42,7 +42,8 @@ export async function registerForPushNotificationsAsync() {
       permissionStatus,
       token,
     } satisfies PushRegistrationResult;
-  } catch {
+  } catch (error) {
+    console.error("Failed to get Expo push token.", error);
     return {
       permissionStatus,
       token: null,

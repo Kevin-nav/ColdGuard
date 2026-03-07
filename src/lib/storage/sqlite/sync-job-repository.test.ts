@@ -48,3 +48,29 @@ test("updates sync job lifecycle", async () => {
 
   expect(mockRunAsync).toHaveBeenCalledTimes(2);
 });
+
+test("returns a safe null payload when a sync job row is corrupted", async () => {
+  const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+  mockGetAllAsync.mockResolvedValue([
+    {
+      id: "job-1",
+      job_type: "mark_notification_read",
+      payload_json: "{not-valid-json",
+      status: "pending",
+      created_at: 1,
+      updated_at: 1,
+    },
+  ]);
+
+  await expect(listPendingSyncJobs()).resolves.toEqual([
+    expect.objectContaining({
+      id: "job-1",
+      jobType: "mark_notification_read",
+      payload: null,
+    }),
+  ]);
+  expect(consoleErrorSpy).toHaveBeenCalled();
+
+  consoleErrorSpy.mockRestore();
+});

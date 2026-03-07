@@ -588,14 +588,18 @@ export const getUnreadCount = query({
   handler: async (ctx) => {
     const user = await getAuthenticatedLinkedUser(ctx);
     const incidents = await getInstitutionIncidents(ctx, user.institutionId!);
+    const userStates = (await ctx.db
+      .query("notificationUserState")
+      .withIndex("by_user_id", (q: any) => q.eq("userId", user._id))
+      .collect()) as NotificationUserState[];
+    const stateByIncidentId = new Map(
+      userStates.map((state) => [state.incidentId, state] as const),
+    );
     let unreadCount = 0;
 
     for (const incident of incidents) {
       if (incident.status === "resolved") continue;
-      const state = await ctx.db
-        .query("notificationUserState")
-        .withIndex("by_user_incident", (q: any) => q.eq("userId", user._id).eq("incidentId", incident._id))
-        .unique();
+      const state = stateByIncidentId.get(incident._id);
 
       if (!state?.readAt && !state?.archivedAt) {
         unreadCount += 1;
@@ -1035,11 +1039,30 @@ async function persistDeliveryPlans(ctx: any, plans: DeliveryPlan[], now: number
   }
 }
 
+async function getDueDeliveryIncidents(ctx: any, now: number) {
+  const openIncidents = (await ctx.db
+    .query("notificationIncidents")
+    .withIndex("by_status", (q: any) => q.eq("status", "open"))
+    .collect()) as NotificationIncident[];
+  const acknowledgedIncidents = (await ctx.db
+    .query("notificationIncidents")
+    .withIndex("by_status", (q: any) => q.eq("status", "acknowledged"))
+    .collect()) as NotificationIncident[];
+  const resolvedIncidents = ((await ctx.db
+    .query("notificationIncidents")
+    .withIndex("by_status", (q: any) => q.eq("status", "resolved"))
+    .collect()) as NotificationIncident[]).filter(
+    (incident) => (incident.resolvedAt ?? 0) >= now - RECENT_REOPEN_WINDOW_MS,
+  );
+
+  return [...openIncidents, ...acknowledgedIncidents, ...resolvedIncidents];
+}
+
 export const dispatchDueDeliveries = mutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    const incidents = (await ctx.db.query("notificationIncidents").collect()) as NotificationIncident[];
+    const incidents = await getDueDeliveryIncidents(ctx, now);
     const plans: DeliveryPlan[] = [];
 
     for (const incident of incidents) {
@@ -1055,7 +1078,7 @@ export const escalateDueIncidents = mutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
-    const incidents = (await ctx.db.query("notificationIncidents").collect()) as NotificationIncident[];
+    const incidents = await getDueDeliveryIncidents(ctx, now);
     const plans: DeliveryPlan[] = [];
 
     for (const incident of incidents) {

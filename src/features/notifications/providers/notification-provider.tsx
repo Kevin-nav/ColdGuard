@@ -162,26 +162,42 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   async function markRead(incidentId: string) {
     if (!institutionName) return;
-    await markNotificationReadWithSync(incidentId, { isOnline });
-    setIncidents(await syncNotificationInbox(institutionName, { isOnline }));
+    try {
+      await markNotificationReadWithSync(incidentId, { isOnline });
+      setIncidents(await syncNotificationInbox(institutionName, { isOnline }));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to mark the incident as read.");
+    }
   }
 
   async function archiveIncident(incidentId: string) {
     if (!institutionName) return;
-    await archiveNotificationWithSync(incidentId, { isOnline });
-    setIncidents(await syncNotificationInbox(institutionName, { isOnline }));
+    try {
+      await archiveNotificationWithSync(incidentId, { isOnline });
+      setIncidents(await syncNotificationInbox(institutionName, { isOnline }));
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to archive the incident.");
+    }
   }
 
   async function acknowledgeIncident(incidentId: string) {
     if (!institutionName) return;
-    const nextIncidents = await acknowledgeIncidentWithSync(incidentId, institutionName, { isOnline });
-    setIncidents(nextIncidents);
+    try {
+      const nextIncidents = await acknowledgeIncidentWithSync(incidentId, institutionName, { isOnline });
+      setIncidents(nextIncidents);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to acknowledge the incident.");
+    }
   }
 
   async function resolveIncident(incidentId: string) {
     if (!institutionName) return;
-    const nextIncidents = await resolveIncidentWithSync(incidentId, institutionName, { isOnline });
-    setIncidents(nextIncidents);
+    try {
+      const nextIncidents = await resolveIncidentWithSync(incidentId, institutionName, { isOnline });
+      setIncidents(nextIncidents);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to resolve the incident.");
+    }
   }
 
   async function updatePreferences(nextPreferences: Omit<NotificationPreferences, "lastUpdatedAt">) {

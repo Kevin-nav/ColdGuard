@@ -56,6 +56,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   })
+    .index("by_status", ["status"])
     .index("by_institution_status", ["institutionId", "status"])
     .index("by_institution_device_type", ["institutionId", "deviceId", "incidentType"])
     .index("by_device_id", ["deviceId"]),
@@ -75,6 +76,7 @@ export default defineSchema({
     archivedAt: v.optional(v.number()),
     lastViewedVersion: v.number(),
   })
+    .index("by_user_id", ["userId"])
     .index("by_user_incident", ["userId", "incidentId"])
     .index("by_incident_user", ["incidentId", "userId"]),
   userPushDevices: defineTable({

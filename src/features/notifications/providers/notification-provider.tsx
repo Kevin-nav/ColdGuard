@@ -223,11 +223,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   async function getIncidentById(incidentId: string) {
-    if (!institutionName) {
-      return incidents.find((incident) => incident.id === incidentId) ?? null;
-    }
+    const localIncident = incidents.find((incident) => incident.id === incidentId) ?? null;
 
-    return await getIncidentDetail(incidentId, institutionName, { isOnline });
+    try {
+      if (!institutionName) {
+        return localIncident;
+      }
+
+      return await getIncidentDetail(incidentId, institutionName, { isOnline });
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to load incident details.");
+      return localIncident;
+    }
   }
 
   const value = {

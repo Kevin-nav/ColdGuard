@@ -59,6 +59,10 @@ function forbiddenError() {
   return new Error("FORBIDDEN");
 }
 
+function pushTokenConflictError() {
+  return new Error("PUSH_TOKEN_CONFLICT");
+}
+
 async function getAuthenticatedUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity?.subject) {
@@ -845,6 +849,15 @@ export const registerPushDevice = mutation({
     };
 
     if (existing) {
+      if (existing.userId !== user._id) {
+        console.error("Blocked push token reassignment attempt.", {
+          expoPushToken: args.expoPushToken,
+          existingDeviceId: existing._id,
+          existingUserId: existing.userId,
+          attemptedUserId: user._id,
+        });
+        throw pushTokenConflictError();
+      }
       await ctx.db.patch(existing._id, patch);
       return existing._id;
     }

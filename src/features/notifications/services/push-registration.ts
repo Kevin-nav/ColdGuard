@@ -10,6 +10,10 @@ type PushRegistrationResult = {
   token: string | null;
 };
 
+function isPushTokenConflictError(error: unknown) {
+  return error instanceof Error && error.message.includes("PUSH_TOKEN_CONFLICT");
+}
+
 function normalizePermissionStatus(status: Notifications.PermissionStatus): NotificationPermissionStatus {
   if (status === "granted") return "granted";
   if (status === "denied") return "denied";
@@ -67,7 +71,11 @@ export async function syncPushRegistration() {
   try {
     const convex = getConvexClient();
     await convex.mutation((api as any).notifications.registerPushDevice, payload);
-  } catch {
+  } catch (error) {
+    if (isPushTokenConflictError(error)) {
+      console.error("Push token registration was rejected due to an ownership conflict.", error);
+      return result;
+    }
     await enqueueSyncJob("register_push_device", payload);
   }
 

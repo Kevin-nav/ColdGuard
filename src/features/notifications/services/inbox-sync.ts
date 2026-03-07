@@ -61,6 +61,10 @@ type SyncJobType =
   | "resolve_incident"
   | "update_notification_preferences";
 
+function isPushTokenConflictError(error: unknown) {
+  return error instanceof Error && error.message.includes("PUSH_TOKEN_CONFLICT");
+}
+
 export async function syncNotificationInbox(institutionName: string, options: { isOnline: boolean }) {
   if (!options.isOnline) {
     await seedNotificationsFromLocalDevices(institutionName);
@@ -278,7 +282,15 @@ async function processSyncJob(job: SyncJobRecord) {
     }
 
     await deleteSyncJob(job.id);
-  } catch {
+  } catch (error) {
+    if (job.jobType === "register_push_device" && isPushTokenConflictError(error)) {
+      console.error("Dropping push registration sync job after token ownership conflict.", {
+        jobId: job.id,
+        payload: job.payload,
+      });
+      await deleteSyncJob(job.id);
+      return;
+    }
     await setSyncJobStatus(job.id, "pending");
   }
 }

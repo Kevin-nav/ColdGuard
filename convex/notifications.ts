@@ -23,6 +23,7 @@ type NotificationEvent = Doc<"notificationEvents">;
 type NotificationUserState = Doc<"notificationUserState">;
 type UserDoc = Doc<"users">;
 type PushDevice = Doc<"userPushDevices">;
+type NotificationPreferenceDoc = Doc<"userNotificationPreferences">;
 type NotificationSeverity = "warning" | "critical";
 type NotificationIncidentType = "temperature" | "door_open" | "device_offline" | "battery_low";
 type Snapshot = {
@@ -525,12 +526,11 @@ async function getInstitutionIncidents(ctx: any, institutionId: Id<"institutions
     .collect()) as NotificationIncident[]).sort(sortIncidents);
 }
 
-async function mapIncidentForUser(ctx: any, incident: NotificationIncident, institutionName: string, userId: Id<"users">) {
-  const userState = await ctx.db
-    .query("notificationUserState")
-    .withIndex("by_user_incident", (q: any) => q.eq("userId", userId).eq("incidentId", incident._id))
-    .unique();
-
+function mapIncidentWithUserState(
+  incident: NotificationIncident,
+  institutionName: string,
+  userState: NotificationUserState | null,
+) {
   return {
     incidentId: incident._id,
     institutionName,
@@ -555,6 +555,23 @@ async function mapIncidentForUser(ctx: any, incident: NotificationIncident, inst
   };
 }
 
+async function getNotificationUserStateMap(ctx: any, userId: Id<"users">) {
+  const userStates = (await ctx.db
+    .query("notificationUserState")
+    .withIndex("by_user_id", (q: any) => q.eq("userId", userId))
+    .collect()) as NotificationUserState[];
+  return new Map(userStates.map((state) => [state.incidentId, state] as const));
+}
+
+async function mapIncidentForUser(ctx: any, incident: NotificationIncident, institutionName: string, userId: Id<"users">) {
+  const userState = await ctx.db
+    .query("notificationUserState")
+    .withIndex("by_user_incident", (q: any) => q.eq("userId", userId).eq("incidentId", incident._id))
+    .unique();
+
+  return mapIncidentWithUserState(incident, institutionName, userState);
+}
+
 export const listInbox = query({
   args: {
     statusFilter: v.optional(v.string()),
@@ -566,20 +583,19 @@ export const listInbox = query({
     if (!institution) return [];
 
     const incidents = await getInstitutionIncidents(ctx, user.institutionId!);
+    const userStateByIncidentId = await getNotificationUserStateMap(ctx, user._id);
     const filtered = incidents.filter((incident) => {
       if (args.statusFilter && args.statusFilter !== "all" && incident.status !== args.statusFilter) {
         return false;
       }
-      return true;
+      return !userStateByIncidentId.get(incident._id)?.archivedAt;
     });
 
-    const mapped = await Promise.all(
-      filtered
-        .slice(0, args.limit ?? 50)
-        .map(async (incident) => await mapIncidentForUser(ctx, incident, institution.name, user._id)),
-    );
-
-    return mapped.filter((incident) => !incident.userState?.archivedAt);
+    return filtered
+      .slice(0, args.limit ?? 50)
+      .map((incident) =>
+        mapIncidentWithUserState(incident, institution.name, userStateByIncidentId.get(incident._id) ?? null),
+      );
   },
 });
 
@@ -588,13 +604,7 @@ export const getUnreadCount = query({
   handler: async (ctx) => {
     const user = await getAuthenticatedLinkedUser(ctx);
     const incidents = await getInstitutionIncidents(ctx, user.institutionId!);
-    const userStates = (await ctx.db
-      .query("notificationUserState")
-      .withIndex("by_user_id", (q: any) => q.eq("userId", user._id))
-      .collect()) as NotificationUserState[];
-    const stateByIncidentId = new Map(
-      userStates.map((state) => [state.incidentId, state] as const),
-    );
+    const stateByIncidentId = await getNotificationUserStateMap(ctx, user._id);
     let unreadCount = 0;
 
     for (const incident of incidents) {
@@ -883,6 +893,34 @@ async function collectEligiblePushTargets(
     .query("users")
     .withIndex("by_institution_id", (q: any) => q.eq("institutionId", incident.institutionId))
     .collect()) as UserDoc[];
+  const userIds = users.map((user) => user._id);
+  if (userIds.length === 0) {
+    return [];
+  }
+
+  const matchesUserIds = (q: any) => {
+    if (userIds.length === 1) {
+      return q.eq(q.field("userId"), userIds[0]);
+    }
+    return q.or(...userIds.map((userId) => q.eq(q.field("userId"), userId)));
+  };
+  const [devices, preferences] = await Promise.all([
+    ctx.db.query("userPushDevices").filter((q: any) => matchesUserIds(q)).collect() as Promise<PushDevice[]>,
+    ctx.db
+      .query("userNotificationPreferences")
+      .filter((q: any) => matchesUserIds(q))
+      .collect() as Promise<NotificationPreferenceDoc[]>,
+  ]);
+  const devicesByUserId = new Map<Id<"users">, PushDevice[]>();
+  for (const device of devices) {
+    const existingDevices = devicesByUserId.get(device.userId);
+    if (existingDevices) {
+      existingDevices.push(device);
+    } else {
+      devicesByUserId.set(device.userId, [device]);
+    }
+  }
+  const preferencesByUserId = new Map(preferences.map((preference) => [preference.userId, preference] as const));
   const targets: Array<{ userId: Id<"users">; token: string }> = [];
 
   for (const user of users) {
@@ -890,17 +928,10 @@ async function collectEligiblePushTargets(
       continue;
     }
 
-    const devices = (await ctx.db
-      .query("userPushDevices")
-      .withIndex("by_user_id", (q: any) => q.eq("userId", user._id))
-      .collect()) as PushDevice[];
+    const devices = devicesByUserId.get(user._id) ?? [];
     if (!devices.length) continue;
 
-    const preferences =
-      (await ctx.db
-        .query("userNotificationPreferences")
-        .withIndex("by_user_id", (q: any) => q.eq("userId", user._id))
-        .unique()) ?? null;
+    const preferences = preferencesByUserId.get(user._id) ?? null;
     const quietHoursActive = isWithinQuietHours(
       now,
       preferences?.quietHoursStart ?? DEFAULT_NOTIFICATION_PREFERENCES.quietHoursStart,

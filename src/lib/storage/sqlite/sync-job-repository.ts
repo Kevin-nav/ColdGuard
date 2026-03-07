@@ -20,10 +20,64 @@ type SyncJobRow = {
   updated_at: number;
 };
 
+function validateSyncJobPayloadValue(value: unknown, path: string, seen = new WeakSet<object>()) {
+  if (value === undefined) {
+    throw new Error(`Sync job payload contains undefined at ${path}.`);
+  }
+
+  if (typeof value === "function") {
+    throw new Error(`Sync job payload contains a function at ${path}.`);
+  }
+
+  if (typeof value === "symbol") {
+    throw new Error(`Sync job payload contains a symbol at ${path}.`);
+  }
+
+  if (typeof value === "bigint") {
+    throw new Error(`Sync job payload contains a bigint at ${path}.`);
+  }
+
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  if (seen.has(value)) {
+    throw new Error(`Sync job payload contains a circular reference at ${path}.`);
+  }
+
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => validateSyncJobPayloadValue(item, `${path}[${index}]`, seen));
+    return;
+  }
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    validateSyncJobPayloadValue(nestedValue, `${path}.${key}`, seen);
+  }
+}
+
+function serializeSyncJobPayload(jobType: string, jobId: string, payload: unknown) {
+  try {
+    validateSyncJobPayloadValue(payload, "payload");
+    const payloadJson = JSON.stringify(payload);
+
+    if (payloadJson === undefined || payloadJson === "undefined") {
+      throw new Error("Sync job payload did not serialize to valid JSON.");
+    }
+
+    return payloadJson;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown serialization error.";
+    throw new Error(`Failed to serialize sync job payload for ${jobType} (${jobId}): ${detail}`);
+  }
+}
+
 export async function enqueueSyncJob<TPayload>(jobType: string, payload: TPayload) {
   const database = await initializeSQLite();
   const now = Date.now();
   const id = `${jobType}-${now}-${Math.random().toString(16).slice(2, 10)}`;
+  const payloadJson = serializeSyncJobPayload(jobType, id, payload);
 
   await database.runAsync(
     `
@@ -33,7 +87,7 @@ export async function enqueueSyncJob<TPayload>(jobType: string, payload: TPayloa
     `,
     id,
     jobType,
-    JSON.stringify(payload),
+    payloadJson,
     "pending",
     now,
     now,
@@ -44,6 +98,9 @@ export async function enqueueSyncJob<TPayload>(jobType: string, payload: TPayloa
 
 export async function listPendingSyncJobs(jobTypes?: string[]) {
   const database = await initializeSQLite();
+  if (Array.isArray(jobTypes) && jobTypes.length === 0) {
+    return [];
+  }
   const rows = jobTypes?.length
     ? await database.getAllAsync<SyncJobRow>(
         `

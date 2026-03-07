@@ -151,13 +151,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   async function refresh() {
     if (!institutionName) return;
-    const [nextIncidents, nextPreferences] = await Promise.all([
-      syncNotificationInbox(institutionName, { isOnline }),
-      syncNotificationPreferences({ isOnline }),
-    ]);
-    setIncidents(nextIncidents);
-    setPreferences(nextPreferences);
-    await mirrorNotificationsLocally(nextIncidents, nextPreferences);
+    try {
+      const [nextIncidents, nextPreferences] = await Promise.all([
+        syncNotificationInbox(institutionName, { isOnline }),
+        syncNotificationPreferences({ isOnline }),
+      ]);
+      setIncidents(nextIncidents);
+      setPreferences(nextPreferences);
+      await mirrorNotificationsLocally(nextIncidents, nextPreferences);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to refresh notifications.");
+    }
   }
 
   async function markRead(incidentId: string) {
@@ -201,13 +205,21 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   async function updatePreferences(nextPreferences: Omit<NotificationPreferences, "lastUpdatedAt">) {
-    const saved = await updateNotificationPreferencesWithSync(nextPreferences, { isOnline });
-    setPreferences(saved);
+    try {
+      const saved = await updateNotificationPreferencesWithSync(nextPreferences, { isOnline });
+      setPreferences(saved);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to update notification preferences.");
+    }
   }
 
   async function requestPermissions() {
-    const result = await syncPushRegistration();
-    setPermissionStatus(result.permissionStatus);
+    try {
+      const result = await syncPushRegistration();
+      setPermissionStatus(result.permissionStatus);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Unable to update notification permissions.");
+    }
   }
 
   async function getIncidentById(incidentId: string) {

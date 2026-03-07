@@ -74,3 +74,19 @@ test("returns a safe null payload when a sync job row is corrupted", async () =>
 
   consoleErrorSpy.mockRestore();
 });
+
+test("rejects non-serializable sync job payloads before writing to SQLite", async () => {
+  await expect(
+    enqueueSyncJob("mark_notification_read", {
+      incidentId: "incident-1",
+      invalid: undefined,
+    }),
+  ).rejects.toThrow(/Failed to serialize sync job payload for mark_notification_read/);
+
+  expect(mockRunAsync).not.toHaveBeenCalled();
+});
+
+test("returns no jobs when the requested job type filter is empty", async () => {
+  await expect(listPendingSyncJobs([])).resolves.toEqual([]);
+  expect(mockGetAllAsync).not.toHaveBeenCalled();
+});

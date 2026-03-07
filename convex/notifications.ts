@@ -202,7 +202,22 @@ function shouldReopenResolvedIncident(incident: NotificationIncident, observedAt
 }
 
 function parseClockMinutes(value: string) {
-  const [hoursString, minutesString] = value.split(":");
+  const parts = value.split(":");
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const [rawHoursString, rawMinutesString] = parts;
+  const hoursString = rawHoursString.trim();
+  const minutesString = rawMinutesString.trim();
+  if (!hoursString || !minutesString) {
+    return null;
+  }
+
+  if (!/^\d+$/.test(hoursString) || !/^\d+$/.test(minutesString)) {
+    return null;
+  }
+
   const hours = Number(hoursString);
   const minutes = Number(minutesString);
   if (

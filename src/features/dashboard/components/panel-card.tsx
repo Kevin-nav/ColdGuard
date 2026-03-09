@@ -1,11 +1,12 @@
 import { ReactNode, useMemo } from "react";
-import { type PressableProps, View } from "react-native";
+import { type PressableProps, type StyleProp, type ViewStyle, View } from "react-native";
 import { createSharedStyles } from "../../../theme/shared-styles";
 import { useTheme } from "../../../theme/theme-provider";
 import { AnimatedPressable } from "../../../components/animated-pressable";
 
 type BaseProps = {
   children: ReactNode;
+  style?: StyleProp<ViewStyle>;
   testID?: string;
 };
 
@@ -28,7 +29,7 @@ export function PanelCard(props: PanelCardProps) {
     return (
       <AnimatedPressable
         onPress={props.onPress}
-        style={shared.card}
+        style={[shared.card, props.style]}
         testID={props.testID}
       >
         {props.children}
@@ -37,7 +38,7 @@ export function PanelCard(props: PanelCardProps) {
   }
 
   return (
-    <View style={shared.card} testID={props.testID}>
+    <View style={[shared.card, props.style]} testID={props.testID}>
       {props.children}
     </View>
   );

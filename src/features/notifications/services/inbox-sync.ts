@@ -85,7 +85,8 @@ function isLegacyNotificationPreferenceValidatorError(error: unknown) {
   return (
     error instanceof Error &&
     error.message.includes("ArgumentValidationError") &&
-    error.message.includes("nonCriticalByType")
+    error.message.includes("field `nonCriticalByType`") &&
+    error.message.includes("not in the validator")
   );
 }
 
@@ -106,7 +107,9 @@ function normalizeNotificationPreferencePayload(
   preferences: Omit<NotificationPreferences, "lastUpdatedAt">,
 ) {
   return {
-    ...preferences,
+    warningPushEnabled: preferences.warningPushEnabled,
+    warningLocalEnabled: preferences.warningLocalEnabled,
+    recoveryPushEnabled: preferences.recoveryPushEnabled,
     nonCriticalByType: normalizeRoutineTypePreferences(preferences.nonCriticalByType),
     quietHoursStart: normalizeQuietHoursPreference(preferences.quietHoursStart),
     quietHoursEnd: normalizeQuietHoursPreference(preferences.quietHoursEnd),

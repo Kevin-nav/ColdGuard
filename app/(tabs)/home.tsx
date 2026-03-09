@@ -2,12 +2,10 @@ import { router } from "expo-router";
 import { useMemo } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
-import { DashboardHero } from "../../src/features/dashboard/components/dashboard-hero";
-import { DashboardQuickActions } from "../../src/features/dashboard/components/dashboard-quick-actions";
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
 import { DeviceCard } from "../../src/features/dashboard/components/device-card";
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
-import { StatusStrip } from "../../src/features/dashboard/components/status-strip";
+import { SystemOverviewCard } from "../../src/features/dashboard/components/system-overview-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
 import { NotificationListItem } from "../../src/features/notifications/components/notification-list-item";
 import { useNotificationInbox } from "../../src/features/notifications/hooks/use-notification-inbox";
@@ -42,84 +40,32 @@ export default function HomeScreen() {
     );
   }
 
-  const quickActions: React.ComponentProps<typeof DashboardQuickActions>["actions"] =
-    profile.role === "Supervisor"
-      ? [
-          {
-            description: "Monitor temperature and status of all facility refrigerators.",
-            icon: "cube-outline",
-            label: "Open devices",
-            onPress: () => router.push("/(tabs)/devices"),
-          },
-          {
-            description: "Manage facility staff access and roles.",
-            icon: "people-outline",
-            label: "Staff Management",
-            onPress: () => router.push("/staff-management"),
-          },
-          {
-            description: "View your account and facility information.",
-            icon: "person-outline",
-            label: "Open profile",
-            onPress: () => router.push("/(tabs)/profile"),
-          },
-        ]
-      : [
-          {
-            description: "View the status of your assigned cold-chain units.",
-            icon: "cube-outline",
-            label: "Open devices",
-            onPress: () => router.push("/(tabs)/devices"),
-          },
-          {
-            description: "View your account and facility information.",
-            icon: "person-outline",
-            label: "Open profile",
-            onPress: () => router.push("/(tabs)/profile"),
-          },
-        ];
-
   return (
     <DashboardPage scroll testID="dashboard-scroll-view">
       <AnimatedEntry delay={0}>
-        <DashboardHero
-          institutionName={profile.institutionName}
-          name={profile.displayName}
-          role={profile.role}
-          title={profile.role === "Supervisor" ? "Institution Command" : "Cold-Chain Readiness"}
-        />
+        <View style={localStyles.greetingContainer}>
+          <Text style={shared.heading}>Welcome back, {profile.displayName.split(" ")[0]}</Text>
+          <Text style={shared.subheading}>{profile.institutionName}</Text>
+        </View>
       </AnimatedEntry>
 
       <AnimatedEntry delay={100}>
-        <DashboardSection
-          description={
-            profile.role === "Supervisor"
-              ? "Overview of your facility's cold-chain status and staff management."
-              : "Monitor your current cold-chain units and alerts."
-          }
-          eyebrow="Today"
-          title="ColdGuard Dashboard"
-        >
-          <StatusStrip
-            alertCount={alertCount}
-            safeCount={safeCount}
-            warningCount={warningCount}
-          />
-        </DashboardSection>
+        <SystemOverviewCard
+          alertCount={alertCount}
+          safeCount={safeCount}
+          warningCount={warningCount}
+          onPress={() => router.push("/(tabs)/devices")}
+        />
       </AnimatedEntry>
 
-      <AnimatedEntry delay={200}>
-        <DashboardSection
-          description="The highest-priority incidents that currently need staff attention."
-          eyebrow="Incidents"
-          title="Recent incidents"
-        >
-          {activeIncidents.length === 0 ? (
-            <PanelCard>
-              <Text style={shared.helperText}>No active notification incidents right now.</Text>
-            </PanelCard>
-          ) : (
-            activeIncidents.slice(0, 3).map((incident) => (
+      {activeIncidents.length > 0 && (
+        <AnimatedEntry delay={100}>
+          <DashboardSection
+            description="The highest-priority incidents that currently need staff attention."
+            eyebrow="Incidents"
+            title="Recent incidents"
+          >
+            {activeIncidents.slice(0, 3).map((incident) => (
               <NotificationListItem
                 incident={incident}
                 key={incident.id}
@@ -128,22 +74,12 @@ export default function HomeScreen() {
                   router.push(`/incident/${incident.id}`);
                 }}
               />
-            ))
-          )}
-        </DashboardSection>
-      </AnimatedEntry>
+            ))}
+          </DashboardSection>
+        </AnimatedEntry>
+      )}
 
-      <AnimatedEntry delay={300}>
-        <DashboardSection
-          description="Quick access to your most important tasks."
-          eyebrow="Navigation"
-          title="Quick actions"
-        >
-          <DashboardQuickActions actions={quickActions} />
-        </DashboardSection>
-      </AnimatedEntry>
-
-      <AnimatedEntry delay={400}>
+      <AnimatedEntry delay={activeIncidents.length > 0 ? 200 : 100}>
         <DashboardSection
           description="Recently active or flagged units."
           eyebrow="Devices"
@@ -166,27 +102,16 @@ export default function HomeScreen() {
           </View>
         </DashboardSection>
       </AnimatedEntry>
-
-      {profile.role === "Supervisor" ? (
-        <AnimatedEntry delay={500}>
-          <DashboardSection
-            description="Supervisor tools and administrative actions."
-            eyebrow="Supervisor"
-            title="Management actions"
-          >
-            <PanelCard>
-              <Text style={shared.bodyText}>Staff Management</Text>
-              <Text style={shared.bodyText}>Review devices</Text>
-              <Text style={shared.bodyText}>System Status</Text>
-            </PanelCard>
-          </DashboardSection>
-        </AnimatedEntry>
-      ) : null}
     </DashboardPage>
   );
 }
 
 const localStyles = StyleSheet.create({
+  greetingContainer: {
+    paddingHorizontal: spacing.sm,
+    paddingBottom: spacing.sm,
+    gap: 2,
+  },
   devicesSection: {
     gap: spacing.md,
   },

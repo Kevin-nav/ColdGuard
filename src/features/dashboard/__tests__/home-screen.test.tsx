@@ -102,50 +102,22 @@ beforeEach(() => {
   });
 });
 
-test("renders the nurse dashboard with profile and devices", async () => {
+test("renders the dashboard with system overview, incidents, and devices", async () => {
   const ui = render(<HomeScreen />);
 
-  await waitFor(() => expect(ui.getByText("ColdGuard Dashboard")).toBeTruthy());
+  await waitFor(() => expect(ui.getByText("Welcome back, Akosua")).toBeTruthy());
+  expect(ui.getByText("All systems normal")).toBeTruthy();
   expect(ui.getByTestId("dashboard-scroll-view")).toBeTruthy();
-  expect(ui.getByText("Welcome back, Akosua")).toBeTruthy();
   expect(ui.getByText("Cold Room Alpha")).toBeTruthy();
   expect(ui.getByText("Recent incidents")).toBeTruthy();
   expect(ui.getByText("Temperature excursion critical")).toBeTruthy();
-  expect(ui.getByText("Quick actions")).toBeTruthy();
-  expect(ui.queryByText("Staff Management")).toBeNull();
 });
 
-test("renders supervisor-only management actions", async () => {
-  mockGetProfileSnapshot.mockResolvedValue({
-    firebaseUid: "u1",
-    displayName: "Yaw Boateng",
-    email: "yaw@example.com",
-    institutionName: "Korle-Bu Teaching Hospital",
-    staffId: "KB1002",
-    role: "Supervisor",
-    lastUpdatedAt: 1,
-  });
-  mockEnsureLocalProfileForUser.mockResolvedValue({
-    firebaseUid: "u1",
-    displayName: "Yaw Boateng",
-    email: "yaw@example.com",
-    institutionName: "Korle-Bu Teaching Hospital",
-    staffId: "KB1002",
-    role: "Supervisor",
-    lastUpdatedAt: 1,
-  });
-
+test("opens device card when a device is tapped", async () => {
   const ui = render(<HomeScreen />);
 
-  await waitFor(() => expect(ui.getAllByText("Staff Management").length).toBeGreaterThan(0));
-  expect(ui.getByText("Review devices")).toBeTruthy();
-});
+  await waitFor(() => expect(ui.getByText("Cold Room Alpha")).toBeTruthy());
+  fireEvent.press(ui.getByText("Cold Room Alpha"));
 
-test("opens the dedicated devices screen from quick actions", async () => {
-  const ui = render(<HomeScreen />);
-
-  await waitFor(() => expect(ui.getByText("ColdGuard Dashboard")).toBeTruthy());
-  fireEvent.press(ui.getByText("Open devices"));
-
-  expect(mockPush).toHaveBeenCalledWith("/(tabs)/devices");
+  expect(mockPush).toHaveBeenCalledWith("/device/d1");
 });

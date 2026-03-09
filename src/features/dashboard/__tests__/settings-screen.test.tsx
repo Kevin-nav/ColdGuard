@@ -5,10 +5,14 @@ const mockGetProfileSnapshot = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockSignOut = jest.fn(() => Promise.resolve());
 const mockReplace = jest.fn();
+const mockPush = jest.fn();
 const mockUseNotificationPreferences = jest.fn();
 
 jest.mock("expo-router", () => ({
-  router: { replace: (path: string) => mockReplace(path) },
+  router: { 
+    replace: (path: string) => mockReplace(path),
+    push: (path: string) => mockPush(path),
+  },
 }));
 
 jest.mock("firebase/auth", () => ({
@@ -98,15 +102,23 @@ beforeEach(() => {
   });
 });
 
-test("renders friendly notification settings, saves routine preferences, and signs out", async () => {
+test("renders profile section, routine preferences, and signs out", async () => {
   const ui = render(<SettingsScreen />);
 
-  await waitFor(() => expect(ui.getByText("Alert settings")).toBeTruthy());
-  expect(ui.getByText("Critical alerts are always on.")).toBeTruthy();
-  expect(ui.getByText("What should interrupt you")).toBeTruthy();
+  await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
+  
+  // Profile assertions
+  expect(ui.getByText("Nurse")).toBeTruthy();
+  expect(ui.getByText("akosua@example.com")).toBeTruthy();
+  expect(ui.getByText("Korle-Bu Teaching Hospital")).toBeTruthy();
+  expect(ui.getByText("KB1001")).toBeTruthy();
+  
+  // Settings assertions
+  expect(ui.getByText("ROUTINE ALERTS")).toBeTruthy();
   expect(ui.getByText("Temperature")).toBeTruthy();
-  expect(ui.getByText("Low battery")).toBeTruthy();
-  expect(ui.queryAllByText("Critical alerts always on")).toHaveLength(0);
+  expect(ui.getByText("Warnings when a unit drifts outside safe range.")).toBeTruthy();
+  
+  expect(ui.queryAllByText("Alert settings")).toHaveLength(0);
 
   fireEvent(ui.getByLabelText("Temperature routine alerts"), "valueChange", false);
 
@@ -124,4 +136,33 @@ test("renders friendly notification settings, saves routine preferences, and sig
 
   await waitFor(() => expect(mockSignOut).toHaveBeenCalled());
   expect(mockReplace).toHaveBeenCalledWith("/(auth)/login");
+});
+
+test("renders supervisor-only management actions in settings", async () => {
+  mockGetProfileSnapshot.mockResolvedValue({
+    firebaseUid: "u1",
+    displayName: "Yaw Boateng",
+    email: "yaw@example.com",
+    institutionName: "Korle-Bu Teaching Hospital",
+    staffId: "KB1002",
+    role: "Supervisor",
+    lastUpdatedAt: 1,
+  });
+  mockEnsureLocalProfileForUser.mockResolvedValue({
+    firebaseUid: "u1",
+    displayName: "Yaw Boateng",
+    email: "yaw@example.com",
+    institutionName: "Korle-Bu Teaching Hospital",
+    staffId: "KB1002",
+    role: "Supervisor",
+    lastUpdatedAt: 1,
+  });
+
+  const ui = render(<SettingsScreen />);
+
+  await waitFor(() => expect(ui.getAllByText("FACILITY MANAGEMENT").length).toBeGreaterThan(0));
+  expect(ui.getByText("Staff Management")).toBeTruthy();
+  
+  fireEvent.press(ui.getByText("Staff Management"));
+  expect(mockPush).toHaveBeenCalledWith("/staff-management");
 });

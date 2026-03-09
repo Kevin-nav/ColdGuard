@@ -342,6 +342,43 @@ test("normalizes null quiet hours before sending notification preference mutatio
   );
 });
 
+test("drops runtime-only notification preference fields before sending the mutation", async () => {
+  mockSaveNotificationPreferences.mockResolvedValue({
+    warningPushEnabled: true,
+    warningLocalEnabled: true,
+    recoveryPushEnabled: true,
+    nonCriticalByType: buildRoutinePreferences({
+      temperature: false,
+    }),
+    quietHoursStart: null,
+    quietHoursEnd: null,
+    lastUpdatedAt: 10,
+  });
+  mockMutation.mockResolvedValue(undefined);
+
+  await updateNotificationPreferencesWithSync(
+    {
+      warningPushEnabled: true,
+      warningLocalEnabled: true,
+      recoveryPushEnabled: true,
+      nonCriticalByType: buildRoutinePreferences({
+        temperature: false,
+      }),
+      quietHoursStart: null,
+      quietHoursEnd: null,
+      lastUpdatedAt: 10,
+    } as typeof DEFAULT_NOTIFICATION_PREFERENCES,
+    { isOnline: true },
+  );
+
+  expect(mockMutation).toHaveBeenCalledTimes(1);
+  expect(mockMutation.mock.calls[0]?.[1]).toEqual(
+    expect.not.objectContaining({
+      lastUpdatedAt: expect.anything(),
+    }),
+  );
+});
+
 test("preserves local routine preferences when the remote preference payload is still on the legacy shape", async () => {
   mockGetNotificationPreferences.mockResolvedValue({
     warningPushEnabled: true,
@@ -383,6 +420,16 @@ test("preserves local routine preferences when the remote preference payload is 
     }),
   );
   expect(result.nonCriticalByType.temperature).toBe(false);
+});
+
+test("does not treat unrelated validator failures as the legacy notification preference schema", () => {
+  expect(
+    __testing.isLegacyNotificationPreferenceValidatorError(
+      new Error(
+        "ArgumentValidationError: Object contains extra field `lastUpdatedAt` that is not in the validator.\n\nValidator: v.object({nonCriticalByType: v.object({temperature: v.boolean()})})",
+      ),
+    ),
+  ).toBe(false);
 });
 
 test("falls back to the legacy mutation payload when the live validator rejects nonCriticalByType", async () => {

@@ -58,6 +58,7 @@ jest.mock("../../../../src/features/notifications/hooks/use-notification-prefere
 
 beforeEach(() => {
   jest.clearAllMocks();
+  const savePreferences = jest.fn(() => Promise.resolve());
   mockGetProfileSnapshot.mockResolvedValue({
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
@@ -82,21 +83,42 @@ beforeEach(() => {
       warningPushEnabled: true,
       warningLocalEnabled: true,
       recoveryPushEnabled: true,
+      nonCriticalByType: {
+        temperature: true,
+        door_open: true,
+        device_offline: true,
+        battery_low: true,
+      },
       quietHoursStart: null,
       quietHoursEnd: null,
       lastUpdatedAt: 1,
     },
     requestPermissions: jest.fn(),
-    savePreferences: jest.fn(() => Promise.resolve()),
+    savePreferences,
   });
 });
 
-test("renders settings and signs out", async () => {
+test("renders friendly notification settings, saves routine preferences, and signs out", async () => {
   const ui = render(<SettingsScreen />);
 
-  await waitFor(() => expect(ui.getByText("Settings")).toBeTruthy());
-  expect(ui.getByText("Alert delivery")).toBeTruthy();
-  expect(ui.getByText("Warning push alerts")).toBeTruthy();
+  await waitFor(() => expect(ui.getByText("Alert settings")).toBeTruthy());
+  expect(ui.getByText("Critical alerts are always on.")).toBeTruthy();
+  expect(ui.getByText("What should interrupt you")).toBeTruthy();
+  expect(ui.getByText("Temperature")).toBeTruthy();
+  expect(ui.getByText("Low battery")).toBeTruthy();
+
+  fireEvent(ui.getByLabelText("Temperature routine alerts"), "valueChange", false);
+
+  await waitFor(() =>
+    expect(mockUseNotificationPreferences.mock.results[0]?.value.savePreferences).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonCriticalByType: expect.objectContaining({
+          temperature: false,
+        }),
+      }),
+    ),
+  );
+
   fireEvent.press(ui.getByText("Sign out"));
 
   await waitFor(() => expect(mockSignOut).toHaveBeenCalled());

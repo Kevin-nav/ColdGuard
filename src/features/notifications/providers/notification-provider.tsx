@@ -114,21 +114,23 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           setInstitutionName(null);
           setIncidents([]);
           setPreferences(null);
+          setError(null);
           setIsLoading(false);
           return;
         }
 
         setInstitutionName(profile.institutionName);
-        const [nextIncidents, nextPreferences] = await Promise.all([
+        const [nextInbox, nextPreferences] = await Promise.all([
           syncNotificationInbox(profile.institutionName, { isOnline }),
           syncNotificationPreferences({ isOnline }),
         ]);
 
         if (!active) return;
 
-        setIncidents(nextIncidents);
+        setIncidents(nextInbox.incidents);
         setPreferences(nextPreferences);
-        await mirrorNotificationsLocally(nextIncidents, nextPreferences);
+        setError(nextInbox.syncError);
+        await mirrorNotificationsLocally(nextInbox.incidents, nextPreferences);
       } catch (nextError) {
         if (!active) return;
         setError(nextError instanceof Error ? nextError.message : "Notification inbox unavailable.");
@@ -152,13 +154,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   async function refresh() {
     if (!institutionName) return;
     try {
-      const [nextIncidents, nextPreferences] = await Promise.all([
+      const [nextInbox, nextPreferences] = await Promise.all([
         syncNotificationInbox(institutionName, { isOnline }),
         syncNotificationPreferences({ isOnline }),
       ]);
-      setIncidents(nextIncidents);
+      setIncidents(nextInbox.incidents);
       setPreferences(nextPreferences);
-      await mirrorNotificationsLocally(nextIncidents, nextPreferences);
+      setError(nextInbox.syncError);
+      await mirrorNotificationsLocally(nextInbox.incidents, nextPreferences);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to refresh notifications.");
     }
@@ -168,7 +171,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     if (!institutionName) return;
     try {
       await markNotificationReadWithSync(incidentId, { isOnline });
-      setIncidents(await syncNotificationInbox(institutionName, { isOnline }));
+      const nextInbox = await syncNotificationInbox(institutionName, { isOnline });
+      setIncidents(nextInbox.incidents);
+      setError(nextInbox.syncError);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to mark the incident as read.");
     }
@@ -178,7 +183,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     if (!institutionName) return;
     try {
       await archiveNotificationWithSync(incidentId, { isOnline });
-      setIncidents(await syncNotificationInbox(institutionName, { isOnline }));
+      const nextInbox = await syncNotificationInbox(institutionName, { isOnline });
+      setIncidents(nextInbox.incidents);
+      setError(nextInbox.syncError);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to archive the incident.");
     }
@@ -187,8 +194,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   async function acknowledgeIncident(incidentId: string) {
     if (!institutionName) return;
     try {
-      const nextIncidents = await acknowledgeIncidentWithSync(incidentId, institutionName, { isOnline });
-      setIncidents(nextIncidents);
+      const nextInbox = await acknowledgeIncidentWithSync(incidentId, institutionName, { isOnline });
+      setIncidents(nextInbox.incidents);
+      setError(nextInbox.syncError);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to acknowledge the incident.");
     }
@@ -197,8 +205,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   async function resolveIncident(incidentId: string) {
     if (!institutionName) return;
     try {
-      const nextIncidents = await resolveIncidentWithSync(incidentId, institutionName, { isOnline });
-      setIncidents(nextIncidents);
+      const nextInbox = await resolveIncidentWithSync(incidentId, institutionName, { isOnline });
+      setIncidents(nextInbox.incidents);
+      setError(nextInbox.syncError);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to resolve the incident.");
     }

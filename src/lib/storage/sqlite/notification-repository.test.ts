@@ -2,8 +2,10 @@ import {
   getNotificationById,
   getNotificationPreferences,
   getUnreadNotificationCount,
+  listNotificationStateForIncidentIds,
   listNotificationsForInstitution,
   markNotificationRead,
+  replaceNotificationCacheForInstitution,
   saveNotificationCache,
   saveNotificationPreferences,
 } from "./notification-repository";
@@ -88,6 +90,12 @@ test("saves and loads notification preferences", async () => {
     warningPushEnabled: true,
     warningLocalEnabled: false,
     recoveryPushEnabled: true,
+    nonCriticalByType: {
+      temperature: true,
+      door_open: false,
+      device_offline: true,
+      battery_low: false,
+    },
     quietHoursStart: "22:00",
     quietHoursEnd: "06:00",
   });
@@ -96,6 +104,10 @@ test("saves and loads notification preferences", async () => {
     warning_push_enabled: 1,
     warning_local_enabled: 0,
     recovery_push_enabled: 1,
+    temperature_enabled: 1,
+    door_open_enabled: 0,
+    device_offline_enabled: 1,
+    battery_low_enabled: 0,
     quiet_hours_start: "22:00",
     quiet_hours_end: "06:00",
     last_updated_at: 1234,
@@ -105,6 +117,12 @@ test("saves and loads notification preferences", async () => {
     warningPushEnabled: true,
     warningLocalEnabled: false,
     recoveryPushEnabled: true,
+    nonCriticalByType: {
+      temperature: true,
+      door_open: false,
+      device_offline: true,
+      battery_low: false,
+    },
     quietHoursStart: "22:00",
     quietHoursEnd: "06:00",
     lastUpdatedAt: 1234,
@@ -170,4 +188,58 @@ test("writes notification cache records", async () => {
   ]);
 
   expect(mockRunAsync).toHaveBeenCalled();
+});
+
+test("replaces the cached notification snapshot for an institution", async () => {
+  await replaceNotificationCacheForInstitution("Korle-Bu Teaching Hospital", [
+    {
+      id: "incident-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      deviceId: "device-1",
+      deviceNickname: "Cold Room Alpha",
+      incidentType: "temperature",
+      severity: "critical",
+      status: "open",
+      title: "Temperature excursion",
+      body: "Immediate intervention required.",
+      firstTriggeredAt: 1000,
+      lastTriggeredAt: 2000,
+      acknowledgedAt: null,
+      resolvedAt: null,
+      readAt: null,
+      archivedAt: null,
+      lastViewedVersion: 0,
+      timeline: [],
+    },
+  ]);
+
+  expect(mockRunAsync).toHaveBeenNthCalledWith(
+    1,
+    "DELETE FROM notification_cache WHERE institution_name = ? AND instr(incident_id, ':') = 0",
+    "Korle-Bu Teaching Hospital",
+  );
+});
+
+test("loads notification state rows by incident id", async () => {
+  mockGetAllAsync.mockResolvedValue([
+    {
+      incident_id: "device-1:temperature",
+      read_at: 2200,
+      archived_at: null,
+      last_viewed_version: 3,
+    },
+  ]);
+
+  await expect(listNotificationStateForIncidentIds(["device-1:temperature"])).resolves.toEqual(
+    new Map([
+      [
+        "device-1:temperature",
+        {
+          readAt: 2200,
+          archivedAt: null,
+          lastViewedVersion: 3,
+        },
+      ],
+    ]),
+  );
 });

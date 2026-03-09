@@ -23,6 +23,7 @@ function getPrimaryProviderId(user: User | null) {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isConvexAuthenticated, setIsConvexAuthenticated] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(getFirebaseAuth(), (nextUser) => {
@@ -37,24 +38,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const convex = getConvexClient();
 
     if (!user) {
+      setIsConvexAuthenticated(false);
       convex.clearAuth();
       return;
     }
 
-    convex.setAuth(async () => await user.getIdToken());
+    let isActive = true;
+    setIsConvexAuthenticated(false);
+
+    convex.setAuth(
+      async () => await user.getIdToken(),
+      (nextIsAuthenticated) => {
+        if (isActive) {
+          setIsConvexAuthenticated(nextIsAuthenticated);
+        }
+      },
+    );
 
     return () => {
+      isActive = false;
       convex.clearAuth();
     };
   }, [user]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !isConvexAuthenticated) return;
     void bootstrapUserInConvex({
       email: user.email,
       displayName: user.displayName,
     });
-  }, [user]);
+  }, [isConvexAuthenticated, user]);
 
   const value = useMemo(
     () => ({

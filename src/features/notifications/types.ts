@@ -18,10 +18,13 @@ export type NotificationTimelineEventType =
   | "acknowledged"
   | "resolved";
 
+export type NotificationRoutinePreferenceMap = Record<NotificationIncidentType, boolean>;
+
 export type NotificationPreferences = {
   warningPushEnabled: boolean;
   warningLocalEnabled: boolean;
   recoveryPushEnabled: boolean;
+  nonCriticalByType: NotificationRoutinePreferenceMap;
   quietHoursStart: string | null;
   quietHoursEnd: string | null;
   lastUpdatedAt: number;
@@ -31,6 +34,12 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   warningPushEnabled: true,
   warningLocalEnabled: true,
   recoveryPushEnabled: true,
+  nonCriticalByType: {
+    temperature: true,
+    door_open: true,
+    device_offline: true,
+    battery_low: true,
+  },
   quietHoursStart: null,
   quietHoursEnd: null,
   lastUpdatedAt: 0,

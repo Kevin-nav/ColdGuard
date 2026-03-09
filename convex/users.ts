@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { getNextCredentialAttemptState, isCredentialAttemptLocked } from "./credential-throttle";
+import { getNextCredentialAttemptState, isCredentialAttemptLocked } from "./credential_throttle";
 import { hashInstitutionPasscode, isHashedPasscode, verifyInstitutionPasscode } from "./passcodes";
 
 function invalidInstitutionCodeError() {

@@ -21,9 +21,7 @@ export async function ensureLocalProfileForUser(args: {
   }
 
   const convex = getConvexClient();
-  const linkedProfile = await convex.query((api as any).users.getLinkedProfileByFirebaseUid, {
-    firebaseUid: args.firebaseUid,
-  });
+  const linkedProfile = await convex.query((api as any).users.getLinkedProfileByFirebaseUid);
 
   if (!linkedProfile) {
     return null;

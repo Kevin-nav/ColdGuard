@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as credential_throttle from "../credential_throttle.js";
+import type * as notifications from "../notifications.js";
 import type * as passcodes from "../passcodes.js";
 import type * as seeds from "../seeds.js";
 import type * as users from "../users.js";
@@ -19,6 +21,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  credential_throttle: typeof credential_throttle;
+  notifications: typeof notifications;
   passcodes: typeof passcodes;
   seeds: typeof seeds;
   users: typeof users;

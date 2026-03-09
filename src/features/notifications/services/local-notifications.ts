@@ -42,11 +42,11 @@ export async function mirrorNotificationsLocally(
   incidents: NotificationIncidentRecord[],
   preferences: NotificationPreferences,
 ) {
-  if (!preferences.warningLocalEnabled) return;
-
   for (const incident of incidents) {
     if (incident.status === "resolved") continue;
     if (incident.severity !== "warning" && incident.severity !== "critical") continue;
+    if (incident.severity === "warning" && !preferences.warningLocalEnabled) continue;
+    if (incident.severity === "warning" && !preferences.nonCriticalByType[incident.incidentType]) continue;
 
     const deliveryKey = `${incident.id}:${incident.lastTriggeredAt}:${incident.status}`;
     if (deliveredLocalNotificationKeys.has(deliveryKey)) continue;

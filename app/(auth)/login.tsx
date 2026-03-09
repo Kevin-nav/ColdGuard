@@ -4,7 +4,6 @@ import { AntDesign, Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
-import { bootstrapUserInConvex } from "../../src/features/auth/services/user-bootstrap";
 import {
   registerWithEmailPassword,
   signInWithEmailPassword,
@@ -80,12 +79,8 @@ export default function LoginScreen() {
       setMessage(null);
 
       try {
-        const user = await signInWithGoogleIdToken(idToken);
-        await bootstrapUserInConvex({
-          email: user.email,
-          displayName: user.displayName,
-        });
-        router.replace("/(onboarding)/link-institution");
+        await signInWithGoogleIdToken(idToken);
+        router.replace("/");
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Google sign-in failed.");
       } finally {
@@ -101,12 +96,8 @@ export default function LoginScreen() {
     setIsBusy(true);
     setMessage(null);
     try {
-      const user = await signInWithEmailPassword(email.trim(), password);
-      await bootstrapUserInConvex({
-        email: user.email,
-        displayName: user.displayName,
-      });
-      router.replace("/(onboarding)/link-institution");
+      await signInWithEmailPassword(email.trim(), password);
+      router.replace("/");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Sign in failed");
     } finally {
@@ -119,12 +110,8 @@ export default function LoginScreen() {
     setIsBusy(true);
     setMessage(null);
     try {
-      const user = await registerWithEmailPassword(email.trim(), password);
-      await bootstrapUserInConvex({
-        email: user.email,
-        displayName: user.displayName,
-      });
-      router.replace("/(onboarding)/link-institution");
+      await registerWithEmailPassword(email.trim(), password);
+      router.replace("/");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Registration failed");
     } finally {
@@ -183,7 +170,7 @@ export default function LoginScreen() {
             style={localStyles.passwordToggle}
           >
             <Ionicons
-              color={colors.textSecondary}
+              color={colors.primary}
               name={isPasswordVisible ? "eye-off-outline" : "eye-outline"}
               size={18}
             />

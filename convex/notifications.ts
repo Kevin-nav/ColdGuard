@@ -14,6 +14,12 @@ const DEFAULT_NOTIFICATION_PREFERENCES = {
   warningPushEnabled: true,
   warningLocalEnabled: true,
   recoveryPushEnabled: true,
+  nonCriticalByType: {
+    temperature: true,
+    door_open: true,
+    device_offline: true,
+    battery_low: true,
+  },
   quietHoursStart: undefined as string | undefined,
   quietHoursEnd: undefined as string | undefined,
 };
@@ -248,6 +254,78 @@ function isWithinQuietHours(now: number, quietHoursStart?: string, quietHoursEnd
     return currentMinutes >= start && currentMinutes < end;
   }
   return currentMinutes >= start || currentMinutes < end;
+}
+
+function normalizeNonCriticalByTypePreferences(
+  preferences?: Partial<typeof DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType> | null,
+) {
+  return {
+    ...DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType,
+    ...preferences,
+  };
+}
+
+function normalizeStoredNotificationPreferences(
+  preferences?:
+    | Pick<
+        NotificationPreferenceDoc,
+        | "warningPushEnabled"
+        | "warningLocalEnabled"
+        | "recoveryPushEnabled"
+        | "nonCriticalByType"
+        | "quietHoursStart"
+        | "quietHoursEnd"
+      >
+    | null,
+) {
+  return {
+    warningPushEnabled: preferences?.warningPushEnabled ?? DEFAULT_NOTIFICATION_PREFERENCES.warningPushEnabled,
+    warningLocalEnabled: preferences?.warningLocalEnabled ?? DEFAULT_NOTIFICATION_PREFERENCES.warningLocalEnabled,
+    recoveryPushEnabled: preferences?.recoveryPushEnabled ?? DEFAULT_NOTIFICATION_PREFERENCES.recoveryPushEnabled,
+    nonCriticalByType: normalizeNonCriticalByTypePreferences(preferences?.nonCriticalByType),
+    quietHoursStart: preferences?.quietHoursStart ?? DEFAULT_NOTIFICATION_PREFERENCES.quietHoursStart,
+    quietHoursEnd: preferences?.quietHoursEnd ?? DEFAULT_NOTIFICATION_PREFERENCES.quietHoursEnd,
+  };
+}
+
+function shouldDeliverPushToUser(
+  incident: Pick<NotificationIncident, "incidentType" | "severity">,
+  preferences:
+    | Pick<
+        NotificationPreferenceDoc,
+        | "warningPushEnabled"
+        | "warningLocalEnabled"
+        | "recoveryPushEnabled"
+        | "nonCriticalByType"
+        | "quietHoursStart"
+        | "quietHoursEnd"
+      >
+    | null,
+  options: {
+    recoveryOnly?: boolean;
+  },
+  now: number,
+) {
+  const resolvedPreferences = normalizeStoredNotificationPreferences(preferences);
+  const quietHoursActive = isWithinQuietHours(
+    now,
+    resolvedPreferences.quietHoursStart,
+    resolvedPreferences.quietHoursEnd,
+  );
+
+  if (options.recoveryOnly) {
+    return resolvedPreferences.recoveryPushEnabled && !quietHoursActive;
+  }
+
+  if (incident.severity === "warning") {
+    return (
+      resolvedPreferences.warningPushEnabled &&
+      resolvedPreferences.nonCriticalByType[incident.incidentType] &&
+      !quietHoursActive
+    );
+  }
+
+  return true;
 }
 
 function serializeSnapshot(snapshot: Snapshot) {
@@ -783,9 +861,7 @@ export const getNotificationPreferences = query({
     }
 
     return {
-      warningPushEnabled: existing.warningPushEnabled,
-      warningLocalEnabled: existing.warningLocalEnabled,
-      recoveryPushEnabled: existing.recoveryPushEnabled,
+      ...normalizeStoredNotificationPreferences(existing),
       quietHoursStart: existing.quietHoursStart ?? null,
       quietHoursEnd: existing.quietHoursEnd ?? null,
       lastUpdatedAt: existing.updatedAt,
@@ -798,8 +874,14 @@ export const updateNotificationPreferences = mutation({
     warningPushEnabled: v.boolean(),
     warningLocalEnabled: v.boolean(),
     recoveryPushEnabled: v.boolean(),
-    quietHoursStart: v.optional(v.string()),
-    quietHoursEnd: v.optional(v.string()),
+    nonCriticalByType: v.object({
+      temperature: v.boolean(),
+      door_open: v.boolean(),
+      device_offline: v.boolean(),
+      battery_low: v.boolean(),
+    }),
+    quietHoursStart: v.optional(v.union(v.string(), v.null())),
+    quietHoursEnd: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const user = await getAuthenticatedUser(ctx);
@@ -809,12 +891,16 @@ export const updateNotificationPreferences = mutation({
       .withIndex("by_user_id", (q: any) => q.eq("userId", user._id))
       .unique();
 
+    const quietHoursStart = args.quietHoursStart ?? undefined;
+    const quietHoursEnd = args.quietHoursEnd ?? undefined;
+
     const patch = {
       warningPushEnabled: args.warningPushEnabled,
       warningLocalEnabled: args.warningLocalEnabled,
       recoveryPushEnabled: args.recoveryPushEnabled,
-      quietHoursStart: args.quietHoursStart,
-      quietHoursEnd: args.quietHoursEnd,
+      nonCriticalByType: normalizeNonCriticalByTypePreferences(args.nonCriticalByType),
+      quietHoursStart,
+      quietHoursEnd,
       updatedAt: now,
     };
 
@@ -960,16 +1046,7 @@ async function collectEligiblePushTargets(
     if (!devices.length) continue;
 
     const preferences = preferencesByUserId.get(user._id) ?? null;
-    const quietHoursActive = isWithinQuietHours(
-      now,
-      preferences?.quietHoursStart ?? DEFAULT_NOTIFICATION_PREFERENCES.quietHoursStart,
-      preferences?.quietHoursEnd ?? DEFAULT_NOTIFICATION_PREFERENCES.quietHoursEnd,
-    );
-
-    if (incident.severity === "warning" && ((preferences?.warningPushEnabled ?? true) === false || quietHoursActive)) {
-      continue;
-    }
-    if (options.recoveryOnly && ((preferences?.recoveryPushEnabled ?? true) === false || quietHoursActive)) {
+    if (!shouldDeliverPushToUser(incident, preferences, options, now)) {
       continue;
     }
 
@@ -1153,5 +1230,12 @@ export const __testing = {
   buildSignals,
   getRecoveryState,
   isWithinQuietHours,
+  normalizeNonCriticalByTypePreferences,
+  normalizeStoredNotificationPreferences,
+  shouldDeliverPushToUser,
   parseClockMinutes,
+  normalizeQuietHoursArgs: (args: { quietHoursStart?: string | null; quietHoursEnd?: string | null }) => ({
+    quietHoursStart: args.quietHoursStart ?? undefined,
+    quietHoursEnd: args.quietHoursEnd ?? undefined,
+  }),
 };

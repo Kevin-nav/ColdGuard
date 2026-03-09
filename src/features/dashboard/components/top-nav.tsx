@@ -38,11 +38,11 @@ export function TopNav() {
           onPress={() => router.push("/notifications")}
           style={({ pressed }) => [
             styles.iconButton,
-            { backgroundColor: pressed ? colors.surfaceMuted : colors.surface },
+            { backgroundColor: pressed ? colors.primaryMuted : colors.surface },
           ]}
           testID="top-nav-notifications-button"
         >
-          <Ionicons color={colors.textPrimary} name="notifications-outline" size={22} />
+          <Ionicons color={colors.primary} name="notifications-outline" size={22} />
           {unreadCount > 0 ? (
             <View style={[styles.badge, { backgroundColor: colors.danger }]} testID="notifications-unread-badge">
               <Text style={styles.badgeText}>{unreadCount > 9 ? "9+" : unreadCount}</Text>

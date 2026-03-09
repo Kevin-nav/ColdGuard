@@ -38,7 +38,7 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <DashboardPage scroll testID="notifications-scroll-view">
+    <DashboardPage scroll contentContainerStyle={styles.pageContent} testID="notifications-scroll-view">
       <DashboardSection
         description="Active incidents needing action across your institution."
         eyebrow="Inbox"
@@ -92,6 +92,9 @@ export default function NotificationsScreen() {
 }
 
 const styles = StyleSheet.create({
+  pageContent: {
+    paddingTop: spacing["3xl"],
+  },
   stack: {
     gap: spacing.md,
   },

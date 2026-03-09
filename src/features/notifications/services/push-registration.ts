@@ -10,6 +10,12 @@ type PushRegistrationResult = {
   token: string | null;
 };
 
+type ExpoConfigWithAndroidPush = NonNullable<typeof Constants.expoConfig> & {
+  android?: {
+    googleServicesFile?: string;
+  };
+};
+
 function isPushTokenConflictError(error: unknown) {
   return error instanceof Error && error.message.includes("PUSH_TOKEN_CONFLICT");
 }
@@ -23,6 +29,13 @@ function normalizePermissionStatus(status: Notifications.PermissionStatus): Noti
 export async function getNotificationPermissionSnapshot(): Promise<NotificationPermissionStatus> {
   const permission = await Notifications.getPermissionsAsync();
   return normalizePermissionStatus(permission.status);
+}
+
+function hasAndroidPushConfig() {
+  if (!Constants.platform?.android) return true;
+
+  const expoConfig = Constants.expoConfig as ExpoConfigWithAndroidPush | null;
+  return Boolean(expoConfig?.android?.googleServicesFile);
 }
 
 export async function registerForPushNotificationsAsync() {
@@ -40,6 +53,14 @@ export async function registerForPushNotificationsAsync() {
     } satisfies PushRegistrationResult;
   }
 
+  if (!hasAndroidPushConfig()) {
+    console.warn("Skipping Expo push token registration on Android because google-services.json is not configured.");
+    return {
+      permissionStatus,
+      token: null,
+    } satisfies PushRegistrationResult;
+  }
+
   try {
     const token = (await Notifications.getExpoPushTokenAsync()).data;
     return {
@@ -47,7 +68,7 @@ export async function registerForPushNotificationsAsync() {
       token,
     } satisfies PushRegistrationResult;
   } catch (error) {
-    console.error("Failed to get Expo push token.", error);
+    console.warn("Failed to get Expo push token.", error);
     return {
       permissionStatus,
       token: null,
@@ -81,3 +102,7 @@ export async function syncPushRegistration() {
 
   return result;
 }
+
+export const __testing = {
+  hasAndroidPushConfig,
+};

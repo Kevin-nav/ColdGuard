@@ -97,6 +97,14 @@ export default defineSchema({
     warningPushEnabled: v.boolean(),
     warningLocalEnabled: v.boolean(),
     recoveryPushEnabled: v.boolean(),
+    nonCriticalByType: v.optional(
+      v.object({
+        temperature: v.boolean(),
+        door_open: v.boolean(),
+        device_offline: v.boolean(),
+        battery_low: v.boolean(),
+      }),
+    ),
     quietHoursStart: v.optional(v.string()),
     quietHoursEnd: v.optional(v.string()),
     updatedAt: v.number(),

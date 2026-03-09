@@ -14,8 +14,8 @@
 
 **Files:**
 - Modify: `convex/schema.ts`
-- Create: `convex/credential-throttle.ts`
-- Test: `convex/credential-throttle.test.ts`
+- Create: `convex/credential_throttle.ts`
+- Test: `convex/credential_throttle.test.ts`
 
 **Step 1: Write helper tests**
 
@@ -23,7 +23,7 @@ Cover the lockout schedule and active-lock checks with fixed timestamps.
 
 **Step 2: Run targeted test**
 
-Run: `npx jest convex/credential-throttle.test.ts --runInBand`
+Run: `npx jest convex/credential_throttle.test.ts --runInBand`
 Expected: FAIL before helper exists
 
 **Step 3: Write minimal implementation**
@@ -32,7 +32,7 @@ Add a helper module that computes next failure state and whether a record is cur
 
 **Step 4: Re-run test**
 
-Run: `npx jest convex/credential-throttle.test.ts --runInBand`
+Run: `npx jest convex/credential_throttle.test.ts --runInBand`
 Expected: PASS
 
 ### Task 2: Integrate throttling into credential login
@@ -57,7 +57,7 @@ Clear the throttle record once verification succeeds before linking the user.
 **Step 4: Verify**
 
 Run:
-- `npx jest convex/credential-throttle.test.ts src/features/onboarding/services/institution-link.test.ts --runInBand`
+- `npx jest convex/credential_throttle.test.ts src/features/onboarding/services/institution-link.test.ts --runInBand`
 - `npm run lint`
 - `npx tsc --noEmit`
 

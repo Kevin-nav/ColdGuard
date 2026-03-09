@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "ColdGuard_app_tmp",
-    "slug": "ColdGuard_app_tmp",
+    "name": "ColdGuard",
+    "slug": "coldguard",
     "scheme": "coldguard",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -23,14 +23,17 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.ColdGuard_app_tmp"
+      "package": "com.anonymous.coldguard"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-router",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-notifications",
+      "expo-font",
+      "expo-asset"
     ]
   }
 }

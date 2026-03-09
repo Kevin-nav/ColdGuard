@@ -87,9 +87,7 @@ test("evicts a mismatched cached snapshot and reloads the requested firebase use
   });
 
   expect(mockClearProfileSnapshot).toHaveBeenCalledTimes(1);
-  expect(mockQuery).toHaveBeenCalledWith(expect.anything(), {
-    firebaseUid: "firebase-user-2",
-  });
+  expect(mockQuery).toHaveBeenCalledWith(expect.anything());
   expect(mockSaveProfileSnapshot).toHaveBeenCalledWith({
     firebaseUid: "firebase-user-2",
     displayName: "Fresh User",

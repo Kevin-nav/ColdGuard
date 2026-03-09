@@ -83,7 +83,7 @@ export default function IncidentDetailScreen() {
   const severityColorKey = getNotificationSeverityColorKey(incident.severity);
 
   return (
-    <DashboardPage scroll testID="incident-detail-scroll-view">
+    <DashboardPage scroll contentContainerStyle={styles.pageContent} testID="incident-detail-scroll-view">
       <DashboardSection
         description={incident.body}
         eyebrow="Incident"
@@ -184,6 +184,9 @@ export default function IncidentDetailScreen() {
 }
 
 const styles = StyleSheet.create({
+  pageContent: {
+    paddingTop: spacing["3xl"],
+  },
   headerRow: {
     alignItems: "flex-start",
     flexDirection: "row",

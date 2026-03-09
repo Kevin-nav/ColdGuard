@@ -83,4 +83,13 @@ export const SQLITE_SCHEMA_STATEMENTS = [
       last_updated_at INTEGER NOT NULL
     );
   `,
+  `
+    CREATE TABLE IF NOT EXISTS notification_preference_type_cache (
+      id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+      temperature_enabled INTEGER NOT NULL,
+      door_open_enabled INTEGER NOT NULL,
+      device_offline_enabled INTEGER NOT NULL,
+      battery_low_enabled INTEGER NOT NULL
+    );
+  `,
 ];

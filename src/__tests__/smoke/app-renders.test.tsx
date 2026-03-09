@@ -60,7 +60,7 @@ test("root index screen renders", () => {
   expect(toJSON()).toBeNull();
 });
 
-test("falls back to login when startup profile resolution throws", async () => {
+test("falls back to onboarding when startup profile resolution throws for a signed-in user", async () => {
   const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
 
   jest.mocked(useAuthSession).mockReturnValue({
@@ -77,7 +77,7 @@ test("falls back to login when startup profile resolution throws", async () => {
   render(<Index />);
 
   await waitFor(() => {
-    expect(mockRedirect).toHaveBeenCalledWith({ href: "/(auth)/login" });
+    expect(mockRedirect).toHaveBeenCalledWith({ href: "/(onboarding)/link-institution" });
   });
 
   expect(jest.mocked(ensureLocalProfileForUser)).not.toHaveBeenCalled();
@@ -86,6 +86,34 @@ test("falls back to login when startup profile resolution throws", async () => {
     expect.any(Error),
   );
 
+  consoleErrorSpy.mockRestore();
+});
+
+test("uses the matching cached profile when remote hydration fails for a signed-in user", async () => {
+  const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+  jest.mocked(useAuthSession).mockReturnValue({
+    isLoading: false,
+    providerId: null,
+    user: {
+      uid: "u1",
+      email: "user@example.com",
+      displayName: "User One",
+    } as any,
+  });
+  jest.mocked(getProfileSnapshot).mockResolvedValue({
+    firebaseUid: "u1",
+    institutionName: "Cached Institution",
+  } as any);
+
+  render(<Index />);
+
+  await waitFor(() => {
+    expect(mockRedirect).toHaveBeenCalledWith({ href: "/(tabs)/home" });
+  });
+
+  expect(jest.mocked(ensureLocalProfileForUser)).not.toHaveBeenCalled();
+  expect(consoleErrorSpy).not.toHaveBeenCalled();
   consoleErrorSpy.mockRestore();
 });
 

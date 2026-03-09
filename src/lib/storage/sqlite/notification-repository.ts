@@ -29,9 +29,20 @@ type NotificationPreferenceRow = {
   warning_push_enabled: number;
   warning_local_enabled: number;
   recovery_push_enabled: number;
+  temperature_enabled: number | null;
+  door_open_enabled: number | null;
+  device_offline_enabled: number | null;
+  battery_low_enabled: number | null;
   quiet_hours_start: string | null;
   quiet_hours_end: string | null;
   last_updated_at: number;
+};
+
+type NotificationStateRow = {
+  incident_id: string;
+  read_at: number | null;
+  archived_at: number | null;
+  last_viewed_version: number | null;
 };
 
 export async function saveNotificationCache(incidents: NotificationIncidentRecord[]) {
@@ -75,6 +86,21 @@ export async function saveNotificationCache(incidents: NotificationIncidentRecor
       incident.lastViewedVersion,
     );
   }
+}
+
+export async function replaceNotificationCacheForInstitution(
+  institutionName: string,
+  incidents: NotificationIncidentRecord[],
+) {
+  const database = await initializeSQLite();
+  await database.runAsync(
+    "DELETE FROM notification_cache WHERE institution_name = ? AND instr(incident_id, ':') = 0",
+    institutionName,
+  );
+
+  if (incidents.length === 0) return;
+
+  await saveNotificationCache(incidents);
 }
 
 export async function listNotificationsForInstitution(
@@ -202,6 +228,18 @@ export async function saveNotificationPreferences(snapshot: Omit<NotificationPre
     now,
   );
 
+  await database.runAsync(
+    `
+      INSERT OR REPLACE INTO notification_preference_type_cache
+      (id, temperature_enabled, door_open_enabled, device_offline_enabled, battery_low_enabled)
+      VALUES (1, ?, ?, ?, ?)
+    `,
+    snapshot.nonCriticalByType.temperature ? 1 : 0,
+    snapshot.nonCriticalByType.door_open ? 1 : 0,
+    snapshot.nonCriticalByType.device_offline ? 1 : 0,
+    snapshot.nonCriticalByType.battery_low ? 1 : 0,
+  );
+
   return {
     ...snapshot,
     lastUpdatedAt: now,
@@ -216,11 +254,16 @@ export async function getNotificationPreferences() {
         warning_push_enabled,
         warning_local_enabled,
         recovery_push_enabled,
+        temperature_enabled,
+        door_open_enabled,
+        device_offline_enabled,
+        battery_low_enabled,
         quiet_hours_start,
         quiet_hours_end,
         last_updated_at
-      FROM notification_preferences_cache
-      WHERE id = 1
+      FROM notification_preferences_cache p
+      LEFT JOIN notification_preference_type_cache t ON t.id = p.id
+      WHERE p.id = 1
     `,
   );
 
@@ -230,10 +273,59 @@ export async function getNotificationPreferences() {
     warningPushEnabled: row.warning_push_enabled === 1,
     warningLocalEnabled: row.warning_local_enabled === 1,
     recoveryPushEnabled: row.recovery_push_enabled === 1,
+    nonCriticalByType: {
+      temperature:
+        row.temperature_enabled === null
+          ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.temperature
+          : row.temperature_enabled === 1,
+      door_open:
+        row.door_open_enabled === null
+          ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.door_open
+          : row.door_open_enabled === 1,
+      device_offline:
+        row.device_offline_enabled === null
+          ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.device_offline
+          : row.device_offline_enabled === 1,
+      battery_low:
+        row.battery_low_enabled === null
+          ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.battery_low
+          : row.battery_low_enabled === 1,
+    },
     quietHoursStart: row.quiet_hours_start,
     quietHoursEnd: row.quiet_hours_end,
     lastUpdatedAt: row.last_updated_at,
   };
+}
+
+export async function listNotificationStateForIncidentIds(incidentIds: string[]) {
+  if (incidentIds.length === 0) {
+    return new Map<
+      string,
+      { archivedAt: number | null; lastViewedVersion: number; readAt: number | null }
+    >();
+  }
+
+  const database = await initializeSQLite();
+  const placeholders = incidentIds.map(() => "?").join(", ");
+  const rows = await database.getAllAsync<NotificationStateRow>(
+    `
+      SELECT incident_id, read_at, archived_at, last_viewed_version
+      FROM notification_state_cache
+      WHERE incident_id IN (${placeholders})
+    `,
+    ...incidentIds,
+  );
+
+  return new Map(
+    rows.map((row) => [
+      row.incident_id,
+      {
+        readAt: row.read_at ?? null,
+        archivedAt: row.archived_at ?? null,
+        lastViewedVersion: row.last_viewed_version ?? 0,
+      },
+    ]),
+  );
 }
 
 export async function upsertNotificationState(

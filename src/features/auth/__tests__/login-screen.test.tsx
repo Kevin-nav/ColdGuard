@@ -1,5 +1,7 @@
-import { fireEvent, render } from "@testing-library/react-native";
+import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import LoginScreen from "../../../../app/(auth)/login";
+import { router } from "expo-router";
+import { signInWithEmailPassword } from "../../../../src/features/auth/services/email-auth";
 
 const mockPromptAsync = jest.fn();
 const mockUseIdTokenAuthRequest = jest.fn((_config?: unknown) => [
@@ -28,10 +30,6 @@ jest.mock("@expo/vector-icons", () => ({
 jest.mock("../../../../src/features/auth/services/email-auth", () => ({
   signInWithEmailPassword: jest.fn(),
   registerWithEmailPassword: jest.fn(),
-}));
-
-jest.mock("../../../../src/features/auth/services/user-bootstrap", () => ({
-  bootstrapUserInConvex: jest.fn(),
 }));
 
 jest.mock("../../../../src/features/auth/services/google-auth", () => ({
@@ -91,4 +89,22 @@ test("renders social divider and google button label", () => {
 
   expect(ui.getByText("or")).toBeTruthy();
   expect(ui.getByText("Continue with Google")).toBeTruthy();
+});
+
+test("routes to root after email sign-in without bootstrapping directly", async () => {
+  jest.mocked(signInWithEmailPassword).mockResolvedValue({
+    uid: "firebase-user-1",
+    email: "user@example.com",
+    displayName: "User One",
+  } as any);
+
+  const ui = render(<LoginScreen />);
+
+  fireEvent.changeText(ui.getByPlaceholderText("Email"), "user@example.com");
+  fireEvent.changeText(ui.getByPlaceholderText("Password"), "Password1");
+  fireEvent.press(ui.getByTestId("primary-submit-button"));
+
+  await waitFor(() => {
+    expect(jest.mocked(router.replace)).toHaveBeenCalledWith("/");
+  });
 });

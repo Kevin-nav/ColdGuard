@@ -2,7 +2,7 @@ import {
   getNextCredentialAttemptState,
   isCredentialAttemptLocked,
   type CredentialAttemptState,
-} from "./credential-throttle";
+} from "./credential_throttle";
 
 test("does not lock before the threshold", () => {
   const first = getNextCredentialAttemptState(null, 1_000);

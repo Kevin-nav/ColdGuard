@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, View } from "react-native";
 import { useAuthSession } from "../src/features/auth/providers/auth-provider";
 import { ensureLocalProfileForUser } from "../src/features/dashboard/services/profile-hydration";
-import { getProfileSnapshot } from "../src/lib/storage/sqlite/profile-repository";
+import { getProfileSnapshot, type ProfileSnapshot } from "../src/lib/storage/sqlite/profile-repository";
 import { useTheme } from "../src/theme/theme-provider";
 
 type StartRoute = "/(auth)/login" | "/(onboarding)/link-institution" | "/(tabs)/home";
@@ -24,23 +24,25 @@ export default function Index() {
         return;
       }
 
+      let matchingCachedProfile: ProfileSnapshot | null = null;
+
       try {
         const cachedProfile = await getProfileSnapshot();
+        matchingCachedProfile = cachedProfile?.firebaseUid === user.uid ? cachedProfile : null;
         const profile =
-          cachedProfile?.firebaseUid === user.uid
-            ? cachedProfile
-            : await ensureLocalProfileForUser({
-                firebaseUid: user.uid,
-                email: user.email,
-                displayName: user.displayName,
-              });
+          matchingCachedProfile ??
+          (await ensureLocalProfileForUser({
+            firebaseUid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+          }));
 
         if (!isMounted) return;
         setRoute(profile?.institutionName ? "/(tabs)/home" : "/(onboarding)/link-institution");
       } catch (error) {
         console.error("Failed to resolve start route.", error);
         if (!isMounted) return;
-        setRoute("/(auth)/login");
+        setRoute(matchingCachedProfile?.institutionName ? "/(tabs)/home" : "/(onboarding)/link-institution");
         return;
       }
     }

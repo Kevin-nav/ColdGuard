@@ -5,8 +5,10 @@ import {
   archiveNotification,
   getNotificationById,
   getNotificationPreferences,
+  listNotificationStateForIncidentIds,
   listNotificationsForInstitution,
   markNotificationRead,
+  replaceNotificationCacheForInstitution,
   saveNotificationCache,
   saveNotificationPreferences,
 } from "../../../lib/storage/sqlite/notification-repository";
@@ -18,7 +20,21 @@ import {
   type SyncJobRecord,
 } from "../../../lib/storage/sqlite/sync-job-repository";
 import { buildNotificationIncidentsFromDevices } from "./policy";
-import type { NotificationIncidentRecord, NotificationPreferences, NotificationTimelineEvent } from "../types";
+import {
+  DEFAULT_NOTIFICATION_PREFERENCES,
+  getNotificationSortTime,
+  type NotificationIncidentRecord,
+  type NotificationPreferences,
+  type NotificationTimelineEvent,
+} from "../types";
+
+/**
+ * Convex document IDs are URL-safe base64-ish strings without colons or spaces.
+ * Local-only IDs (from policy.ts) contain colons, e.g. "device-1:device_offline".
+ */
+function isConvexId(id: string): boolean {
+  return !id.includes(":") && !id.includes(" ") && id.length > 0;
+}
 
 type RemoteInboxItem = {
   _id?: string;
@@ -65,30 +81,53 @@ function isPushTokenConflictError(error: unknown) {
   return error instanceof Error && error.message.includes("PUSH_TOKEN_CONFLICT");
 }
 
-export async function syncNotificationInbox(institutionName: string, options: { isOnline: boolean }) {
-  if (!options.isOnline) {
-    await seedNotificationsFromLocalDevices(institutionName);
-    return await listNotificationsForInstitution(institutionName);
-  }
+function normalizeQuietHoursPreference(value: string | null | undefined) {
+  return value ?? undefined;
+}
 
-  try {
-    const convex = getConvexClient();
-    const items = (await convex.query((api as any).notifications.listInbox, {
-      limit: 50,
-      statusFilter: "all",
-    })) as RemoteInboxItem[] | undefined;
+function normalizeRoutineTypePreferences(
+  preferences: Partial<NotificationPreferences["nonCriticalByType"]> | null | undefined,
+) {
+  return {
+    ...DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType,
+    ...preferences,
+  };
+}
 
-    if (!items?.length) {
-      await seedNotificationsFromLocalDevices(institutionName);
-      return await listNotificationsForInstitution(institutionName);
+function normalizeNotificationPreferencePayload(
+  preferences: Omit<NotificationPreferences, "lastUpdatedAt">,
+) {
+  return {
+    ...preferences,
+    nonCriticalByType: normalizeRoutineTypePreferences(preferences.nonCriticalByType),
+    quietHoursStart: normalizeQuietHoursPreference(preferences.quietHoursStart),
+    quietHoursEnd: normalizeQuietHoursPreference(preferences.quietHoursEnd),
+  };
+}
+
+export type NotificationInboxSyncResult = {
+  incidents: NotificationIncidentRecord[];
+  syncError: string | null;
+};
+
+export async function syncNotificationInbox(
+  institutionName: string,
+  options: { isOnline: boolean },
+): Promise<NotificationInboxSyncResult> {
+  let syncError: string | null = null;
+
+  if (options.isOnline) {
+    try {
+      await refreshRemoteNotificationInboxCache(institutionName);
+    } catch (error) {
+      syncError = normalizeSyncErrorMessage(error);
     }
-
-    await saveNotificationCache(items.map((item) => mapRemoteInboxItem(item, institutionName)));
-    return await listNotificationsForInstitution(institutionName);
-  } catch {
-    await seedNotificationsFromLocalDevices(institutionName);
-    return await listNotificationsForInstitution(institutionName);
   }
+
+  return {
+    incidents: await loadMergedNotificationInbox(institutionName),
+    syncError,
+  };
 }
 
 export async function syncNotificationPreferences(options: { isOnline: boolean }) {
@@ -108,6 +147,7 @@ export async function syncNotificationPreferences(options: { isOnline: boolean }
       warningPushEnabled: Boolean(remote.warningPushEnabled),
       warningLocalEnabled: Boolean(remote.warningLocalEnabled),
       recoveryPushEnabled: Boolean(remote.recoveryPushEnabled),
+      nonCriticalByType: normalizeRoutineTypePreferences(remote.nonCriticalByType),
       quietHoursStart: remote.quietHoursStart ?? null,
       quietHoursEnd: remote.quietHoursEnd ?? null,
     });
@@ -121,19 +161,22 @@ export async function updateNotificationPreferencesWithSync(
   options: { isOnline: boolean },
 ) {
   const saved = await saveNotificationPreferences(nextPreferences);
+  const mutationPayload = normalizeNotificationPreferencePayload(nextPreferences);
 
   if (!options.isOnline) {
-    await enqueueSyncJob("update_notification_preferences", nextPreferences);
+    await enqueueSyncJob("update_notification_preferences", mutationPayload);
     return saved;
   }
 
   const convex = getConvexClient();
-  await convex.mutation((api as any).notifications.updateNotificationPreferences, nextPreferences);
+  await convex.mutation((api as any).notifications.updateNotificationPreferences, mutationPayload);
   return saved;
 }
 
 export async function markNotificationReadWithSync(incidentId: string, options: { isOnline: boolean }) {
   await markNotificationRead(incidentId);
+
+  if (!isConvexId(incidentId)) return;
 
   if (!options.isOnline) {
     await enqueueSyncJob("mark_notification_read", { incidentId });
@@ -146,6 +189,8 @@ export async function markNotificationReadWithSync(incidentId: string, options: 
 
 export async function archiveNotificationWithSync(incidentId: string, options: { isOnline: boolean }) {
   await archiveNotification(incidentId);
+
+  if (!isConvexId(incidentId)) return;
 
   if (!options.isOnline) {
     await enqueueSyncJob("archive_notification", { incidentId });
@@ -161,20 +206,20 @@ export async function acknowledgeIncidentWithSync(
   institutionName: string,
   options: { isOnline: boolean },
 ) {
-  const existing = await getNotificationById(incidentId);
-  if (existing) {
-    await saveNotificationCache([
-      {
-        ...existing,
-        acknowledgedAt: Date.now(),
-        status: "acknowledged",
-      },
-    ]);
+  await saveLocalIncidentSnapshot(incidentId, institutionName, (incident, now) => ({
+    ...incident,
+    acknowledgedAt: now,
+    resolvedAt: null,
+    status: "acknowledged",
+  }));
+
+  if (!isConvexId(incidentId)) {
+    return await syncNotificationInbox(institutionName, options);
   }
 
   if (!options.isOnline) {
     await enqueueSyncJob("acknowledge_incident", { incidentId });
-    return await listNotificationsForInstitution(institutionName);
+    return await syncNotificationInbox(institutionName, options);
   }
 
   const convex = getConvexClient();
@@ -187,20 +232,19 @@ export async function resolveIncidentWithSync(
   institutionName: string,
   options: { isOnline: boolean },
 ) {
-  const existing = await getNotificationById(incidentId);
-  if (existing) {
-    await saveNotificationCache([
-      {
-        ...existing,
-        resolvedAt: Date.now(),
-        status: "resolved",
-      },
-    ]);
+  await saveLocalIncidentSnapshot(incidentId, institutionName, (incident, now) => ({
+    ...incident,
+    resolvedAt: now,
+    status: "resolved",
+  }));
+
+  if (!isConvexId(incidentId)) {
+    return await syncNotificationInbox(institutionName, options);
   }
 
   if (!options.isOnline) {
     await enqueueSyncJob("resolve_incident", { incidentId });
-    return await listNotificationsForInstitution(institutionName);
+    return await syncNotificationInbox(institutionName, options);
   }
 
   const convex = getConvexClient();
@@ -209,9 +253,12 @@ export async function resolveIncidentWithSync(
 }
 
 export async function getIncidentDetail(incidentId: string, institutionName: string, options: { isOnline: boolean }) {
-  const local = await getNotificationById(incidentId);
+  const local =
+    (await getNotificationById(incidentId)) ??
+    (await loadLocalDerivedNotifications(institutionName)).find((incident) => incident.id === incidentId) ??
+    null;
 
-  if (!options.isOnline) {
+  if (!options.isOnline || !isConvexId(incidentId)) {
     return local;
   }
 
@@ -256,6 +303,18 @@ export async function flushPendingNotificationSyncJobs(options: {
 }
 
 async function processSyncJob(job: SyncJobRecord) {
+  // Drop sync jobs that reference local-only incident IDs — they can never succeed on the server.
+  const incidentJobTypes: SyncJobType[] = [
+    "mark_notification_read",
+    "archive_notification",
+    "acknowledge_incident",
+    "resolve_incident",
+  ];
+  if (incidentJobTypes.includes(job.jobType as SyncJobType) && !isConvexId((job.payload as Record<string, string>)?.incidentId ?? "")) {
+    await deleteSyncJob(job.id);
+    return;
+  }
+
   await setSyncJobStatus(job.id, "processing");
   const convex = getConvexClient();
 
@@ -274,7 +333,10 @@ async function processSyncJob(job: SyncJobRecord) {
         await convex.mutation((api as any).notifications.resolveIncident, job.payload);
         break;
       case "update_notification_preferences":
-        await convex.mutation((api as any).notifications.updateNotificationPreferences, job.payload);
+        await convex.mutation(
+          (api as any).notifications.updateNotificationPreferences,
+          normalizeNotificationPreferencePayload(job.payload as Omit<NotificationPreferences, "lastUpdatedAt">),
+        );
         break;
       case "register_push_device":
         await convex.mutation((api as any).notifications.registerPushDevice, job.payload);
@@ -295,12 +357,108 @@ async function processSyncJob(job: SyncJobRecord) {
   }
 }
 
-async function seedNotificationsFromLocalDevices(institutionName: string) {
+async function refreshRemoteNotificationInboxCache(institutionName: string) {
+  const convex = getConvexClient();
+  const items = (await convex.query((api as any).notifications.listInbox, {
+    limit: 50,
+    statusFilter: "all",
+  })) as RemoteInboxItem[] | undefined;
+
+  const mapped = (items ?? []).map((item) => mapRemoteInboxItem(item, institutionName));
+  await replaceNotificationCacheForInstitution(institutionName, mapped);
+}
+
+async function loadMergedNotificationInbox(institutionName: string) {
+  const [remoteCached, localDerived] = await Promise.all([
+    listNotificationsForInstitution(institutionName),
+    loadLocalDerivedNotifications(institutionName),
+  ]);
+
+  return mergeNotificationIncidents(remoteCached, localDerived);
+}
+
+async function loadLocalDerivedNotifications(institutionName: string) {
   const devices = await getDevicesForInstitution(institutionName);
-  const fallback = buildNotificationIncidentsFromDevices(institutionName, devices);
-  if (fallback.length > 0) {
-    await saveNotificationCache(fallback);
+  const derived = buildNotificationIncidentsFromDevices(institutionName, devices);
+  const stateByIncidentId = await listNotificationStateForIncidentIds(derived.map((incident) => incident.id));
+
+  return derived
+    .map((incident) => {
+      const state = stateByIncidentId.get(incident.id);
+      if (!state) return incident;
+
+      return {
+        ...incident,
+        readAt: state.readAt,
+        archivedAt: state.archivedAt,
+        lastViewedVersion: state.lastViewedVersion,
+      };
+    })
+    .filter((incident) => !incident.archivedAt);
+}
+
+function normalizeSyncErrorMessage(error: unknown) {
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : "Unable to sync notifications.";
+}
+
+function mergeNotificationIncidents(
+  remoteIncidents: NotificationIncidentRecord[],
+  localDerivedIncidents: NotificationIncidentRecord[],
+) {
+  const merged = new Map<string, NotificationIncidentRecord>();
+
+  for (const incident of localDerivedIncidents) {
+    merged.set(getNotificationIdentityKey(incident), incident);
   }
+
+  for (const incident of remoteIncidents) {
+    const key = getNotificationIdentityKey(incident);
+    const localDerived = merged.get(key);
+
+    if (localDerived && !isConvexId(incident.id)) {
+      merged.set(key, mergeCachedLocalIncident(incident, localDerived));
+      continue;
+    }
+
+    merged.set(key, incident);
+  }
+
+  return Array.from(merged.values()).sort(sortNotificationIncidents);
+}
+
+function mergeCachedLocalIncident(
+  cachedIncident: NotificationIncidentRecord,
+  localDerivedIncident: NotificationIncidentRecord,
+) {
+  if (cachedIncident.status === "resolved") {
+    const resolvedAt = cachedIncident.resolvedAt ?? 0;
+    if (localDerivedIncident.lastTriggeredAt > resolvedAt) {
+      return localDerivedIncident;
+    }
+  }
+
+  return {
+    ...localDerivedIncident,
+    status: cachedIncident.status,
+    acknowledgedAt: cachedIncident.acknowledgedAt,
+    resolvedAt: cachedIncident.resolvedAt,
+    readAt: cachedIncident.readAt,
+    archivedAt: cachedIncident.archivedAt,
+    lastViewedVersion: cachedIncident.lastViewedVersion,
+    timeline: cachedIncident.timeline.length > 0 ? cachedIncident.timeline : localDerivedIncident.timeline,
+  };
+}
+
+function getNotificationIdentityKey(incident: Pick<NotificationIncidentRecord, "deviceId" | "incidentType">) {
+  return `${incident.deviceId}:${incident.incidentType}`;
+}
+
+function sortNotificationIncidents(a: NotificationIncidentRecord, b: NotificationIncidentRecord) {
+  if (a.status === "resolved" && b.status !== "resolved") return 1;
+  if (a.status !== "resolved" && b.status === "resolved") return -1;
+  return getNotificationSortTime(b) - getNotificationSortTime(a);
 }
 
 function mapRemoteInboxItem(
@@ -350,3 +508,33 @@ function mapRemoteEvents(events: RemoteIncidentDetail["events"], item: RemoteInb
     summary: event.summary ?? item.title,
   }));
 }
+
+async function saveLocalIncidentSnapshot(
+  incidentId: string,
+  institutionName: string,
+  buildNextIncident: (
+    incident: NotificationIncidentRecord,
+    now: number,
+  ) => NotificationIncidentRecord,
+) {
+  const existing =
+    (await getNotificationById(incidentId)) ??
+    (await loadLocalDerivedNotifications(institutionName)).find((incident) => incident.id === incidentId) ??
+    null;
+
+  if (!existing) return;
+
+  const now = Date.now();
+  await saveNotificationCache([buildNextIncident(existing, now)]);
+}
+
+export const __testing = {
+  getNotificationIdentityKey,
+  mergeCachedLocalIncident,
+  mergeNotificationIncidents,
+  normalizeNotificationPreferencePayload,
+  normalizeSyncErrorMessage,
+  normalizeQuietHoursPreference,
+  normalizeRoutineTypePreferences,
+  sortNotificationIncidents,
+};

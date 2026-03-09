@@ -81,6 +81,14 @@ function isPushTokenConflictError(error: unknown) {
   return error instanceof Error && error.message.includes("PUSH_TOKEN_CONFLICT");
 }
 
+function isLegacyNotificationPreferenceValidatorError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("ArgumentValidationError") &&
+    error.message.includes("nonCriticalByType")
+  );
+}
+
 function normalizeQuietHoursPreference(value: string | null | undefined) {
   return value ?? undefined;
 }
@@ -131,8 +139,10 @@ export async function syncNotificationInbox(
 }
 
 export async function syncNotificationPreferences(options: { isOnline: boolean }) {
+  const localPreferences = await getNotificationPreferences();
+
   if (!options.isOnline) {
-    return await getNotificationPreferences();
+    return localPreferences;
   }
 
   try {
@@ -140,19 +150,22 @@ export async function syncNotificationPreferences(options: { isOnline: boolean }
     const remote = await convex.query((api as any).notifications.getNotificationPreferences, {});
 
     if (!remote) {
-      return await getNotificationPreferences();
+      return localPreferences;
     }
 
     return await saveNotificationPreferences({
       warningPushEnabled: Boolean(remote.warningPushEnabled),
       warningLocalEnabled: Boolean(remote.warningLocalEnabled),
       recoveryPushEnabled: Boolean(remote.recoveryPushEnabled),
-      nonCriticalByType: normalizeRoutineTypePreferences(remote.nonCriticalByType),
+      nonCriticalByType:
+        remote.nonCriticalByType === undefined
+          ? localPreferences.nonCriticalByType
+          : normalizeRoutineTypePreferences(remote.nonCriticalByType),
       quietHoursStart: remote.quietHoursStart ?? null,
       quietHoursEnd: remote.quietHoursEnd ?? null,
     });
   } catch {
-    return await getNotificationPreferences();
+    return localPreferences;
   }
 }
 
@@ -169,7 +182,7 @@ export async function updateNotificationPreferencesWithSync(
   }
 
   const convex = getConvexClient();
-  await convex.mutation((api as any).notifications.updateNotificationPreferences, mutationPayload);
+  await runUpdateNotificationPreferencesMutation(convex, mutationPayload);
   return saved;
 }
 
@@ -333,8 +346,8 @@ async function processSyncJob(job: SyncJobRecord) {
         await convex.mutation((api as any).notifications.resolveIncident, job.payload);
         break;
       case "update_notification_preferences":
-        await convex.mutation(
-          (api as any).notifications.updateNotificationPreferences,
+        await runUpdateNotificationPreferencesMutation(
+          convex,
           normalizeNotificationPreferencePayload(job.payload as Omit<NotificationPreferences, "lastUpdatedAt">),
         );
         break;
@@ -366,6 +379,22 @@ async function refreshRemoteNotificationInboxCache(institutionName: string) {
 
   const mapped = (items ?? []).map((item) => mapRemoteInboxItem(item, institutionName));
   await replaceNotificationCacheForInstitution(institutionName, mapped);
+}
+
+async function runUpdateNotificationPreferencesMutation(
+  convex: ReturnType<typeof getConvexClient>,
+  payload: ReturnType<typeof normalizeNotificationPreferencePayload>,
+) {
+  try {
+    await convex.mutation((api as any).notifications.updateNotificationPreferences, payload);
+  } catch (error) {
+    if (!isLegacyNotificationPreferenceValidatorError(error)) {
+      throw error;
+    }
+
+    const { nonCriticalByType: _ignored, ...legacyPayload } = payload;
+    await convex.mutation((api as any).notifications.updateNotificationPreferences, legacyPayload);
+  }
 }
 
 async function loadMergedNotificationInbox(institutionName: string) {
@@ -530,6 +559,7 @@ async function saveLocalIncidentSnapshot(
 
 export const __testing = {
   getNotificationIdentityKey,
+  isLegacyNotificationPreferenceValidatorError,
   mergeCachedLocalIncident,
   mergeNotificationIncidents,
   normalizeNotificationPreferencePayload,

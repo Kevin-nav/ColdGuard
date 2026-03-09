@@ -341,11 +341,6 @@ function RoutineAlertRow(props: {
               Routine alerts {props.isEnabled ? "on" : "off"}
             </Text>
           </View>
-          <View style={[localStyles.metaChip, { backgroundColor: colors.surfaceMuted }]}>
-            <Text style={[styles.labelText, { color: colors.textPrimary, opacity: 1 }]}>
-              Critical alerts always on
-            </Text>
-          </View>
         </View>
       </View>
       <View style={localStyles.switchWrap}>

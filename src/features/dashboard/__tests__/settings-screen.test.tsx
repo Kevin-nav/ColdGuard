@@ -106,6 +106,7 @@ test("renders friendly notification settings, saves routine preferences, and sig
   expect(ui.getByText("What should interrupt you")).toBeTruthy();
   expect(ui.getByText("Temperature")).toBeTruthy();
   expect(ui.getByText("Low battery")).toBeTruthy();
+  expect(ui.queryAllByText("Critical alerts always on")).toHaveLength(0);
 
   fireEvent(ui.getByLabelText("Temperature routine alerts"), "valueChange", false);
 

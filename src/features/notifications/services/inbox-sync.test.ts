@@ -5,6 +5,7 @@ import {
   acknowledgeIncidentWithSync,
   resolveIncidentWithSync,
   syncNotificationInbox,
+  syncNotificationPreferences,
   updateNotificationPreferencesWithSync,
 } from "./inbox-sync";
 
@@ -341,6 +342,101 @@ test("normalizes null quiet hours before sending notification preference mutatio
   );
 });
 
+test("preserves local routine preferences when the remote preference payload is still on the legacy shape", async () => {
+  mockGetNotificationPreferences.mockResolvedValue({
+    warningPushEnabled: true,
+    warningLocalEnabled: true,
+    recoveryPushEnabled: true,
+    nonCriticalByType: buildRoutinePreferences({
+      temperature: false,
+    }),
+    quietHoursStart: null,
+    quietHoursEnd: null,
+    lastUpdatedAt: 10,
+  });
+  mockQuery.mockResolvedValue({
+    warningPushEnabled: true,
+    warningLocalEnabled: true,
+    recoveryPushEnabled: true,
+    quietHoursStart: null,
+    quietHoursEnd: null,
+  });
+  mockSaveNotificationPreferences.mockResolvedValue({
+    warningPushEnabled: true,
+    warningLocalEnabled: true,
+    recoveryPushEnabled: true,
+    nonCriticalByType: buildRoutinePreferences({
+      temperature: false,
+    }),
+    quietHoursStart: null,
+    quietHoursEnd: null,
+    lastUpdatedAt: 11,
+  });
+
+  const result = await syncNotificationPreferences({ isOnline: true });
+
+  expect(mockSaveNotificationPreferences).toHaveBeenCalledWith(
+    expect.objectContaining({
+      nonCriticalByType: expect.objectContaining({
+        temperature: false,
+      }),
+    }),
+  );
+  expect(result.nonCriticalByType.temperature).toBe(false);
+});
+
+test("falls back to the legacy mutation payload when the live validator rejects nonCriticalByType", async () => {
+  mockSaveNotificationPreferences.mockResolvedValue({
+    warningPushEnabled: true,
+    warningLocalEnabled: true,
+    recoveryPushEnabled: true,
+    nonCriticalByType: buildRoutinePreferences({
+      temperature: false,
+    }),
+    quietHoursStart: null,
+    quietHoursEnd: null,
+    lastUpdatedAt: 10,
+  });
+  mockMutation
+    .mockRejectedValueOnce(
+      new Error(
+        "ArgumentValidationError: Object contains extra field `nonCriticalByType` that is not in the validator.",
+      ),
+    )
+    .mockResolvedValueOnce(undefined);
+
+  await updateNotificationPreferencesWithSync(
+    {
+      warningPushEnabled: true,
+      warningLocalEnabled: true,
+      recoveryPushEnabled: true,
+      nonCriticalByType: buildRoutinePreferences({
+        temperature: false,
+      }),
+      quietHoursStart: null,
+      quietHoursEnd: null,
+    },
+    { isOnline: true },
+  );
+
+  expect(mockMutation).toHaveBeenNthCalledWith(
+    1,
+    expect.anything(),
+    expect.objectContaining({
+      nonCriticalByType: expect.objectContaining({
+        temperature: false,
+      }),
+    }),
+  );
+  expect(mockMutation).toHaveBeenNthCalledWith(
+    2,
+    expect.anything(),
+    expect.not.objectContaining({
+      nonCriticalByType: expect.anything(),
+    }),
+  );
+});
+
 test("exports safe default routine preferences for every notification type", () => {
   expect(DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType).toEqual({
     temperature: true,
@@ -372,4 +468,15 @@ test("exposes a helper that converts null quiet hours to undefined", () => {
     quietHoursStart: undefined,
     quietHoursEnd: undefined,
   });
+});
+
+test("detects the legacy notification preference validator error shape", () => {
+  expect(
+    __testing.isLegacyNotificationPreferenceValidatorError(
+      new Error(
+        "ArgumentValidationError: Object contains extra field `nonCriticalByType` that is not in the validator.",
+      ),
+    ),
+  ).toBe(true);
+  expect(__testing.isLegacyNotificationPreferenceValidatorError(new Error("something else"))).toBe(false);
 });

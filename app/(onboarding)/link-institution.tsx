@@ -87,11 +87,15 @@ export default function LinkInstitutionScreen() {
           firebaseUid: user.uid,
           displayName: result.displayName ?? user.displayName ?? "ColdGuard User",
           email: user.email ?? "No email available",
+          institutionId: result.institutionId,
           institutionName: result.institutionName,
           staffId: result.staffId,
           role: result.role,
         });
-        await seedDashboardDataForInstitution(result.institutionName);
+        await seedDashboardDataForInstitution({
+          institutionId: result.institutionId,
+          institutionName: result.institutionName,
+        });
       } catch (storageError) {
         console.error("Local dashboard setup failed after QR link.", storageError);
       }
@@ -145,11 +149,15 @@ export default function LinkInstitutionScreen() {
           firebaseUid: user.uid,
           displayName: result.displayName ?? user.displayName ?? "ColdGuard User",
           email: user.email ?? "No email available",
+          institutionId: result.institutionId,
           institutionName: result.institutionName,
           staffId: result.staffId ?? staffId.trim(),
           role: result.role,
         });
-        await seedDashboardDataForInstitution(result.institutionName);
+        await seedDashboardDataForInstitution({
+          institutionId: result.institutionId,
+          institutionName: result.institutionName,
+        });
       } catch (storageError) {
         console.error("Local dashboard setup failed after credential link.", storageError);
       }

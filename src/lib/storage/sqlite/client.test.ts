@@ -3,12 +3,15 @@ import { getSQLiteDatabase, initializeSQLite, resetSQLiteForTests } from "./clie
 import { SQLITE_SCHEMA_STATEMENTS } from "./schema";
 
 const mockCloseAsync = jest.fn(async () => undefined);
+const mockExecAsync = jest.fn(async () => undefined);
+const mockGetAllAsync = jest.fn(async () => []);
 
 jest.mock("expo-sqlite", () => ({
   deleteDatabaseAsync: jest.fn(async () => undefined),
   openDatabaseAsync: jest.fn(async () => ({
     closeAsync: mockCloseAsync,
-    execAsync: jest.fn(async () => undefined),
+    execAsync: mockExecAsync,
+    getAllAsync: mockGetAllAsync,
   })),
 }));
 
@@ -31,7 +34,8 @@ test("resets the cached promise when opening sqlite fails", async () => {
 
   jest.mocked(openDatabaseAsync).mockResolvedValueOnce({
     closeAsync: mockCloseAsync,
-    execAsync: jest.fn(async () => undefined),
+    execAsync: mockExecAsync,
+    getAllAsync: mockGetAllAsync,
   } as any);
 
   await expect(getSQLiteDatabase()).resolves.toBeTruthy();
@@ -52,4 +56,50 @@ test("ignores missing-database delete errors during reset", async () => {
   jest.mocked(deleteDatabaseAsync).mockRejectedValueOnce(new Error("ENOENT: no such file or directory"));
 
   await expect(resetSQLiteForTests()).resolves.toBeUndefined();
+});
+
+test("migrates legacy sqlite tables without dropping cached data", async () => {
+  mockGetAllAsync.mockImplementation(async (query: string) => {
+    if (query.includes("profile_cache")) {
+      return [
+        { name: "id" },
+        { name: "firebase_uid" },
+        { name: "display_name" },
+        { name: "email" },
+        { name: "institution_name" },
+        { name: "staff_id" },
+        { name: "role" },
+        { name: "last_updated_at" },
+      ];
+    }
+
+    if (query.includes("devices")) {
+      return [
+        { name: "id" },
+        { name: "institution_name" },
+        { name: "nickname" },
+        { name: "mac_address" },
+        { name: "current_temp_c" },
+        { name: "mkt_status" },
+        { name: "battery_level" },
+        { name: "door_open" },
+        { name: "last_seen_at" },
+      ];
+    }
+
+    return [];
+  });
+
+  await initializeSQLite();
+
+  expect(mockExecAsync).not.toHaveBeenCalledWith(expect.stringContaining("DROP TABLE IF EXISTS"));
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE profile_cache ADD COLUMN institution_id TEXT NOT NULL DEFAULT ''",
+  );
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE devices ADD COLUMN firmware_version TEXT NOT NULL DEFAULT ''",
+  );
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE devices ADD COLUMN last_connection_test_status TEXT",
+  );
 });

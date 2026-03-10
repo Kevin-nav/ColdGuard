@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuthSession } from "../../auth/providers/auth-provider";
-import { getDevicesForInstitution, type DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
+import { type DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
 import { type ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
 import { useDashboardBootstrap } from "../providers/dashboard-bootstrap";
-import { seedDashboardDataForInstitution } from "../services/dashboard-seed";
 import { ensureLocalProfileForUser } from "../services/profile-hydration";
+import { syncVisibleDevices } from "../../devices/services/device-directory";
 
 type DashboardContextState = {
   alertCount: number;
@@ -12,6 +12,7 @@ type DashboardContextState = {
   error: string | null;
   isLoading: boolean;
   profile: ProfileSnapshot | null;
+  refreshDevices: () => Promise<void>;
   safeCount: number;
   warningCount: number;
 };
@@ -23,6 +24,7 @@ export function useDashboardContext(): DashboardContextState {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -66,11 +68,7 @@ export function useDashboardContext(): DashboardContextState {
           return;
         }
 
-        let nextDevices = await getDevicesForInstitution(nextProfile.institutionName);
-        if (nextDevices.length === 0) {
-          nextDevices = await seedDashboardDataForInstitution(nextProfile.institutionName);
-        }
-
+        const nextDevices = await syncVisibleDevices(nextProfile);
         if (!isMounted) return;
         setDevices(nextDevices);
       } catch (error) {
@@ -86,7 +84,7 @@ export function useDashboardContext(): DashboardContextState {
     return () => {
       isMounted = false;
     };
-  }, [bootstrapError, isReady, user?.displayName, user?.email, user?.uid]);
+  }, [bootstrapError, isReady, refreshNonce, user?.displayName, user?.email, user?.uid]);
 
   const counts = useMemo(
     () => ({
@@ -103,6 +101,9 @@ export function useDashboardContext(): DashboardContextState {
     error: screenError,
     isLoading,
     profile,
+    refreshDevices: async () => {
+      setRefreshNonce((current) => current + 1);
+    },
     safeCount: counts.safeCount,
     warningCount: counts.warningCount,
   };

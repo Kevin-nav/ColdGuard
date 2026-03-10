@@ -22,6 +22,34 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "permissions": [
+        "CAMERA",
+        "BLUETOOTH",
+        "BLUETOOTH_ADMIN",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_WIFI_STATE",
+        "CHANGE_WIFI_STATE",
+        "NEARBY_WIFI_DEVICES"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "https",
+              "host": "coldguard.org",
+              "pathPrefix": "/device/"
+            }
+          ]
+        }
+      ],
       "predictiveBackGestureEnabled": false,
       "package": "com.anonymous.coldguard"
     },
@@ -33,7 +61,20 @@
       "expo-sqlite",
       "expo-notifications",
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow ColdGuard to scan device QR codes during supervisor setup.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": false
+        }
+      ]
     ]
   }
 }

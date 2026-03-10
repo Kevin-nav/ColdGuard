@@ -1,17 +1,26 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router, useLocalSearchParams } from "expo-router";
-import { useMemo } from "react";
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import * as Linking from "expo-linking";
+import { Redirect, router, useLocalSearchParams } from "expo-router";
+import { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
 import { MetricRow } from "../../src/features/dashboard/components/metric-row";
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
+import { Badge } from "../../src/features/dashboard/components/badge";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
 import { spacing } from "../../src/theme/tokens";
-import { Badge } from "../../src/features/dashboard/components/badge";
-import { DeviceRecord } from "../../src/lib/storage/sqlite/device-repository";
+import type { DeviceRecord } from "../../src/lib/storage/sqlite/device-repository";
+import { listAssignableNurses } from "../../src/features/devices/services/device-directory";
+import {
+  assignColdGuardDevice,
+  decommissionColdGuardDevice,
+  runColdGuardConnectionTest,
+} from "../../src/features/devices/services/connection-service";
+import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
+import type { DeviceAssignmentCandidate } from "../../src/features/devices/types";
 
 function getStatusColor(status: DeviceRecord["mktStatus"], colors: ReturnType<typeof useTheme>["colors"]) {
   switch (status) {
@@ -35,7 +44,8 @@ function getStatusIcon(status: DeviceRecord["mktStatus"]) {
   }
 }
 
-function formatExactDate(timestamp: number) {
+function formatExactDate(timestamp: number | null) {
+  if (!timestamp) return "Not tested yet";
   return new Date(timestamp).toLocaleString(undefined, {
     year: "numeric",
     month: "short",
@@ -57,15 +67,131 @@ function formatLastSeenRelative(lastSeenAt: number) {
   return `${minutes} min ago`;
 }
 
+function formatAccessLabel(accessRole: DeviceRecord["accessRole"]) {
+  switch (accessRole) {
+    case "manager":
+      return "Supervisor access";
+    case "primary":
+      return "Primary nurse";
+    default:
+      return "Viewer nurse";
+  }
+}
+
+function formatConnectionStatus(status: DeviceRecord["lastConnectionTestStatus"]) {
+  if (!status || status === "idle") {
+    return "Pending";
+  }
+
+  if (status === "running") {
+    return "Running";
+  }
+
+  return status === "success" ? "Success" : "Failed";
+}
+
 export default function DeviceDetailsScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { claim, id, v } = useLocalSearchParams<{ claim?: string; id: string; v?: string }>();
   const { colors } = useTheme();
   const styles = useMemo(() => createSharedStyles(colors), [colors]);
-  const { devices, error, isLoading } = useDashboardContext();
+  const { devices, error, isLoading, profile, refreshDevices } = useDashboardContext();
+  const [assignableNurses, setAssignableNurses] = useState<DeviceAssignmentCandidate[]>([]);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [isSavingAssignments, setIsSavingAssignments] = useState(false);
+  const [isRunningConnectionTest, setIsRunningConnectionTest] = useState(false);
+  const [isRemovingDevice, setIsRemovingDevice] = useState(false);
+  const [primaryStaffId, setPrimaryStaffId] = useState<string | null>(null);
+  const [viewerStaffIds, setViewerStaffIds] = useState<string[]>([]);
 
-  const device = devices.find((d) => d.id === id);
+  const device = devices.find((entry) => entry.id === id);
+  let enrollmentLink = null;
+  if (typeof claim === "string" && typeof v === "string") {
+    try {
+      enrollmentLink = parseDeviceEnrollmentLink(
+        `https://coldguard.org/device/${encodeURIComponent(id)}?claim=${encodeURIComponent(claim)}&v=${encodeURIComponent(v)}`,
+      );
+    } catch {
+      enrollmentLink = null;
+    }
+  }
 
-  if (isLoading) {
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadAssignmentOptions() {
+      if (!device || profile?.role !== "Supervisor") {
+        if (isMounted) {
+          setAssignableNurses([]);
+          setPrimaryStaffId(device?.primaryAssigneeStaffId ?? null);
+          setViewerStaffIds([]);
+        }
+        return;
+      }
+
+      try {
+        setPrimaryStaffId(device.primaryAssigneeStaffId ?? null);
+        const nurses = await listAssignableNurses();
+        if (!isMounted) return;
+
+        setAssignableNurses(nurses);
+        setPrimaryStaffId(device.primaryAssigneeStaffId ?? nurses[0]?.staffId ?? null);
+        setViewerStaffIds(
+          nurses
+            .filter((nurse) => device.viewerNames.includes(nurse.displayName))
+            .map((nurse) => nurse.staffId),
+        );
+      } catch (nextError) {
+        if (!isMounted) return;
+        setAssignableNurses([]);
+        setActionMessage(nextError instanceof Error ? nextError.message : "Assignment options could not be loaded.");
+      }
+    }
+
+    void loadAssignmentOptions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [device, profile?.role]);
+
+  if (enrollmentLink) {
+    if (Platform.OS === "web") {
+      return (
+        <DashboardPage>
+          <DashboardSection title="Open In ColdGuard" eyebrow="Device setup" description="Continue enrollment in the ColdGuard Android app.">
+            <PanelCard>
+              <Text style={styles.bodyText}>Device: {enrollmentLink.deviceId}</Text>
+              <Text style={styles.bodyText}>
+                Install the Android build if needed, then return here and tap Open app.
+              </Text>
+              <Pressable
+                onPress={() => void Linking.openURL(enrollmentLink.qrPayload)}
+                style={styles.primaryButton}
+              >
+                <Text style={styles.primaryButtonText}>Open app</Text>
+              </Pressable>
+            </PanelCard>
+          </DashboardSection>
+        </DashboardPage>
+      );
+    }
+
+    return (
+      <Redirect
+        href={{
+          pathname: "/device/enroll",
+          params: {
+            claim: enrollmentLink.claim,
+            deviceId: enrollmentLink.deviceId,
+            payload: enrollmentLink.sourceUrl,
+            v: enrollmentLink.version,
+          },
+        }}
+      />
+    );
+  }
+
+  if (isLoading || !profile) {
     return (
       <DashboardPage>
         <View style={localStyles.centerContent}>
@@ -83,33 +209,88 @@ export default function DeviceDetailsScreen() {
             <Text style={styles.bodyText}>
               {error || "The requested device could not be found or you do not have permission to view it."}
             </Text>
-            <TouchableOpacity 
-              style={[localStyles.backButton, { backgroundColor: colors.surfaceMuted }]} 
+            <Pressable
+              style={({ pressed }) => [
+                localStyles.backButton,
+                { backgroundColor: colors.surfaceMuted },
+                pressed && styles.buttonDisabled,
+              ]}
               onPress={() => router.back()}
             >
               <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
               <Text style={[styles.bodyText, { color: colors.textPrimary }]}>Go Back</Text>
-            </TouchableOpacity>
+            </Pressable>
           </PanelCard>
         </DashboardSection>
       </DashboardPage>
     );
   }
 
-  const statusColor = getStatusColor(device.mktStatus, colors);
-  const statusIcon = getStatusIcon(device.mktStatus);
+  const activeDevice = device;
+  const activeProfile = profile;
+  const statusColor = getStatusColor(activeDevice.mktStatus, colors);
+  const statusIcon = getStatusIcon(activeDevice.mktStatus);
+
+  async function handleSaveAssignments() {
+    setIsSavingAssignments(true);
+    setActionMessage(null);
+
+    try {
+      await assignColdGuardDevice({
+        deviceId: activeDevice.id,
+        primaryStaffId,
+        viewerStaffIds: viewerStaffIds.filter((staffId) => staffId !== primaryStaffId),
+      });
+      await refreshDevices();
+      setActionMessage("Assignments saved.");
+    } catch (nextError) {
+      setActionMessage(nextError instanceof Error ? nextError.message : "Assignments could not be saved.");
+    } finally {
+      setIsSavingAssignments(false);
+    }
+  }
+
+  async function handleRunConnectionTest() {
+    setIsRunningConnectionTest(true);
+    setActionMessage(null);
+
+    try {
+      const result = await runColdGuardConnectionTest({ deviceId: activeDevice.id });
+      await refreshDevices();
+      setActionMessage(result.statusText || "Connection test completed.");
+    } catch (nextError) {
+      setActionMessage(nextError instanceof Error ? nextError.message : "Connection test failed.");
+    } finally {
+      setIsRunningConnectionTest(false);
+    }
+  }
+
+  async function handleRemoveDevice() {
+    setIsRemovingDevice(true);
+    setActionMessage(null);
+
+    try {
+      await decommissionColdGuardDevice({
+        deviceId: activeDevice.id,
+        profile: activeProfile,
+      });
+      await refreshDevices();
+      router.replace("/(tabs)/devices");
+    } catch (nextError) {
+      setActionMessage(nextError instanceof Error ? nextError.message : "Device removal failed.");
+    } finally {
+      setIsRemovingDevice(false);
+    }
+  }
 
   return (
     <DashboardPage scroll>
       <View style={localStyles.headerRow}>
-        <TouchableOpacity 
-          style={localStyles.iconButton} 
-          onPress={() => router.back()}
-        >
+        <Pressable style={localStyles.iconButton} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={28} color={colors.textPrimary} />
-        </TouchableOpacity>
+        </Pressable>
         <Text style={[styles.heading, { flex: 1 }]} numberOfLines={1}>
-          {device.nickname}
+          {activeDevice.nickname}
         </Text>
       </View>
 
@@ -118,68 +299,197 @@ export default function DeviceDetailsScreen() {
           <View style={localStyles.statusHeader}>
             <View style={localStyles.statusLabelGroup}>
               <Ionicons name="pulse" size={24} color={statusColor} />
-              <Text style={[styles.subheading, { color: statusColor }]}>
-                System Status
-              </Text>
+              <Text style={[styles.subheading, { color: statusColor }]}>System Status</Text>
             </View>
             <Badge
               backgroundColor={statusColor}
               iconName={statusIcon}
-              label={device.mktStatus.toUpperCase()}
+              label={activeDevice.mktStatus.toUpperCase()}
               textColor={colors.textOnPrimary}
             />
           </View>
           <View style={localStyles.divider} />
           <View style={localStyles.metricsGrid}>
-            <MetricRow 
-              iconName="timer-outline" 
-              label="Last Sync" 
-              value={formatLastSeenRelative(device.lastSeenAt)} 
+            <MetricRow iconName="timer-outline" label="Last Sync" value={formatLastSeenRelative(activeDevice.lastSeenAt)} />
+            <MetricRow iconName="calendar-outline" label="Exact Time" value={formatExactDate(activeDevice.lastSeenAt)} />
+            <MetricRow iconName="shield-checkmark-outline" label="Access" value={formatAccessLabel(activeDevice.accessRole)} />
+          </View>
+        </PanelCard>
+      </DashboardSection>
+
+      <DashboardSection title="Connection Tools" eyebrow="Transport" description="Validate the BLE authentication and Wi-Fi handover path.">
+        <PanelCard>
+          <View style={localStyles.metricsGrid}>
+            <MetricRow iconName="radio-outline" label="Firmware" value={activeDevice.firmwareVersion} />
+            <MetricRow
+              iconName="wifi-outline"
+              label="Last test"
+              value={formatExactDate(activeDevice.lastConnectionTestAt)}
             />
-            <MetricRow 
-              iconName="calendar-outline" 
-              label="Exact Time" 
-              value={formatExactDate(device.lastSeenAt)} 
+            <MetricRow
+              iconName="checkmark-done-outline"
+              label="Test status"
+              value={formatConnectionStatus(activeDevice.lastConnectionTestStatus)}
             />
           </View>
+          <Pressable
+            disabled={isRunningConnectionTest}
+            onPress={() => void handleRunConnectionTest()}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              (pressed || isRunningConnectionTest) && styles.buttonDisabled,
+            ]}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isRunningConnectionTest ? "Running connection test..." : "Run connection test"}
+            </Text>
+          </Pressable>
+          {actionMessage ? <Text style={styles.helperText}>{actionMessage}</Text> : null}
         </PanelCard>
       </DashboardSection>
 
       <DashboardSection title="Hardware Readings" eyebrow="Telemetry" description="Current sensor measurements.">
         <PanelCard>
           <View style={localStyles.metricsGrid}>
-            <MetricRow 
-              iconName="thermometer-outline" 
-              label="Internal Temperature" 
-              value={`${device.currentTempC.toFixed(2)} °C`} 
-              valueColor={device.mktStatus === "alert" ? colors.danger : device.mktStatus === "warning" ? colors.warning : colors.success}
+            <MetricRow
+              iconName="thermometer-outline"
+              label="Internal Temperature"
+              value={`${activeDevice.currentTempC.toFixed(2)} C`}
+              valueColor={
+                activeDevice.mktStatus === "alert"
+                  ? colors.danger
+                  : activeDevice.mktStatus === "warning"
+                    ? colors.warning
+                    : colors.success
+              }
             />
             <View style={localStyles.divider} />
-            <MetricRow 
-              iconName="battery-half" 
-              label="Battery Level" 
-              value={`${device.batteryLevel}%`} 
-              valueColor={device.batteryLevel < 20 ? colors.danger : undefined}
+            <MetricRow
+              iconName="battery-half"
+              label="Battery Level"
+              value={`${activeDevice.batteryLevel}%`}
+              valueColor={activeDevice.batteryLevel < 20 ? colors.danger : undefined}
             />
             <View style={localStyles.divider} />
-             <MetricRow
-               iconName={device.doorOpen ? "lock-open-outline" : "lock-closed-outline"}
-               label="Door Sensor"
-               value={device.doorOpen ? "Door Open" : "Door Closed"}
-               valueColor={device.doorOpen ? colors.warning : undefined}
-             />
+            <MetricRow
+              iconName={activeDevice.doorOpen ? "lock-open-outline" : "lock-closed-outline"}
+              label="Door Sensor"
+              value={activeDevice.doorOpen ? "Door Open" : "Door Closed"}
+              valueColor={activeDevice.doorOpen ? colors.warning : undefined}
+            />
           </View>
         </PanelCard>
       </DashboardSection>
 
+      <DashboardSection title="Assignment" eyebrow="Accountability" description="Primary responsibility and additional viewers for this unit.">
+        <PanelCard>
+          <View style={localStyles.metricsGrid}>
+            <MetricRow iconName="person-outline" label="Primary nurse" value={activeDevice.primaryAssigneeName ?? "Not assigned"} />
+            <MetricRow
+              iconName="people-outline"
+              label="Additional viewers"
+              value={activeDevice.viewerNames.length ? activeDevice.viewerNames.join(", ") : "None"}
+            />
+          </View>
+          {profile.role === "Supervisor" ? (
+            <View style={localStyles.assignmentStack}>
+              <Text style={styles.eyebrowText}>Choose primary nurse</Text>
+              <View style={localStyles.assignmentButtons}>
+                {assignableNurses.map((nurse) => (
+                  <Pressable
+                    key={`primary-${nurse.staffId}`}
+                    onPress={() => setPrimaryStaffId(nurse.staffId)}
+                    style={({ pressed }) => [
+                      localStyles.assignmentChip,
+                      {
+                        backgroundColor:
+                          primaryStaffId === nurse.staffId ? colors.primary : colors.surfaceMuted,
+                      },
+                      pressed && styles.buttonDisabled,
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: primaryStaffId === nurse.staffId ? colors.textOnPrimary : colors.textPrimary,
+                      }}
+                    >
+                      {nurse.displayName}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.eyebrowText}>Add viewer nurses</Text>
+              <View style={localStyles.assignmentButtons}>
+                {assignableNurses.map((nurse) => {
+                  const selected = viewerStaffIds.includes(nurse.staffId);
+                  return (
+                    <Pressable
+                      key={`viewer-${nurse.staffId}`}
+                      onPress={() =>
+                        setViewerStaffIds((current) =>
+                          selected
+                            ? current.filter((staffId) => staffId !== nurse.staffId)
+                            : [...current, nurse.staffId],
+                        )
+                      }
+                      style={({ pressed }) => [
+                        localStyles.assignmentChip,
+                        {
+                          backgroundColor: selected ? colors.primaryMuted : colors.surfaceMuted,
+                        },
+                        pressed && styles.buttonDisabled,
+                      ]}
+                    >
+                      <Text style={{ color: colors.textPrimary }}>{nurse.displayName}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Pressable
+                disabled={isSavingAssignments || !primaryStaffId}
+                onPress={() => void handleSaveAssignments()}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  (pressed || isSavingAssignments || !primaryStaffId) && styles.buttonDisabled,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  {isSavingAssignments ? "Saving..." : "Save assignments"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </PanelCard>
+      </DashboardSection>
+
+      {profile.role === "Supervisor" ? (
+        <DashboardSection title="Supervisor Actions" eyebrow="Lifecycle" description="Decommissioning wipes the enrolled device and invalidates cached grants.">
+          <PanelCard>
+            <Pressable
+              disabled={isRemovingDevice}
+              onPress={() => void handleRemoveDevice()}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                { borderColor: colors.danger },
+                (pressed || isRemovingDevice) && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>
+                {isRemovingDevice ? "Removing device..." : "Remove device"}
+              </Text>
+            </Pressable>
+          </PanelCard>
+        </DashboardSection>
+      ) : null}
+
       <DashboardSection title="Device Details" eyebrow="Information" description="Specific hardware and facility allocation.">
         <PanelCard>
-           <View style={localStyles.metricsGrid}>
-            <MetricRow iconName="hardware-chip-outline" label="Device ID" value={device.id} />
-             <View style={localStyles.divider} />
-            <MetricRow iconName="barcode-outline" label="MAC Address" value={device.macAddress} />
+          <View style={localStyles.metricsGrid}>
+            <MetricRow iconName="hardware-chip-outline" label="Device ID" value={activeDevice.id} />
             <View style={localStyles.divider} />
-            <MetricRow iconName="business-outline" label="Facility" value={device.institutionName} />
+            <MetricRow iconName="barcode-outline" label="MAC Address" value={activeDevice.macAddress} />
+            <View style={localStyles.divider} />
+            <MetricRow iconName="business-outline" label="Facility" value={activeDevice.institutionName} />
           </View>
         </PanelCard>
       </DashboardSection>
@@ -233,5 +543,19 @@ const localStyles = StyleSheet.create({
   },
   metricsGrid: {
     gap: spacing.sm,
+  },
+  assignmentStack: {
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  assignmentButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  assignmentChip: {
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
 });

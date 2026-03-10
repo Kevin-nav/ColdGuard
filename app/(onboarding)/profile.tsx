@@ -3,6 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAuthSession } from "../../src/features/auth/providers/auth-provider";
 import {
+  buildEnrollmentRouteParams,
+  consumePendingDeviceEnrollment,
+} from "../../src/features/devices/services/device-linking";
+import {
   getProfileSnapshot,
   type ProfileSnapshot,
 } from "../../src/lib/storage/sqlite/profile-repository";
@@ -45,6 +49,19 @@ export default function OnboardingProfileScreen() {
   const isSupervisor = role === "Supervisor";
   const accentColor = isSupervisor ? colors.warning : colors.success;
   const badgeBackground = isSupervisor ? "#FFF4DE" : "#E8F5EE";
+
+  async function handleContinue() {
+    const pendingEnrollment = await consumePendingDeviceEnrollment();
+    if (pendingEnrollment) {
+      router.replace({
+        pathname: "/device/enroll",
+        params: buildEnrollmentRouteParams(pendingEnrollment),
+      });
+      return;
+    }
+
+    router.replace("/(tabs)/home");
+  }
 
   return (
     <View style={styles.page}>
@@ -112,7 +129,7 @@ export default function OnboardingProfileScreen() {
         </View>
 
         <Pressable
-          onPress={() => router.replace("/(tabs)/home")}
+          onPress={() => void handleContinue()}
           style={({ pressed }) => [
             styles.primaryButton,
             pressed ? { backgroundColor: colors.primaryPressed } : null,

@@ -13,6 +13,10 @@ import {
   signInWithGoogleIdToken,
 } from "../../src/features/auth/services/google-auth";
 import {
+  buildEnrollmentRouteParams,
+  consumePendingDeviceEnrollment,
+} from "../../src/features/devices/services/device-linking";
+import {
   getPasswordValidationScore,
   isPasswordFullyValid,
 } from "../../src/features/auth/services/password-validation";
@@ -80,7 +84,7 @@ export default function LoginScreen() {
 
       try {
         await signInWithGoogleIdToken(idToken);
-        router.replace("/");
+        await routeAfterAuth();
       } catch (error) {
         setMessage(error instanceof Error ? error.message : "Google sign-in failed.");
       } finally {
@@ -97,7 +101,7 @@ export default function LoginScreen() {
     setMessage(null);
     try {
       await signInWithEmailPassword(email.trim(), password);
-      router.replace("/");
+      await routeAfterAuth();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Sign in failed");
     } finally {
@@ -111,7 +115,7 @@ export default function LoginScreen() {
     setMessage(null);
     try {
       await registerWithEmailPassword(email.trim(), password);
-      router.replace("/");
+      await routeAfterAuth();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Registration failed");
     } finally {
@@ -131,6 +135,19 @@ export default function LoginScreen() {
     }
 
     await handleSignIn();
+  }
+
+  async function routeAfterAuth() {
+    const pendingEnrollment = await consumePendingDeviceEnrollment();
+    if (pendingEnrollment) {
+      router.replace({
+        pathname: "/device/enroll",
+        params: buildEnrollmentRouteParams(pendingEnrollment),
+      });
+      return;
+    }
+
+    router.replace("/");
   }
 
   const primaryButtonText = isCreateMode ? "Create account" : "Sign in";

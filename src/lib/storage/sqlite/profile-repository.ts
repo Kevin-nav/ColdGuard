@@ -4,6 +4,7 @@ export type ProfileSnapshot = {
   firebaseUid: string;
   displayName: string;
   email: string;
+  institutionId: string;
   institutionName: string;
   staffId: string | null;
   role: string;
@@ -14,6 +15,7 @@ type ProfileRow = {
   firebase_uid: string;
   display_name: string;
   email: string;
+  institution_id: string;
   institution_name: string;
   staff_id: string | null;
   role: string;
@@ -28,12 +30,13 @@ export async function saveProfileSnapshot(snapshot: Omit<ProfileSnapshot, "lastU
   await database.runAsync(
     `
       INSERT OR REPLACE INTO profile_cache
-      (id, firebase_uid, display_name, email, institution_name, staff_id, role, last_updated_at)
-      VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+      (id, firebase_uid, display_name, email, institution_id, institution_name, staff_id, role, last_updated_at)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     snapshot.firebaseUid,
     snapshot.displayName,
     snapshot.email,
+    snapshot.institutionId,
     snapshot.institutionName,
     snapshot.staffId,
     role,
@@ -50,7 +53,7 @@ export async function saveProfileSnapshot(snapshot: Omit<ProfileSnapshot, "lastU
 export async function getProfileSnapshot(): Promise<ProfileSnapshot | null> {
   const database = await initializeSQLite();
   const row = await database.getFirstAsync<ProfileRow>(`
-    SELECT firebase_uid, display_name, email, institution_name, staff_id, role, last_updated_at
+    SELECT firebase_uid, display_name, email, institution_id, institution_name, staff_id, role, last_updated_at
     FROM profile_cache
     WHERE id = 1
   `);
@@ -61,6 +64,7 @@ export async function getProfileSnapshot(): Promise<ProfileSnapshot | null> {
     firebaseUid: row.firebase_uid,
     displayName: row.display_name,
     email: row.email,
+    institutionId: row.institution_id,
     institutionName: row.institution_name,
     staffId: row.staff_id ?? null,
     role: row.role || "Nurse",

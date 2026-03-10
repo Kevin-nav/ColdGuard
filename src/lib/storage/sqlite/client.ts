@@ -1,5 +1,5 @@
 import { SQLiteDatabase, deleteDatabaseAsync, openDatabaseAsync } from "expo-sqlite";
-import { SQLITE_SCHEMA_STATEMENTS } from "./schema";
+import { SQLITE_LEGACY_COLUMN_MIGRATIONS, SQLITE_SCHEMA_STATEMENTS } from "./schema";
 
 const SQLITE_DATABASE_NAME = "coldguard.db";
 
@@ -23,7 +23,37 @@ export async function initializeSQLite() {
     await database.execAsync(statement);
   }
 
+  await migrateLegacySQLiteSchema(database);
+
   return database;
+}
+
+type SQLiteTableInfoRow = {
+  name: string;
+};
+
+async function migrateLegacySQLiteSchema(database: SQLiteDatabase) {
+  await ensureLegacyColumns(database, "profile_cache", SQLITE_LEGACY_COLUMN_MIGRATIONS.profile_cache);
+  await ensureLegacyColumns(database, "devices", SQLITE_LEGACY_COLUMN_MIGRATIONS.devices);
+  await ensureLegacyColumns(database, "connection_grants", SQLITE_LEGACY_COLUMN_MIGRATIONS.connection_grants);
+}
+
+async function ensureLegacyColumns(
+  database: SQLiteDatabase,
+  tableName: string,
+  columnMigrations: Record<string, string>,
+) {
+  const existingColumns = await database.getAllAsync<SQLiteTableInfoRow>(`PRAGMA table_info(${tableName})`);
+  if (existingColumns.length === 0) {
+    return;
+  }
+
+  const existingColumnNames = new Set(existingColumns.map((column) => column.name));
+  for (const [columnName, migrationSql] of Object.entries(columnMigrations)) {
+    if (!existingColumnNames.has(columnName)) {
+      await database.execAsync(migrationSql);
+    }
+  }
 }
 
 function isMissingDatabaseError(error: unknown) {

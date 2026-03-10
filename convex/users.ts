@@ -88,6 +88,7 @@ export const getLinkedProfileByFirebaseUid = query({
       firebaseUid: user.firebaseUid,
       displayName: user.displayName ?? null,
       email: user.email ?? null,
+      institutionId: institution._id,
       institutionName: institution.name,
       role: user.role ?? "Nurse",
       staffId: user.staffId ?? null,

@@ -17,6 +17,7 @@ import { InstitutionCredentialForm } from "../../src/features/onboarding/compone
 import { InstitutionList } from "../../src/features/onboarding/components/institution-list";
 import {
   type LinkableInstitution,
+  type InstitutionSelectionResult,
   linkInstitutionFromQr,
   linkInstitutionWithCredentials,
   listLinkableInstitutions,
@@ -68,6 +69,23 @@ export default function LinkInstitutionScreen() {
     setValidationMessage(null);
   }
 
+  function upsertInstitutionSelection(selection: InstitutionSelectionResult) {
+    setInstitutions((current) => {
+      const existing = current.find((institution) => institution.id === selection.institutionId);
+      if (existing) {
+        return current;
+      }
+
+      return [...current, {
+        id: selection.institutionId,
+        hasQr: true,
+        name: selection.institutionName,
+        district: selection.district,
+        region: selection.region,
+      }].sort((left, right) => left.name.localeCompare(right.name));
+    });
+  }
+
   async function handleLinkInstitution() {
     if (isSaving) return;
     if (!user?.uid) {
@@ -81,35 +99,11 @@ export default function LinkInstitutionScreen() {
       const result = await linkInstitutionFromQr({
         qrPayload: qrPayload.trim(),
       });
-
-      try {
-        await saveProfileSnapshot({
-          firebaseUid: user.uid,
-          displayName: result.displayName ?? user.displayName ?? "ColdGuard User",
-          email: user.email ?? "No email available",
-          institutionId: result.institutionId,
-          institutionName: result.institutionName,
-          staffId: result.staffId,
-          role: result.role,
-        });
-        await seedDashboardDataForInstitution({
-          institutionId: result.institutionId,
-          institutionName: result.institutionName,
-        });
-      } catch (storageError) {
-        console.error("Local dashboard setup failed after QR link.", storageError);
-      }
-
-      setMessage(`Linked to ${result.institutionName}.`);
-      router.replace({
-        pathname: "/(onboarding)/profile",
-        params: {
-          displayName: result.displayName ?? user.displayName ?? "",
-          institutionName: result.institutionName,
-          role: result.role,
-          staffId: result.staffId ?? "",
-        },
-      });
+      upsertInstitutionSelection(result);
+      setSelectedInstitutionId(result.institutionId);
+      setMethod("credentials");
+      setValidationMessage(null);
+      setMessage(`Selected ${result.institutionName}. Enter your staff ID and passcode to continue.`);
     } catch (error) {
       setMessage(mapInstitutionLinkError(error));
     } finally {
@@ -206,7 +200,7 @@ export default function LinkInstitutionScreen() {
             {method === null
               ? "Choose how you want to connect your ColdGuard account to the correct institution."
               : method === "qr"
-                ? "Paste the ColdGuard QR payload provided by your facility."
+                ? "Paste the ColdGuard QR payload provided by your facility to select the institution, then continue with staff credentials."
                 : "Select your institution and enter the nurse credentials assigned to you."}
           </Text>
 
@@ -227,7 +221,7 @@ export default function LinkInstitutionScreen() {
                   Scan QR code
                 </Text>
                 <Text style={[styles.bodyText, { color: colors.textSecondary }]}>
-                  Use the institution QR payload to link quickly.
+                  Use the institution QR payload to preselect your facility.
                 </Text>
               </Pressable>
 
@@ -275,7 +269,7 @@ export default function LinkInstitutionScreen() {
                 {isSaving ? (
                   <ActivityIndicator color={colors.textOnPrimary} />
                 ) : (
-                  <Text style={styles.primaryButtonText}>Link with QR code</Text>
+                  <Text style={styles.primaryButtonText}>Continue with QR code</Text>
                 )}
               </Pressable>
             </View>

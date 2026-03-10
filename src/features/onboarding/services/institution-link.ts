@@ -14,13 +14,18 @@ export type LinkableInstitution = {
   region: string | null;
 };
 
-export type InstitutionLinkResult = {
+export type InstitutionSelectionResult = {
   institutionId: string;
   institutionName: string;
+  district: string | null;
+  region: string | null;
+  displayName: string | null;
+};
+
+export type InstitutionLinkResult = InstitutionSelectionResult & {
   handshakeToken: string;
   role: string;
   staffId: string | null;
-  displayName: string | null;
 };
 
 export function parseInstitutionCode(qrValue: string) {
@@ -61,18 +66,15 @@ export async function listLinkableInstitutions(): Promise<LinkableInstitution[]>
 
 export async function linkInstitutionFromQr(args: {
   qrPayload: string;
-}): Promise<InstitutionLinkResult> {
+}): Promise<InstitutionSelectionResult> {
   const institutionCode = parseInstitutionCode(args.qrPayload.trim());
 
-  const result = await runInstitutionLink(async () => {
+  return await runInstitutionLink(async () => {
     const convex = getConvexClient();
     return await convex.mutation((api as any).users.linkInstitutionByQr, {
       institutionCode,
     });
   });
-
-  await saveClinicHandshakeToken(result.handshakeToken);
-  return result;
 }
 
 export async function linkInstitutionWithCredentials(args: {

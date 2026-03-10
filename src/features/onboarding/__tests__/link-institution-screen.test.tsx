@@ -29,8 +29,8 @@ jest.mock("../../../../src/lib/storage/sqlite/profile-repository", () => ({
 }));
 
 jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
-  seedDashboardDataForInstitution: (institutionName: string) =>
-    mockSeedDashboardDataForInstitution(institutionName),
+  seedDashboardDataForInstitution: (args: unknown) =>
+    mockSeedDashboardDataForInstitution(args),
 }));
 
 beforeEach(() => {
@@ -67,13 +67,12 @@ test("switches to credential mode and validates empty fields", async () => {
   expect(ui.getByText("Select an institution first.")).toBeTruthy();
 });
 
-test("submits qr linking path", async () => {
+test("uses qr only to preselect the institution before credential linking", async () => {
   mockLinkInstitutionFromQr.mockResolvedValue({
     institutionId: "inst-1",
     institutionName: "Korle-Bu Teaching Hospital",
-    handshakeToken: "token-1",
-    role: "Nurse",
-    staffId: null,
+    district: "Ablekuma South",
+    region: "Greater Accra",
     displayName: null,
   });
 
@@ -82,24 +81,18 @@ test("submits qr linking path", async () => {
 
   fireEvent.press(ui.getByTestId("link-method-qr"));
   fireEvent.changeText(ui.getByPlaceholderText("coldguard://institution/..."), "coldguard://institution/korlebu-demo");
-  fireEvent.press(ui.getByText("Link with QR code"));
+  fireEvent.press(ui.getByText("Continue with QR code"));
 
   await waitFor(() =>
     expect(mockLinkInstitutionFromQr).toHaveBeenCalledWith({
       qrPayload: "coldguard://institution/korlebu-demo",
     }),
   );
-  expect(mockSaveProfileSnapshot).toHaveBeenCalled();
-  expect(mockSeedDashboardDataForInstitution).toHaveBeenCalledWith("Korle-Bu Teaching Hospital");
-  expect(mockReplace).toHaveBeenCalledWith({
-    pathname: "/(onboarding)/profile",
-    params: {
-      displayName: "",
-      institutionName: "Korle-Bu Teaching Hospital",
-      role: "Nurse",
-      staffId: "",
-    },
-  });
+  expect(mockSaveProfileSnapshot).not.toHaveBeenCalled();
+  expect(mockSeedDashboardDataForInstitution).not.toHaveBeenCalled();
+  expect(mockReplace).not.toHaveBeenCalled();
+  expect(ui.getByText("Selected institution: Korle-Bu Teaching Hospital")).toBeTruthy();
+  expect(ui.getByPlaceholderText("Staff ID")).toBeTruthy();
 });
 
 test("submits credential linking path", async () => {
@@ -129,7 +122,10 @@ test("submits credential linking path", async () => {
     }),
   );
   expect(mockSaveProfileSnapshot).toHaveBeenCalled();
-  expect(mockSeedDashboardDataForInstitution).toHaveBeenCalledWith("Korle-Bu Teaching Hospital");
+  expect(mockSeedDashboardDataForInstitution).toHaveBeenCalledWith({
+    institutionId: "inst-1",
+    institutionName: "Korle-Bu Teaching Hospital",
+  });
   expect(mockReplace).toHaveBeenCalledWith({
     pathname: "/(onboarding)/profile",
     params: {

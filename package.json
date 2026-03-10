@@ -4,8 +4,11 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
+    "start:dev-client": "expo start --dev-client",
     "android": "expo run:android",
+    "android:dev-client": "expo run:android",
     "ios": "expo run:ios",
+    "ios:dev-client": "expo run:ios",
     "web": "expo start --web",
     "test": "jest --runInBand",
     "lint": "expo lint"
@@ -13,6 +16,7 @@
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "^2.2.0",
+    "base-64": "^1.0.0",
     "convex": "^1.32.0",
     "expo": "~55.0.5",
     "expo-asset": "~55.0.8",
@@ -41,6 +45,7 @@
   },
   "devDependencies": {
     "@testing-library/react-native": "^13.3.3",
+    "@types/base-64": "^1.0.2",
     "@types/jest": "^29.5.14",
     "@types/react": "~19.2.2",
     "eslint": "^9.39.3",

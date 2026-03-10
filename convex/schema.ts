@@ -15,7 +15,7 @@ export default defineSchema({
     staffId: v.string(),
     passcode: v.string(),
     displayName: v.optional(v.string()),
-    role: v.optional(v.string()),
+    role: v.optional(v.union(v.literal("Supervisor"), v.literal("Nurse"))),
     isActive: v.boolean(),
   }).index("by_institution_staff_id", ["institutionId", "staffId"]),
   institutionCredentialAttempts: defineTable({
@@ -30,7 +30,7 @@ export default defineSchema({
     email: v.optional(v.string()),
     displayName: v.optional(v.string()),
     institutionId: v.optional(v.id("institutions")),
-    role: v.optional(v.string()),
+    role: v.optional(v.union(v.literal("Supervisor"), v.literal("Nurse"))),
     staffId: v.optional(v.string()),
   }).index("by_firebase_uid", ["firebaseUid"]).index("by_institution_id", ["institutionId"]),
   devices: defineTable({
@@ -40,7 +40,7 @@ export default defineSchema({
     firmwareVersion: v.string(),
     macAddress: v.string(),
     protocolVersion: v.number(),
-    status: v.string(),
+    status: v.union(v.literal("active"), v.literal("decommissioned")),
     grantVersion: v.number(),
     bleName: v.optional(v.string()),
     createdAt: v.number(),
@@ -48,7 +48,9 @@ export default defineSchema({
     updatedAt: v.number(),
     decommissionedAt: v.optional(v.number()),
     lastConnectionTestAt: v.optional(v.number()),
-    lastConnectionTestStatus: v.optional(v.string()),
+    lastConnectionTestStatus: v.optional(
+      v.union(v.literal("idle"), v.literal("failed"), v.literal("success")),
+    ),
     lastSeenAt: v.optional(v.number()),
   })
     .index("by_device_id", ["deviceId"])
@@ -58,7 +60,7 @@ export default defineSchema({
     institutionId: v.id("institutions"),
     staffId: v.string(),
     displayName: v.string(),
-    assignmentRole: v.string(),
+    assignmentRole: v.union(v.literal("primary"), v.literal("viewer")),
     isActive: v.boolean(),
     assignedAt: v.number(),
     assignedByFirebaseUid: v.string(),
@@ -69,9 +71,14 @@ export default defineSchema({
   deviceAuditEvents: defineTable({
     deviceId: v.string(),
     institutionId: v.id("institutions"),
-    action: v.string(),
+    action: v.union(
+      v.literal("enrolled"),
+      v.literal("assigned"),
+      v.literal("decommissioned"),
+      v.literal("connection_test"),
+    ),
     actorFirebaseUid: v.string(),
-    actorRole: v.string(),
+    actorRole: v.union(v.literal("Supervisor"), v.literal("Nurse")),
     actorStaffId: v.optional(v.string()),
     targetStaffId: v.optional(v.string()),
     summary: v.string(),

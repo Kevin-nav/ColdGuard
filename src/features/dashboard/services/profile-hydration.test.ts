@@ -147,3 +147,49 @@ test("evicts a same-user cached snapshot when the migrated institution id is bla
   expect(mockClearProfileSnapshot).toHaveBeenCalledTimes(1);
   expect(mockQuery).toHaveBeenCalledWith(expect.anything());
 });
+
+test("evicts a same-user cached snapshot when the migrated institution id is null", async () => {
+  mockGetProfileSnapshot.mockResolvedValue({
+    firebaseUid: "firebase-user-1",
+    displayName: "Cached User",
+    email: "cached@example.com",
+    institutionId: null,
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+    lastUpdatedAt: 100,
+  });
+  mockQuery.mockResolvedValue({
+    firebaseUid: "firebase-user-1",
+    displayName: "Fresh User",
+    email: "fresh@example.com",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+  });
+  mockSaveProfileSnapshot.mockImplementation(async (snapshot) => ({
+    ...((snapshot as object) ?? {}),
+    lastUpdatedAt: 400,
+  }));
+
+  await expect(
+    ensureLocalProfileForUser({
+      firebaseUid: "firebase-user-1",
+      email: "fresh@example.com",
+      displayName: "Fresh User",
+    }),
+  ).resolves.toEqual({
+    firebaseUid: "firebase-user-1",
+    displayName: "Fresh User",
+    email: "fresh@example.com",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+    lastUpdatedAt: 400,
+  });
+
+  expect(mockClearProfileSnapshot).toHaveBeenCalledTimes(1);
+  expect(mockQuery).toHaveBeenCalledWith(expect.anything());
+});

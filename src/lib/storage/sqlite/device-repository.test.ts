@@ -67,7 +67,58 @@ test("replaces cached backend-backed devices for an institution", async () => {
     ],
   });
 
-  expect(mockRunAsync).toHaveBeenCalled();
+  expect(mockRunAsync).toHaveBeenNthCalledWith(1, "BEGIN TRANSACTION");
+  expect(mockRunAsync).toHaveBeenNthCalledWith(
+    2,
+    "DELETE FROM devices WHERE institution_id = ?",
+    "institution-1",
+  );
+  expect(mockRunAsync).toHaveBeenLastCalledWith("COMMIT");
+});
+
+test("rolls back device replacement when an insert fails", async () => {
+  mockRunAsync
+    .mockResolvedValueOnce(undefined)
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error("insert failed"))
+    .mockResolvedValueOnce(undefined);
+
+  await expect(
+    replaceCachedDevicesForInstitution({
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      devices: [
+        {
+          id: "device-1",
+          nickname: "Cold Room Alpha",
+          macAddress: "AA:BB:CC:DD:EE:01",
+          firmwareVersion: "fw-1.0.0",
+          protocolVersion: 1,
+          deviceStatus: "enrolled",
+          grantVersion: 4,
+          accessRole: "manager",
+          primaryAssigneeName: "Akosua Mensah",
+          primaryAssigneeStaffId: "KB1001",
+          viewerNames: ["Mariam Fuseini"],
+          currentTempC: 4.4,
+          mktStatus: "safe",
+          batteryLevel: 91,
+          doorOpen: false,
+          lastSeenAt: 1200,
+          lastConnectionTestAt: 1250,
+          lastConnectionTestStatus: "success",
+        },
+      ],
+    }),
+  ).rejects.toThrow("insert failed");
+
+  expect(mockRunAsync).toHaveBeenNthCalledWith(1, "BEGIN TRANSACTION");
+  expect(mockRunAsync).toHaveBeenNthCalledWith(
+    2,
+    "DELETE FROM devices WHERE institution_id = ?",
+    "institution-1",
+  );
+  expect(mockRunAsync).toHaveBeenLastCalledWith("ROLLBACK");
 });
 
 test("loads devices by institution id or name", async () => {

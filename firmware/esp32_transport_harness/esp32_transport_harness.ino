@@ -27,6 +27,7 @@ constexpr uint64_t kEpochBaseMs = 1700000000000ULL;
 constexpr char kPreferencesNamespace[] = "coldguard";
 constexpr char kGrantIssuer[] = "coldguard-api";
 constexpr char kGrantKeyId[] = "coldguard-esp32-transport-v1";
+constexpr bool kVerboseSecretLogging = false;
 constexpr char kGrantVerificationPublicKeyPem[] = R"pem(
 -----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqqIw2AFP/jM9uD4cAFBChK5xlACp
@@ -71,6 +72,26 @@ struct PendingEnrollment {
 
 PendingEnrollment pendingEnrollment;
 String generateBootstrapToken();
+String generateWifiPassword();
+String redactJsonStringField(const String& payload, const char* key);
+String sanitizePayloadForLogging(const String& payload);
+
+void logSecretValue(const String& label, const String& value) {
+  if (kVerboseSecretLogging) {
+    Serial.println(label + value);
+    return;
+  }
+  Serial.println(label + "<redacted>");
+}
+
+void logBlePayload(const String& label, const String& payload) {
+  if (kVerboseSecretLogging) {
+    Serial.println(label + payload);
+    return;
+  }
+
+  Serial.println(label + sanitizePayloadForLogging(payload));
+}
 
 String formatMacAddress(uint64_t mac) {
   char buffer[18];
@@ -302,6 +323,7 @@ bool constantTimeEquals(const String& left, const String& right) {
 void writePreferences() {
   preferences.putString("deviceId", deviceId);
   preferences.putString("bootstrap", bootstrapToken);
+  preferences.putString("wifi_pw", wifiPassword);
   preferences.putString("state", enrollmentState);
   preferences.putString("institution", institutionId);
   preferences.putString("nickname", deviceNickname);
@@ -343,6 +365,89 @@ String generateBootstrapToken() {
   return token;
 }
 
+String generateWifiPassword() {
+  static const char kHexDigits[] = "0123456789abcdef";
+  uint8_t randomBytes[16];
+  for (size_t index = 0; index < sizeof(randomBytes); index++) {
+    randomBytes[index] = static_cast<uint8_t>(esp_random() & 0xFF);
+  }
+
+  String password;
+  password.reserve(sizeof(randomBytes) * 2);
+  for (uint8_t byte : randomBytes) {
+    password += kHexDigits[(byte >> 4) & 0x0F];
+    password += kHexDigits[byte & 0x0F];
+  }
+
+  if (password.length() < 8) {
+    password += "12345678";
+  }
+  return password;
+}
+
+String redactJsonStringField(const String& payload, const char* key) {
+  String redacted = payload;
+  const String needle = "\"" + String(key) + "\":";
+  int searchFrom = 0;
+
+  while (searchFrom < static_cast<int>(redacted.length())) {
+    const int keyIndex = redacted.indexOf(needle, searchFrom);
+    if (keyIndex < 0) {
+      break;
+    }
+
+    int valueIndex = keyIndex + needle.length();
+    while (valueIndex < static_cast<int>(redacted.length()) && isspace(redacted.charAt(valueIndex))) {
+      valueIndex++;
+    }
+
+    if (valueIndex >= static_cast<int>(redacted.length()) || redacted.charAt(valueIndex) != '"') {
+      searchFrom = keyIndex + needle.length();
+      continue;
+    }
+
+    const int valueStart = valueIndex + 1;
+    valueIndex = valueStart;
+    bool escaping = false;
+    while (valueIndex < static_cast<int>(redacted.length())) {
+      const char current = redacted.charAt(valueIndex);
+      if (escaping) {
+        escaping = false;
+        valueIndex++;
+        continue;
+      }
+      if (current == '\\') {
+        escaping = true;
+        valueIndex++;
+        continue;
+      }
+      if (current == '"') {
+        break;
+      }
+      valueIndex++;
+    }
+
+    if (valueIndex >= static_cast<int>(redacted.length())) {
+      break;
+    }
+
+    redacted = redacted.substring(0, valueStart) + "<redacted>" + redacted.substring(valueIndex);
+    searchFrom = valueStart + 10;
+  }
+
+  return redacted;
+}
+
+String sanitizePayloadForLogging(const String& payload) {
+  String sanitized = payload;
+  sanitized = redactJsonStringField(sanitized, "bootstrapToken");
+  sanitized = redactJsonStringField(sanitized, "grantToken");
+  sanitized = redactJsonStringField(sanitized, "handshakeToken");
+  sanitized = redactJsonStringField(sanitized, "handshakeProof");
+  sanitized = redactJsonStringField(sanitized, "password");
+  return sanitized;
+}
+
 void loadPreferences() {
   preferences.begin(kPreferencesNamespace, false);
 
@@ -354,6 +459,11 @@ void loadPreferences() {
   if (bootstrapToken.isEmpty()) {
     bootstrapToken = generateBootstrapToken();
     preferences.putString("bootstrap", bootstrapToken);
+  }
+  wifiPassword = preferences.getString("wifi_pw", "");
+  if (wifiPassword.length() < 8) {
+    wifiPassword = generateWifiPassword();
+    preferences.putString("wifi_pw", wifiPassword);
   }
   enrollmentState = preferences.getString("state", "blank");
   institutionId = preferences.getString("institution", "");
@@ -536,7 +646,7 @@ bool hasVerifiedSession(const String& requiredPermission) {
 void sendBleResponse(const String& payload) {
   responseCharacteristic->setValue(payload.c_str());
   responseCharacteristic->notify();
-  Serial.println("[BLE] " + payload);
+  logBlePayload("[BLE] ", payload);
 }
 
 String buildErrorResponse(const String& command, const String& requestId, const String& errorCode, const String& message) {
@@ -555,10 +665,6 @@ bool ensureSoftApStarted() {
   }
 
   wifiSsid = bleName;
-  wifiPassword = "cg" + deviceId.substring(deviceId.length() - 6) + "wifi";
-  if (wifiPassword.length() < 8) {
-    wifiPassword += "1234";
-  }
 
   WiFi.mode(WIFI_AP);
   accessPointStarted = WiFi.softAP(wifiSsid.c_str(), wifiPassword.c_str());
@@ -589,7 +695,11 @@ bool ensureSoftApStarted() {
   });
   webServer.begin();
 
-  Serial.println("[WiFi] SoftAP started: " + wifiSsid + " password=" + wifiPassword);
+  if (kVerboseSecretLogging) {
+    Serial.println("[WiFi] SoftAP started: " + wifiSsid + " password=" + wifiPassword);
+  } else {
+    Serial.println("[WiFi] SoftAP started: " + wifiSsid + " password=<redacted>");
+  }
   return true;
 }
 
@@ -803,7 +913,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
     }
 
     const String payload(rawValue.c_str());
-    Serial.println("[BLE] " + payload);
+    logBlePayload("[BLE] ", payload);
     dispatchCommand(payload);
   }
 };
@@ -838,7 +948,7 @@ void setup() {
 
   Serial.println("ColdGuard ESP32 transport harness ready");
   Serial.println("Device ID: " + deviceId);
-  Serial.println("Bootstrap Token: " + bootstrapToken);
+  logSecretValue("Bootstrap Token: ", bootstrapToken);
   Serial.println("BLE Name: " + bleName);
   Serial.println("MAC: " + macAddress);
 }

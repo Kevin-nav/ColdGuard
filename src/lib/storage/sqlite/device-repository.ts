@@ -57,41 +57,54 @@ export async function replaceDevicesForInstitution(
   devices: Omit<DeviceRecord, "institutionId" | "institutionName">[],
 ) {
   const database = await initializeSQLite();
-  await database.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
+  await database.runAsync("BEGIN TRANSACTION");
 
-  for (const device of devices) {
-    await database.runAsync(
-      `
-        INSERT INTO devices
-        (
-          id, institution_id, institution_name, nickname, mac_address, firmware_version, protocol_version,
-          device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
-          viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
-          last_connection_test_at, last_connection_test_status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      device.id,
-      institutionId,
-      institutionName,
-      device.nickname,
-      device.macAddress,
-      device.firmwareVersion,
-      device.protocolVersion,
-      device.status,
-      device.grantVersion,
-      device.accessRole,
-      device.primaryAssigneeName,
-      device.primaryAssigneeStaffId,
-      JSON.stringify(device.viewerNames),
-      device.currentTempC,
-      device.mktStatus,
-      device.batteryLevel,
-      device.doorOpen ? 1 : 0,
-      device.lastSeenAt,
-      device.lastConnectionTestAt,
-      device.lastConnectionTestStatus,
-    );
+  try {
+    await database.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
+
+    for (const device of devices) {
+      await database.runAsync(
+        `
+          INSERT INTO devices
+          (
+            id, institution_id, institution_name, nickname, mac_address, firmware_version, protocol_version,
+            device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
+            viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
+            last_connection_test_at, last_connection_test_status
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        device.id,
+        institutionId,
+        institutionName,
+        device.nickname,
+        device.macAddress,
+        device.firmwareVersion,
+        device.protocolVersion,
+        device.status,
+        device.grantVersion,
+        device.accessRole,
+        device.primaryAssigneeName,
+        device.primaryAssigneeStaffId,
+        JSON.stringify(device.viewerNames),
+        device.currentTempC,
+        device.mktStatus,
+        device.batteryLevel,
+        device.doorOpen ? 1 : 0,
+        device.lastSeenAt,
+        device.lastConnectionTestAt,
+        device.lastConnectionTestStatus,
+      );
+    }
+
+    await database.runAsync("COMMIT");
+  } catch (error) {
+    try {
+      await database.runAsync("ROLLBACK");
+    } catch {
+      // Preserve the original write error if rollback also fails.
+    }
+    throw error;
   }
 }
 

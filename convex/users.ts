@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { getNextCredentialAttemptState, isCredentialAttemptLocked } from "./credential_throttle";
 import { hashInstitutionPasscode, isHashedPasscode, verifyInstitutionPasscode } from "./passcodes";
+import { normalizeUserRole } from "./roles";
 
 function invalidInstitutionCodeError() {
   return new Error("INSTITUTION_CODE_NOT_RECOGNIZED");
@@ -25,6 +26,45 @@ async function getAuthenticatedFirebaseUid(ctx: { auth: { getUserIdentity(): Pro
     throw new Error("UNAUTHENTICATED");
   }
   return identity.subject;
+}
+
+async function getUserByFirebaseUidOrThrow(ctx: any, firebaseUid: string) {
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_firebase_uid", (q: any) => q.eq("firebaseUid", firebaseUid))
+    .unique();
+
+  if (!user) {
+    throw new Error("User profile not found. Complete auth bootstrap first.");
+  }
+
+  return user;
+}
+
+async function resolveInstitutionSelectionForQr(
+  ctx: any,
+  args: {
+    firebaseUid: string;
+    institutionCode: string;
+  },
+) {
+  const user = await getUserByFirebaseUidOrThrow(ctx, args.firebaseUid);
+  const institution = await ctx.db
+    .query("institutions")
+    .withIndex("by_code", (q: any) => q.eq("code", args.institutionCode))
+    .unique();
+
+  if (!institution) {
+    throw invalidInstitutionCodeError();
+  }
+
+  return {
+    institutionId: institution._id,
+    institutionName: institution.name,
+    district: institution.district ?? null,
+    region: institution.region ?? null,
+    displayName: user.displayName ?? null,
+  };
 }
 
 export const upsertByFirebaseUid = mutation({
@@ -90,7 +130,7 @@ export const getLinkedProfileByFirebaseUid = query({
       email: user.email ?? null,
       institutionId: institution._id,
       institutionName: institution.name,
-      role: user.role ?? "Nurse",
+      role: normalizeUserRole(user.role),
       staffId: user.staffId ?? null,
     };
   },
@@ -118,38 +158,10 @@ export const linkInstitutionByQr = mutation({
   },
   handler: async (ctx, args) => {
     const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
-      .unique();
-
-    if (!user) {
-      throw new Error("User profile not found. Complete auth bootstrap first.");
-    }
-
-    const institution = await ctx.db
-      .query("institutions")
-      .withIndex("by_code", (q) => q.eq("code", args.institutionCode))
-      .unique();
-
-    if (!institution) {
-      throw invalidInstitutionCodeError();
-    }
-
-    await ctx.db.patch(user._id, {
-      institutionId: institution._id,
-      role: "Nurse",
-      staffId: undefined,
+    return await resolveInstitutionSelectionForQr(ctx, {
+      firebaseUid,
+      institutionCode: args.institutionCode,
     });
-
-    return {
-      institutionId: institution._id,
-      institutionName: institution.name,
-      handshakeToken: institution.handshakeToken,
-      role: "Nurse",
-      staffId: null,
-      displayName: user.displayName ?? null,
-    };
   },
 });
 
@@ -161,14 +173,7 @@ export const linkInstitutionByCredentials = mutation({
   },
   handler: async (ctx, args) => {
     const firebaseUid = await getAuthenticatedFirebaseUid(ctx);
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_firebase_uid", (q) => q.eq("firebaseUid", firebaseUid))
-      .unique();
-
-    if (!user) {
-      throw new Error("User profile not found. Complete auth bootstrap first.");
-    }
+    const user = await getUserByFirebaseUidOrThrow(ctx, firebaseUid);
 
     const institution = await ctx.db.get(args.institutionId);
     if (!institution) {
@@ -219,15 +224,19 @@ export const linkInstitutionByCredentials = mutation({
       await ctx.db.delete(attemptRecord._id);
     }
 
-    if (!isHashedPasscode(credential.passcode)) {
+    const normalizedRole = normalizeUserRole(credential.role);
+    if (!isHashedPasscode(credential.passcode) || credential.role !== normalizedRole) {
       await ctx.db.patch(credential._id, {
-        passcode: await hashInstitutionPasscode(normalizedPasscode),
+        passcode: isHashedPasscode(credential.passcode)
+          ? credential.passcode
+          : await hashInstitutionPasscode(normalizedPasscode),
+        role: normalizedRole,
       });
     }
 
     await ctx.db.patch(user._id, {
       institutionId: institution._id,
-      role: credential.role ?? "Nurse",
+      role: normalizedRole,
       staffId: credential.staffId,
       displayName: user.displayName ?? credential.displayName ?? undefined,
     });
@@ -236,9 +245,14 @@ export const linkInstitutionByCredentials = mutation({
       institutionId: institution._id,
       institutionName: institution.name,
       handshakeToken: institution.handshakeToken,
-      role: credential.role ?? "Nurse",
+      role: normalizedRole,
       staffId: credential.staffId,
       displayName: credential.displayName ?? user.displayName ?? null,
     };
   },
 });
+
+export const __testing = {
+  normalizeUserRole,
+  resolveInstitutionSelectionForQr,
+};

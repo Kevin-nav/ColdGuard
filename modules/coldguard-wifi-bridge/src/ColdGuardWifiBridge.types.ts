@@ -9,6 +9,7 @@ export type ColdGuardWifiBridgeModuleContract = {
 };
 
 export type ColdGuardWifiBridgeViewProps = {
+  onError?: (event: { nativeEvent: { message: string; url: string } }) => void;
   onLoad?: (event: { nativeEvent: { url: string } }) => void;
   style?: unknown;
   url?: string;

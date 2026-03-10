@@ -11,7 +11,10 @@ class ColdGuardWifiBridgeView: ExpoView {
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     clipsToBounds = true
-    delegate = WebViewDelegate { url in
+    delegate = WebViewDelegate { [weak self] url in
+      guard let self else {
+        return
+      }
       self.onLoad(["url": url])
     }
     webView.navigationDelegate = delegate

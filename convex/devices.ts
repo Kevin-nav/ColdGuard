@@ -1,18 +1,17 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { normalizeUserRole, type UserRole } from "./roles";
 
 const CONNECT_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ADMIN_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_GRANT_ISSUER = "coldguard-api";
 const DEVICE_GRANT_KEY_ID = "coldguard-esp32-transport-v1";
-const TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 =
-  "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgs27Y743ykh9PjkxziKEWvye/1w/2NNCs3w8ZQ8zpeDqhRANCAARWXAYGhrfHpfj16UZUSmVL56OnAOBf0BU6Eu+G5gajxwlQxJkuu6kxDxjvpRwp3V7sMkfBp8D1+K0CHnqgWk1P";
 
 type AuthenticatedUser = {
   _id: string;
   firebaseUid: string;
   institutionId: string;
-  role: string;
+  role: UserRole;
   staffId: string | null;
   displayName: string | null;
 };
@@ -40,7 +39,7 @@ async function getCurrentUser(ctx: any): Promise<AuthenticatedUser> {
     _id: user._id,
     firebaseUid,
     institutionId: user.institutionId,
-    role: user.role ?? "Nurse",
+    role: normalizeUserRole(user.role),
     staffId: user.staffId ?? null,
     displayName: user.displayName ?? null,
   };
@@ -110,16 +109,31 @@ function decodeBase64UrlJson<T>(value: string): T {
 }
 
 async function getGrantSigningKey() {
-  const pkcs8Base64 =
-    process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64 ??
-    (process.env.NODE_ENV === "test" ? TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 : null);
-  if (!pkcs8Base64) {
-    throw new Error("DEVICE_SIGNING_KEY_MISSING");
+  const productionKey = process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64;
+  if (productionKey) {
+    return await crypto.subtle.importKey(
+      "pkcs8",
+      base64ToBytes(productionKey),
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["sign"],
+    );
+  }
+
+  if (process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 && process.env.NODE_ENV !== "test") {
+    throw new Error("DEVICE_SIGNING_KEY_TEST_ENV_ONLY");
+  }
+
+  const testKey = process.env.NODE_ENV === "test" ? process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 : null;
+  if (!testKey) {
+    throw new Error(
+      "DEVICE_SIGNING_KEY_MISSING: set COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64 or TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64",
+    );
   }
 
   return await crypto.subtle.importKey(
     "pkcs8",
-    base64ToBytes(pkcs8Base64),
+    base64ToBytes(testKey),
     { name: "ECDSA", namedCurve: "P-256" },
     false,
     ["sign"],
@@ -147,7 +161,7 @@ async function buildGrant(args: {
   institutionId: string;
   issuedToFirebaseUid: string;
   permission: "connect" | "manage";
-  role: string;
+  role: UserRole;
 }) {
   const claims = {
     alg: "ES256" as const,
@@ -186,7 +200,7 @@ async function createAuditEvent(
   await ctx.db.insert("deviceAuditEvents", {
     action: args.action,
     actorFirebaseUid: args.actor.firebaseUid,
-    actorRole: args.actor.role,
+    actorRole: normalizeUserRole(args.actor.role),
     actorStaffId: args.actor.staffId ?? undefined,
     createdAt: Date.now(),
     deviceId: args.deviceId,
@@ -195,6 +209,15 @@ async function createAuditEvent(
     summary: args.summary,
     targetStaffId: args.targetStaffId,
   });
+}
+
+function ensureSupervisorAdminGrantTargetOwnership(
+  device: { institutionId: string } | null,
+  userInstitutionId: string,
+) {
+  if (device && device.institutionId !== userInstitutionId) {
+    throw new Error("DEVICE_ACCESS_DENIED");
+  }
 }
 
 async function mapDeviceSummary(ctx: any, device: any) {
@@ -235,10 +258,10 @@ export const listAssignableNurses = query({
       .collect();
 
     return credentials
-      .filter((credential: any) => credential.isActive && (credential.role ?? "Nurse") === "Nurse")
+      .filter((credential: any) => credential.isActive && normalizeUserRole(credential.role) === "Nurse")
       .map((credential: any) => ({
         displayName: credential.displayName ?? credential.staffId,
-        role: credential.role ?? "Nurse",
+        role: normalizeUserRole(credential.role),
         staffId: credential.staffId,
       }))
       .sort((left: any, right: any) => left.displayName.localeCompare(right.displayName));
@@ -297,6 +320,7 @@ export const issueSupervisorAdminGrant = mutation({
       .query("devices")
       .withIndex("by_device_id", (q: any) => q.eq("deviceId", args.deviceId))
       .unique();
+    ensureSupervisorAdminGrantTargetOwnership(device, user.institutionId);
     const grantVersion = device?.grantVersion ?? 1;
 
     return await buildGrant({
@@ -433,7 +457,7 @@ export const assignDevice = mutation({
 
     const nursesByStaffId = new Map(
       availableNurses
-        .filter((credential: any) => credential.isActive && (credential.role ?? "Nurse") === "Nurse")
+        .filter((credential: any) => credential.isActive && normalizeUserRole(credential.role) === "Nurse")
         .map((credential: any) => [credential.staffId, credential]),
     );
 
@@ -566,6 +590,7 @@ export const recordConnectionTest = mutation({
 });
 
 export const __testing = {
+  ensureSupervisorAdminGrantTargetOwnership,
   async buildGrantForTesting(args: {
     deviceId: string;
     expiresAt: number;
@@ -573,7 +598,7 @@ export const __testing = {
     institutionId: string;
     issuedToFirebaseUid: string;
     permission: "connect" | "manage";
-    role: string;
+    role: UserRole;
   }) {
     return await buildGrant(args);
   },

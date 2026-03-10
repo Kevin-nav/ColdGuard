@@ -35,6 +35,21 @@ type GenericBleResponse = {
 const SCAN_TIMEOUT_MS = 12_000;
 let bleManager: BleManager | null = null;
 
+function isGenericBleResponse(value: unknown): value is GenericBleResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.command === "string" &&
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.requestId === "string" &&
+    (candidate.errorCode === undefined || typeof candidate.errorCode === "string") &&
+    (candidate.message === undefined || typeof candidate.message === "string")
+  );
+}
+
 function getBleManager() {
   if (!bleManager) {
     bleManager = new BleManager();
@@ -289,7 +304,7 @@ async function sendCommand(device: Device, command: string, body: Record<string,
         }
 
         try {
-          const response = decodeBleMessage<GenericBleResponse>(characteristic.value);
+          const response = decodeBleMessage(characteristic.value, isGenericBleResponse);
           if (response.requestId !== requestId) {
             return;
           }

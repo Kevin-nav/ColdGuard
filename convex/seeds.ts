@@ -1,5 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { hashInstitutionPasscode } from "./passcodes";
+import { normalizeUserRole } from "./roles";
 
 const DEMO_INSTITUTIONS = [
   {
@@ -110,14 +111,14 @@ export const seedDemoInstitutions = internalMutation({
             staffId: credential.staffId,
             passcode: await hashInstitutionPasscode(credential.passcode),
             displayName: credential.displayName,
-            role: credential.role,
+            role: normalizeUserRole(credential.role),
             isActive: true,
           });
         } else {
           await ctx.db.patch(existingCredential._id, {
             passcode: await hashInstitutionPasscode(credential.passcode),
             displayName: credential.displayName,
-            role: credential.role,
+            role: normalizeUserRole(credential.role),
             isActive: true,
           });
         }

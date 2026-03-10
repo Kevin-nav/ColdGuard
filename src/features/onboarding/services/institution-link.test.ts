@@ -56,13 +56,12 @@ test("lists institutions from convex", async () => {
   ]);
 });
 
-test("links institution by qr and stores handshake token", async () => {
+test("uses qr linking only to select the institution", async () => {
   mockMutation.mockResolvedValue({
     institutionId: "i1",
     institutionName: "Korle-Bu Teaching Hospital",
-    handshakeToken: "token-1",
-    role: "Nurse",
-    staffId: null,
+    district: "Ablekuma South",
+    region: "Greater Accra",
     displayName: null,
   });
 
@@ -73,16 +72,15 @@ test("links institution by qr and stores handshake token", async () => {
   ).resolves.toEqual({
     institutionId: "i1",
     institutionName: "Korle-Bu Teaching Hospital",
-    handshakeToken: "token-1",
-    role: "Nurse",
-    staffId: null,
+    district: "Ablekuma South",
+    region: "Greater Accra",
     displayName: null,
   });
 
   expect(mockMutation).toHaveBeenCalledWith(expect.anything(), {
     institutionCode: "korlebu-demo",
   });
-  expect(mockSaveClinicHandshakeToken).toHaveBeenCalledWith("token-1");
+  expect(mockSaveClinicHandshakeToken).not.toHaveBeenCalled();
 });
 
 test("links institution by nurse credentials and stores handshake token", async () => {

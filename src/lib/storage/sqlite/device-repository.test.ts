@@ -150,7 +150,7 @@ test("propagates insert failures from the exclusive transaction helper", async (
   );
 });
 
-test("loads devices by institution id or name", async () => {
+test("loads devices by institution id and queries legacy empty-string rows", async () => {
   mockGetAllAsync.mockResolvedValue([
     {
       id: "d1",
@@ -201,6 +201,12 @@ test("loads devices by institution id or name", async () => {
       lastConnectionTestStatus: "success",
     },
   ]);
+
+  expect(mockGetAllAsync).toHaveBeenCalledWith(
+    expect.stringContaining("COALESCE(NULLIF(institution_id, ''), ?) AS institution_id"),
+    "institution-1",
+    "institution-1",
+  );
 });
 
 test("loads a single device by id", async () => {

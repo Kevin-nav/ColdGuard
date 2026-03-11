@@ -146,40 +146,21 @@ export async function getDevicesForInstitution(institutionId: string): Promise<D
   const rows = await database.getAllAsync<DeviceRow>(
     `
       SELECT
-        id, institution_id, institution_name, nickname, mac_address, firmware_version, protocol_version,
+        id,
+        COALESCE(NULLIF(institution_id, ''), ?) AS institution_id,
+        institution_name, nickname, mac_address, firmware_version, protocol_version,
         device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
         viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
         last_connection_test_at, last_connection_test_status
       FROM devices
-      WHERE institution_id = ?
+      WHERE institution_id = ? OR institution_id = ''
       ORDER BY nickname ASC
     `,
     institutionId,
+    institutionId,
   );
 
-  return rows.map((row) => ({
-    id: row.id,
-    institutionId: row.institution_id,
-    institutionName: row.institution_name,
-    nickname: row.nickname,
-    firmwareVersion: row.firmware_version,
-    protocolVersion: row.protocol_version,
-    status: row.device_status,
-    deviceStatus: row.device_status,
-    grantVersion: row.grant_version,
-    accessRole: row.access_role,
-    primaryAssigneeName: row.primary_assignee_name ?? null,
-    primaryAssigneeStaffId: row.primary_assignee_staff_id ?? null,
-    viewerNames: parseViewerNames(row.viewer_names_json),
-    macAddress: row.mac_address,
-    currentTempC: row.current_temp_c,
-    mktStatus: row.mkt_status,
-    batteryLevel: row.battery_level,
-    doorOpen: row.door_open === 1,
-    lastSeenAt: row.last_seen_at,
-    lastConnectionTestAt: row.last_connection_test_at ?? null,
-    lastConnectionTestStatus: row.last_connection_test_status ?? "idle",
-  }));
+  return rows.map(mapDeviceRow);
 }
 
 export async function getDeviceById(deviceId: string): Promise<DeviceRecord | null> {

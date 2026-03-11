@@ -900,7 +900,7 @@ void handleDecommission(const String& payload, const String& requestId) {
     return;
   }
 
-  if (nextGrantVersion <= grantVersion) {
+  if (nextGrantVersion < grantVersion) {
     sendBleResponse(buildErrorResponse("device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated."));
     return;
   }

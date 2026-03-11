@@ -36,6 +36,7 @@ async function migrateLegacySQLiteSchema(database: SQLiteDatabase) {
   await ensureLegacyColumns(database, "profile_cache", SQLITE_LEGACY_COLUMN_MIGRATIONS.profile_cache);
   await ensureLegacyColumns(database, "devices", SQLITE_LEGACY_COLUMN_MIGRATIONS.devices);
   await ensureLegacyColumns(database, "connection_grants", SQLITE_LEGACY_COLUMN_MIGRATIONS.connection_grants);
+  await backfillLegacyDeviceInstitutionIds(database);
 }
 
 async function ensureLegacyColumns(
@@ -54,6 +55,24 @@ async function ensureLegacyColumns(
       await database.execAsync(migrationSql);
     }
   }
+}
+
+async function backfillLegacyDeviceInstitutionIds(database: SQLiteDatabase) {
+  await database.execAsync(`
+    UPDATE devices
+    SET institution_id = (
+      SELECT institution_id
+      FROM profile_cache
+      WHERE id = 1
+    )
+    WHERE institution_id = ''
+      AND EXISTS (
+        SELECT 1
+        FROM profile_cache
+        WHERE id = 1
+          AND institution_id != ''
+      )
+  `);
 }
 
 function isMissingDatabaseError(error: unknown) {

@@ -24,7 +24,7 @@ test("initializes sqlite and creates all required tables", async () => {
   const db = await initializeSQLite();
 
   expect(openDatabaseAsync).toHaveBeenCalledWith("coldguard.db");
-  expect(db.execAsync).toHaveBeenCalledTimes(SQLITE_SCHEMA_STATEMENTS.length);
+  expect(db.execAsync).toHaveBeenCalledTimes(SQLITE_SCHEMA_STATEMENTS.length + 1);
 });
 
 test("resets the cached promise when opening sqlite fails", async () => {
@@ -102,4 +102,7 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
   expect(mockExecAsync).toHaveBeenCalledWith(
     "ALTER TABLE devices ADD COLUMN last_connection_test_status TEXT",
   );
+  expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("UPDATE devices"));
+  expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("SET institution_id ="));
+  expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("FROM profile_cache"));
 });

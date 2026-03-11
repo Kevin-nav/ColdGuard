@@ -4,6 +4,8 @@ import StaffManagementScreen from "../../../../app/staff-management";
 const mockGetProfileSnapshot = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockReplace = jest.fn();
+const mockSyncVisibleDevices = jest.fn();
+const mockEnsureSupervisorAdminGrant = jest.fn();
 
 jest.mock("expo-router", () => ({
   router: { replace: (path: string) => mockReplace(path) },
@@ -30,16 +32,13 @@ jest.mock("../../../../src/lib/storage/sqlite/profile-repository", () => ({
   getProfileSnapshot: () => mockGetProfileSnapshot(),
 }));
 
-jest.mock("../../../../src/lib/storage/sqlite/device-repository", () => ({
-  getDevicesForInstitution: jest.fn(() => Promise.resolve([])),
-}));
-
 jest.mock("../../../../src/features/dashboard/services/profile-hydration", () => ({
   ensureLocalProfileForUser: (args: unknown) => mockEnsureLocalProfileForUser(args),
 }));
 
-jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
-  seedDashboardDataForInstitution: jest.fn(() => Promise.resolve([])),
+jest.mock("../../../../src/features/devices/services/device-directory", () => ({
+  ensureSupervisorAdminGrant: (profile: unknown) => mockEnsureSupervisorAdminGrant(profile),
+  syncVisibleDevices: (profile: unknown) => mockSyncVisibleDevices(profile),
 }));
 
 beforeEach(() => {
@@ -48,11 +47,14 @@ beforeEach(() => {
     firebaseUid: args.firebaseUid,
     displayName: args.displayName ?? "ColdGuard User",
     email: args.email ?? "user@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
     lastUpdatedAt: 1,
   }));
+  mockSyncVisibleDevices.mockResolvedValue([]);
+  mockEnsureSupervisorAdminGrant.mockResolvedValue(null);
 });
 
 test("blocks nurse access to staff management", async () => {
@@ -60,6 +62,7 @@ test("blocks nurse access to staff management", async () => {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
@@ -78,6 +81,7 @@ test("lets supervisors open the dedicated staff management workspace", async () 
     firebaseUid: "u1",
     displayName: "Yaw Boateng",
     email: "yaw@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1002",
     role: "Supervisor",

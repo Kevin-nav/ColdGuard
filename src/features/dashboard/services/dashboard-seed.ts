@@ -1,11 +1,21 @@
 import {
-  DeviceRecord,
   getDevicesForInstitution,
   saveDevicesForInstitution,
 } from "../../../lib/storage/sqlite/device-repository";
 import { ReadingRecord, saveReadings } from "../../../lib/storage/sqlite/reading-repository";
 
-function makeSeedDevices(institutionName: string): Omit<DeviceRecord, "institutionName">[] {
+type LegacySeedDevice = {
+  batteryLevel: number;
+  currentTempC: number;
+  doorOpen: boolean;
+  id: string;
+  lastSeenAt: number;
+  macAddress: string;
+  mktStatus: "safe" | "warning" | "alert";
+  nickname: string;
+};
+
+function makeSeedDevices(institutionName: string): LegacySeedDevice[] {
   const now = Date.now();
 
   return [
@@ -44,7 +54,7 @@ function makeSeedDevices(institutionName: string): Omit<DeviceRecord, "instituti
 
 function makeSeedReadings(
   institutionName: string,
-  devices: Omit<DeviceRecord, "institutionName">[],
+  devices: LegacySeedDevice[],
 ): ReadingRecord[] {
   const now = Date.now();
 
@@ -72,14 +82,33 @@ function makeSeedReadings(
   ]);
 }
 
-export async function seedDashboardDataForInstitution(institutionName: string) {
-  const existingDevices = await getDevicesForInstitution(institutionName);
+export async function seedDashboardDataForInstitution(args: {
+  institutionId: string;
+  institutionName: string;
+}) {
+  const existingDevices = await getDevicesForInstitution(args.institutionId);
   if (existingDevices.length > 0) {
     return existingDevices;
   }
 
-  const devices = makeSeedDevices(institutionName);
-  await saveDevicesForInstitution(institutionName, devices);
-  await saveReadings(makeSeedReadings(institutionName, devices));
-  return await getDevicesForInstitution(institutionName);
+  const devices = makeSeedDevices(args.institutionName);
+  await saveDevicesForInstitution(
+    args.institutionId,
+    devices.map((device) => ({
+      ...device,
+      firmwareVersion: "seed-fw-1.0.0",
+      protocolVersion: 1,
+      status: "enrolled" as const,
+      grantVersion: 1,
+      accessRole: "manager" as const,
+      primaryAssigneeName: null,
+      primaryAssigneeStaffId: null,
+      viewerNames: [],
+      lastConnectionTestAt: null,
+      lastConnectionTestStatus: "idle" as const,
+    })),
+    args.institutionName,
+  );
+  await saveReadings(makeSeedReadings(args.institutionName, devices));
+  return await getDevicesForInstitution(args.institutionId);
 }

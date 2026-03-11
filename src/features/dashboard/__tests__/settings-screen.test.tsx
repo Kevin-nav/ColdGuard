@@ -7,6 +7,7 @@ const mockSignOut = jest.fn(() => Promise.resolve());
 const mockReplace = jest.fn();
 const mockPush = jest.fn();
 const mockUseNotificationPreferences = jest.fn();
+const mockSyncVisibleDevices = jest.fn();
 
 jest.mock("expo-router", () => ({
   router: { 
@@ -44,16 +45,12 @@ jest.mock("../../../../src/lib/storage/sqlite/profile-repository", () => ({
   getProfileSnapshot: () => mockGetProfileSnapshot(),
 }));
 
-jest.mock("../../../../src/lib/storage/sqlite/device-repository", () => ({
-  getDevicesForInstitution: jest.fn(() => Promise.resolve([])),
-}));
-
 jest.mock("../../../../src/features/dashboard/services/profile-hydration", () => ({
   ensureLocalProfileForUser: (args: unknown) => mockEnsureLocalProfileForUser(args),
 }));
 
-jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
-  seedDashboardDataForInstitution: jest.fn(() => Promise.resolve([])),
+jest.mock("../../../../src/features/devices/services/device-directory", () => ({
+  syncVisibleDevices: (profile: unknown) => mockSyncVisibleDevices(profile),
 }));
 
 jest.mock("../../../../src/features/notifications/hooks/use-notification-preferences", () => ({
@@ -67,6 +64,7 @@ beforeEach(() => {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
@@ -76,11 +74,13 @@ beforeEach(() => {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
     lastUpdatedAt: 1,
   });
+  mockSyncVisibleDevices.mockResolvedValue([]);
   mockUseNotificationPreferences.mockReturnValue({
     permissionStatus: "granted",
     preferences: {
@@ -143,6 +143,7 @@ test("renders supervisor-only management actions in settings", async () => {
     firebaseUid: "u1",
     displayName: "Yaw Boateng",
     email: "yaw@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1002",
     role: "Supervisor",
@@ -152,6 +153,7 @@ test("renders supervisor-only management actions in settings", async () => {
     firebaseUid: "u1",
     displayName: "Yaw Boateng",
     email: "yaw@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1002",
     role: "Supervisor",

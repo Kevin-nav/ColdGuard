@@ -1,5 +1,5 @@
 import { SQLiteDatabase, deleteDatabaseAsync, openDatabaseAsync } from "expo-sqlite";
-import { SQLITE_SCHEMA_STATEMENTS } from "./schema";
+import { SQLITE_LEGACY_COLUMN_MIGRATIONS, SQLITE_SCHEMA_STATEMENTS } from "./schema";
 
 const SQLITE_DATABASE_NAME = "coldguard.db";
 
@@ -23,7 +23,63 @@ export async function initializeSQLite() {
     await database.execAsync(statement);
   }
 
+  await migrateLegacySQLiteSchema(database);
+
   return database;
+}
+
+type SQLiteTableInfoRow = {
+  name: string;
+};
+
+async function migrateLegacySQLiteSchema(database: SQLiteDatabase) {
+  await ensureLegacyColumns(database, "profile_cache", SQLITE_LEGACY_COLUMN_MIGRATIONS.profile_cache);
+  await ensureLegacyColumns(database, "devices", SQLITE_LEGACY_COLUMN_MIGRATIONS.devices);
+  await ensureLegacyColumns(database, "connection_grants", SQLITE_LEGACY_COLUMN_MIGRATIONS.connection_grants);
+  await backfillLegacyDeviceInstitutionIds(database);
+}
+
+async function ensureLegacyColumns(
+  database: SQLiteDatabase,
+  tableName: string,
+  columnMigrations: Record<string, string>,
+) {
+  const existingColumns = await database.getAllAsync<SQLiteTableInfoRow>(`PRAGMA table_info(${tableName})`);
+  if (existingColumns.length === 0) {
+    return;
+  }
+
+  const existingColumnNames = new Set(existingColumns.map((column) => column.name));
+  for (const [columnName, migrationSql] of Object.entries(columnMigrations)) {
+    if (!existingColumnNames.has(columnName)) {
+      await database.execAsync(migrationSql);
+    }
+  }
+}
+
+async function backfillLegacyDeviceInstitutionIds(database: SQLiteDatabase) {
+  await database.execAsync(`
+    UPDATE devices
+    SET institution_id = (
+      SELECT institution_id
+      FROM profile_cache
+      WHERE id = 1
+    )
+    WHERE institution_id = ''
+      AND institution_name != ''
+      AND institution_name = (
+        SELECT institution_name
+        FROM profile_cache
+        WHERE id = 1
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM profile_cache
+        WHERE id = 1
+          AND institution_id != ''
+          AND institution_name != ''
+      )
+  `);
 }
 
 function isMissingDatabaseError(error: unknown) {

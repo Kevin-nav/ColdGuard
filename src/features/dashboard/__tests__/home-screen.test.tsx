@@ -3,9 +3,9 @@ import HomeScreen from "../../../../app/(tabs)/home";
 
 const mockPush = jest.fn();
 const mockGetProfileSnapshot = jest.fn();
-const mockGetDevicesForInstitution = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
-const mockSeedDashboardDataForInstitution = jest.fn();
+const mockSyncVisibleDevices = jest.fn();
+const mockEnsureSupervisorAdminGrant = jest.fn();
 const mockUseNotificationInbox = jest.fn();
 
 jest.mock("expo-router", () => ({
@@ -33,17 +33,13 @@ jest.mock("../../../../src/lib/storage/sqlite/profile-repository", () => ({
   getProfileSnapshot: () => mockGetProfileSnapshot(),
 }));
 
-jest.mock("../../../../src/lib/storage/sqlite/device-repository", () => ({
-  getDevicesForInstitution: (institutionName: string) => mockGetDevicesForInstitution(institutionName),
-}));
-
 jest.mock("../../../../src/features/dashboard/services/profile-hydration", () => ({
   ensureLocalProfileForUser: (args: unknown) => mockEnsureLocalProfileForUser(args),
 }));
 
-jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
-  seedDashboardDataForInstitution: (institutionName: string) =>
-    mockSeedDashboardDataForInstitution(institutionName),
+jest.mock("../../../../src/features/devices/services/device-directory", () => ({
+  ensureSupervisorAdminGrant: (profile: unknown) => mockEnsureSupervisorAdminGrant(profile),
+  syncVisibleDevices: (profile: unknown) => mockSyncVisibleDevices(profile),
 }));
 
 jest.mock("../../../../src/features/notifications/hooks/use-notification-inbox", () => ({
@@ -56,34 +52,47 @@ beforeEach(() => {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
     lastUpdatedAt: 1,
   });
-  mockGetDevicesForInstitution.mockResolvedValue([
+  mockSyncVisibleDevices.mockResolvedValue([
     {
       id: "d1",
+      institutionId: "institution-1",
       institutionName: "Korle-Bu Teaching Hospital",
       nickname: "Cold Room Alpha",
       macAddress: "AA",
+      firmwareVersion: "fw-1.0.0",
+      protocolVersion: 1,
+      deviceStatus: "enrolled",
+      grantVersion: 1,
+      accessRole: "primary",
+      primaryAssigneeName: "Akosua Mensah",
+      primaryAssigneeStaffId: "KB1001",
+      viewerNames: [],
       currentTempC: 4.6,
       mktStatus: "safe",
       batteryLevel: 93,
       doorOpen: false,
       lastSeenAt: Date.now() - 60_000,
+      lastConnectionTestAt: null,
+      lastConnectionTestStatus: "idle",
     },
   ]);
   mockEnsureLocalProfileForUser.mockResolvedValue({
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
     lastUpdatedAt: 1,
   });
-  mockSeedDashboardDataForInstitution.mockResolvedValue([]);
+  mockEnsureSupervisorAdminGrant.mockResolvedValue(null);
   mockUseNotificationInbox.mockReturnValue({
     activeIncidents: [
       {

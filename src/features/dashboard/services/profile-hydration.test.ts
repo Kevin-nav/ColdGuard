@@ -26,6 +26,7 @@ test("returns the cached snapshot when it belongs to the active firebase user", 
     firebaseUid: "firebase-user-1",
     displayName: "Cached User",
     email: "cached@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu",
     staffId: "KB-1",
     role: "Supervisor",
@@ -61,6 +62,7 @@ test("evicts a mismatched cached snapshot and reloads the requested firebase use
     firebaseUid: "firebase-user-2",
     displayName: null,
     email: null,
+    institutionId: "institution-2",
     institutionName: "Tamale Central",
     staffId: "TM-2",
     role: null,
@@ -80,6 +82,7 @@ test("evicts a mismatched cached snapshot and reloads the requested firebase use
     firebaseUid: "firebase-user-2",
     displayName: "Fresh User",
     email: "fresh@example.com",
+    institutionId: "institution-2",
     institutionName: "Tamale Central",
     staffId: "TM-2",
     role: "Nurse",
@@ -92,8 +95,101 @@ test("evicts a mismatched cached snapshot and reloads the requested firebase use
     firebaseUid: "firebase-user-2",
     displayName: "Fresh User",
     email: "fresh@example.com",
+    institutionId: "institution-2",
     institutionName: "Tamale Central",
     staffId: "TM-2",
     role: "Nurse",
   });
+});
+
+test("evicts a same-user cached snapshot when the migrated institution id is blank", async () => {
+  mockGetProfileSnapshot.mockResolvedValue({
+    firebaseUid: "firebase-user-1",
+    displayName: "Cached User",
+    email: "cached@example.com",
+    institutionId: "",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+    lastUpdatedAt: 100,
+  });
+  mockQuery.mockResolvedValue({
+    firebaseUid: "firebase-user-1",
+    displayName: "Fresh User",
+    email: "fresh@example.com",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+  });
+  mockSaveProfileSnapshot.mockImplementation(async (snapshot) => ({
+    ...((snapshot as object) ?? {}),
+    lastUpdatedAt: 300,
+  }));
+
+  await expect(
+    ensureLocalProfileForUser({
+      firebaseUid: "firebase-user-1",
+      email: "fresh@example.com",
+      displayName: "Fresh User",
+    }),
+  ).resolves.toEqual({
+    firebaseUid: "firebase-user-1",
+    displayName: "Fresh User",
+    email: "fresh@example.com",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+    lastUpdatedAt: 300,
+  });
+
+  expect(mockClearProfileSnapshot).toHaveBeenCalledTimes(1);
+  expect(mockQuery).toHaveBeenCalledWith(expect.anything());
+});
+
+test("evicts a same-user cached snapshot when the migrated institution id is null", async () => {
+  mockGetProfileSnapshot.mockResolvedValue({
+    firebaseUid: "firebase-user-1",
+    displayName: "Cached User",
+    email: "cached@example.com",
+    institutionId: null,
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+    lastUpdatedAt: 100,
+  });
+  mockQuery.mockResolvedValue({
+    firebaseUid: "firebase-user-1",
+    displayName: "Fresh User",
+    email: "fresh@example.com",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+  });
+  mockSaveProfileSnapshot.mockImplementation(async (snapshot) => ({
+    ...((snapshot as object) ?? {}),
+    lastUpdatedAt: 400,
+  }));
+
+  await expect(
+    ensureLocalProfileForUser({
+      firebaseUid: "firebase-user-1",
+      email: "fresh@example.com",
+      displayName: "Fresh User",
+    }),
+  ).resolves.toEqual({
+    firebaseUid: "firebase-user-1",
+    displayName: "Fresh User",
+    email: "fresh@example.com",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    staffId: "KB-1",
+    role: "Supervisor",
+    lastUpdatedAt: 400,
+  });
+
+  expect(mockClearProfileSnapshot).toHaveBeenCalledTimes(1);
+  expect(mockQuery).toHaveBeenCalledWith(expect.anything());
 });

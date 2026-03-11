@@ -2,9 +2,9 @@ import { render, waitFor } from "@testing-library/react-native";
 import DevicesScreen from "../../../../app/(tabs)/devices";
 
 const mockGetProfileSnapshot = jest.fn();
-const mockGetDevicesForInstitution = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
-const mockSeedDashboardDataForInstitution = jest.fn();
+const mockSyncVisibleDevices = jest.fn();
+const mockEnsureSupervisorAdminGrant = jest.fn();
 
 jest.mock("../../../../src/features/dashboard/providers/dashboard-bootstrap", () => ({
   useDashboardBootstrap: jest.fn(() => ({
@@ -27,17 +27,13 @@ jest.mock("../../../../src/lib/storage/sqlite/profile-repository", () => ({
   getProfileSnapshot: () => mockGetProfileSnapshot(),
 }));
 
-jest.mock("../../../../src/lib/storage/sqlite/device-repository", () => ({
-  getDevicesForInstitution: (institutionName: string) => mockGetDevicesForInstitution(institutionName),
-}));
-
 jest.mock("../../../../src/features/dashboard/services/profile-hydration", () => ({
   ensureLocalProfileForUser: (args: unknown) => mockEnsureLocalProfileForUser(args),
 }));
 
-jest.mock("../../../../src/features/dashboard/services/dashboard-seed", () => ({
-  seedDashboardDataForInstitution: (institutionName: string) =>
-    mockSeedDashboardDataForInstitution(institutionName),
+jest.mock("../../../../src/features/devices/services/device-directory", () => ({
+  ensureSupervisorAdminGrant: (profile: unknown) => mockEnsureSupervisorAdminGrant(profile),
+  syncVisibleDevices: (profile: unknown) => mockSyncVisibleDevices(profile),
 }));
 
 beforeEach(() => {
@@ -46,27 +42,39 @@ beforeEach(() => {
     firebaseUid: "u1",
     displayName: "Akosua Mensah",
     email: "akosua@example.com",
+    institutionId: "institution-1",
     institutionName: "Korle-Bu Teaching Hospital",
     staffId: "KB1001",
     role: "Nurse",
     lastUpdatedAt: 1,
   };
   mockGetProfileSnapshot.mockResolvedValue(profile);
-  mockGetDevicesForInstitution.mockResolvedValue([
+  mockSyncVisibleDevices.mockResolvedValue([
     {
       id: "d1",
+      institutionId: "institution-1",
       institutionName: "Korle-Bu Teaching Hospital",
       nickname: "Cold Room Alpha",
       macAddress: "AA",
+      firmwareVersion: "fw-1.0.0",
+      protocolVersion: 1,
+      deviceStatus: "enrolled",
+      grantVersion: 1,
+      accessRole: "primary",
+      primaryAssigneeName: "Akosua Mensah",
+      primaryAssigneeStaffId: "KB1001",
+      viewerNames: [],
       currentTempC: 4.6,
       mktStatus: "safe",
       batteryLevel: 93,
       doorOpen: false,
       lastSeenAt: Date.now() - 60_000,
+      lastConnectionTestAt: null,
+      lastConnectionTestStatus: "idle",
     },
   ]);
   mockEnsureLocalProfileForUser.mockResolvedValue(profile);
-  mockSeedDashboardDataForInstitution.mockResolvedValue([]);
+  mockEnsureSupervisorAdminGrant.mockResolvedValue(null);
 });
 
 test("renders the dedicated devices workspace", async () => {

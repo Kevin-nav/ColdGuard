@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["ColdGuardWifiBridgeModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.coldguardwifibridge.ColdGuardWifiBridgeModule"]
+  }
+}

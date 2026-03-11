@@ -34,6 +34,20 @@ export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }
   const { colors } = useTheme();
   const statusColor = getStatusColor(props.device.mktStatus, colors);
   const statusIcon = getStatusIcon(props.device.mktStatus);
+  const accessLabel =
+    props.device.accessRole === "manager"
+      ? "Supervisor managed"
+      : props.device.accessRole === "primary"
+        ? "Primary nurse"
+        : "Assigned viewer";
+  const connectionLabel =
+    props.device.lastConnectionTestStatus === "success"
+      ? "Connection verified"
+      : props.device.lastConnectionTestStatus === "running"
+        ? "Testing connection"
+        : props.device.lastConnectionTestStatus === "failed"
+          ? "Connection needs attention"
+          : "Connection pending";
 
   const cardContent = (
     <PanelCard>
@@ -58,6 +72,29 @@ export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }
           value={props.device.doorOpen ? "Open" : "Closed"}
           valueColor={props.device.doorOpen ? colors.warning : undefined}
         />
+      </View>
+      <View style={styles.summary}>
+        <Text style={[styles.meta, { color: colors.textPrimary }]}>{accessLabel}</Text>
+        <Text style={[styles.meta, { color: colors.textSecondary }]}>
+          {props.device.primaryAssigneeName
+            ? `Primary: ${props.device.primaryAssigneeName}`
+            : "Primary nurse not assigned"}
+        </Text>
+        <Text
+          style={[
+            styles.meta,
+            {
+              color:
+                props.device.lastConnectionTestStatus === "success"
+                  ? colors.success
+                  : props.device.lastConnectionTestStatus === "failed"
+                    ? colors.danger
+                    : colors.textSecondary,
+            },
+          ]}
+        >
+          {connectionLabel}
+        </Text>
       </View>
       <Text style={[styles.meta, { color: colors.textSecondary }]}>
         Last seen {formatLastSeen(props.device.lastSeenAt)}
@@ -102,6 +139,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.md,
     justifyContent: "space-between",
+  },
+  summary: {
+    gap: spacing.xs,
   },
   meta: {
     ...typography.meta,

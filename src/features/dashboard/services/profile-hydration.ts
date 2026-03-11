@@ -13,7 +13,8 @@ export async function ensureLocalProfileForUser(args: {
   displayName?: string | null;
 }): Promise<ProfileSnapshot | null> {
   const cached = await getProfileSnapshot();
-  if (cached?.firebaseUid === args.firebaseUid) {
+  const hasInstitutionId = typeof cached?.institutionId === "string" && cached.institutionId.trim().length > 0;
+  if (cached?.firebaseUid === args.firebaseUid && hasInstitutionId) {
     return cached;
   }
   if (cached) {
@@ -31,6 +32,7 @@ export async function ensureLocalProfileForUser(args: {
     firebaseUid: linkedProfile.firebaseUid,
     displayName: linkedProfile.displayName ?? args.displayName ?? "ColdGuard User",
     email: linkedProfile.email ?? args.email ?? "No email available",
+    institutionId: linkedProfile.institutionId,
     institutionName: linkedProfile.institutionName,
     staffId: linkedProfile.staffId ?? null,
     role: linkedProfile.role ?? "Nurse",

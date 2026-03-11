@@ -3,13 +3,20 @@ import {
   decommissionColdGuardDevice,
   enrollColdGuardDevice,
   parseDeviceQrPayload,
+  retryPendingDeviceConnectionAuditSync,
   runColdGuardConnectionTest,
 } from "./connection-service";
 import { resetMockHardwareRegistry } from "./mock-hardware-registry";
 
 const mockDeleteConnectionGrant = jest.fn();
+const mockDeleteDeviceActionTicket = jest.fn();
+const mockDeleteSyncJob = jest.fn();
+const mockEnqueueSyncJob = jest.fn();
 const mockGetDeviceById = jest.fn();
+const mockListPendingSyncJobs = jest.fn();
 const mockSaveDeviceConnectionSnapshot = jest.fn();
+const mockSetSyncJobStatus = jest.fn();
+const mockUpdateDeviceConnectionSyncState = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
 const mockGetClinicHandshakeToken = jest.fn();
 const mockEnsureDeviceActionTicket = jest.fn();
@@ -27,12 +34,21 @@ Object.defineProperty(global, "fetch", {
 
 jest.mock("../../../lib/storage/sqlite/connection-grant-repository", () => ({
   deleteConnectionGrant: (...args: unknown[]) => mockDeleteConnectionGrant(...args),
+  deleteDeviceActionTicket: (...args: unknown[]) => mockDeleteDeviceActionTicket(...args),
 }));
 
 jest.mock("../../../lib/storage/sqlite/device-repository", () => ({
   getDeviceById: (...args: unknown[]) => mockGetDeviceById(...args),
   saveDeviceConnectionSnapshot: (...args: unknown[]) => mockSaveDeviceConnectionSnapshot(...args),
+  updateDeviceConnectionSyncState: (...args: unknown[]) => mockUpdateDeviceConnectionSyncState(...args),
   updateDeviceConnectionTestStatus: (...args: unknown[]) => mockUpdateDeviceConnectionTestStatus(...args),
+}));
+
+jest.mock("../../../lib/storage/sqlite/sync-job-repository", () => ({
+  deleteSyncJob: (...args: unknown[]) => mockDeleteSyncJob(...args),
+  enqueueSyncJob: (...args: unknown[]) => mockEnqueueSyncJob(...args),
+  listPendingSyncJobs: (...args: unknown[]) => mockListPendingSyncJobs(...args),
+  setSyncJobStatus: (...args: unknown[]) => mockSetSyncJobStatus(...args),
 }));
 
 jest.mock("../../../lib/storage/secure-store", () => ({
@@ -86,7 +102,12 @@ beforeEach(() => {
   });
   mockRecordDeviceConnectionTest.mockResolvedValue(undefined);
   mockSaveDeviceConnectionSnapshot.mockResolvedValue(undefined);
+  mockUpdateDeviceConnectionSyncState.mockResolvedValue(undefined);
   mockWifiBridgeRelease.mockResolvedValue(undefined);
+  mockEnqueueSyncJob.mockResolvedValue("sync-job-1");
+  mockDeleteSyncJob.mockResolvedValue(undefined);
+  mockListPendingSyncJobs.mockResolvedValue([]);
+  mockSetSyncJobStatus.mockResolvedValue(undefined);
   mockFetch.mockResolvedValue({
     json: async () => ({
       batteryLevel: 89,
@@ -186,7 +207,99 @@ test("runs a mock BLE-to-WiFi connection test and records success", async () => 
       transport: "ble+wifi",
     }),
   );
+  expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      failureStage: "record_connection_test",
+      status: "pending",
+    }),
+  );
+  expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      failureStage: null,
+      status: "synced",
+    }),
+  );
   expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
+});
+
+test("keeps the local connection success and queues sync when backend audit logging fails", async () => {
+  mockRecordDeviceConnectionTest.mockRejectedValueOnce(new Error("convex unavailable"));
+
+  const payload = await runColdGuardConnectionTest({
+    deviceId: "CG-ESP32-A100",
+    bleClient: new MockColdGuardBleClient(),
+    wifiBridge: {
+      connect: async (ticket) => ({
+        localIp: "192.168.4.2",
+        ssid: ticket.ssid,
+      }),
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(payload.statusText).toBe("Mock BLE-to-WiFi handover completed.");
+  expect(mockUpdateDeviceConnectionTestStatus).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      status: "success",
+    }),
+  );
+  expect(mockEnqueueSyncJob).toHaveBeenCalledWith(
+    "device_connection_test_reconciliation",
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      lastSeenAt: expect.any(Number),
+      status: "success",
+      transport: "ble+wifi",
+    }),
+  );
+  expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      failureStage: "record_connection_test",
+      status: "failed",
+    }),
+  );
+});
+
+test("retries pending device connection audit jobs and clears sync failure state on success", async () => {
+  mockListPendingSyncJobs.mockResolvedValue([
+    {
+      createdAt: 1,
+      id: "sync-job-1",
+      jobType: "device_connection_test_reconciliation",
+      payload: {
+        deviceId: "CG-ESP32-A100",
+        lastSeenAt: 997_500,
+        status: "success",
+        summary: "Mock BLE-to-WiFi handover completed.",
+        transport: "ble+wifi",
+      },
+      status: "pending",
+      updatedAt: 1,
+    },
+  ]);
+
+  await retryPendingDeviceConnectionAuditSync({ deviceId: "CG-ESP32-A100" });
+
+  expect(mockSetSyncJobStatus).toHaveBeenCalledWith("sync-job-1", "processing");
+  expect(mockRecordDeviceConnectionTest).toHaveBeenCalledWith({
+    deviceId: "CG-ESP32-A100",
+    lastSeenAt: 997_500,
+    status: "success",
+    summary: "Mock BLE-to-WiFi handover completed.",
+    transport: "ble+wifi",
+  });
+  expect(mockDeleteSyncJob).toHaveBeenCalledWith("sync-job-1");
+  expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      failureStage: null,
+      status: "synced",
+    }),
+  );
 });
 
 test("decommissions a mock device and clears cached grants", async () => {
@@ -206,6 +319,9 @@ test("decommissions a mock device and clears cached grants", async () => {
   });
 
   expect(mockDecommissionManagedDevice).toHaveBeenCalledWith("CG-ESP32-A100");
+  expect(mockDeleteDeviceActionTicket).toHaveBeenCalledWith("admin", "CG-ESP32-A100", "decommission");
+  expect(mockDeleteDeviceActionTicket).toHaveBeenCalledWith("device", "CG-ESP32-A100", "connect");
+  expect(mockDeleteDeviceActionTicket).toHaveBeenCalledWith("device", "CG-ESP32-A100", "wifi_provision");
   expect(mockDeleteConnectionGrant).toHaveBeenCalledWith("admin", "CG-ESP32-A100");
   expect(mockDeleteConnectionGrant).toHaveBeenCalledWith("device", "CG-ESP32-A100");
 });

@@ -237,4 +237,4 @@ The ESP32 should return explicit failure reasons for:
 
 ## Migration Note
 
-The current transport harness still documents ES256 grant verification. That behavior remains the current implementation until the firmware and app are migrated to this ticket model.
+The app and backend can migrate to this ticket model while the firmware still carries transitional implementation details. In this repo, the harness currently uses a shared master key for ticket verification; production should replace that with per-device secret provisioning.

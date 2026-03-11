@@ -56,6 +56,10 @@ function buildCachedDeviceRecord(
     lastSeenAt: remote.lastSeenAt ?? existing?.lastSeenAt ?? Date.now(),
     lastConnectionTestAt: nextConnectionTestAt,
     lastConnectionTestStatus: nextConnectionTestStatus,
+    lastConnectionSyncStatus: existing?.lastConnectionSyncStatus ?? "idle",
+    lastConnectionSyncUpdatedAt: existing?.lastConnectionSyncUpdatedAt ?? null,
+    lastConnectionSyncFailureStage: existing?.lastConnectionSyncFailureStage ?? null,
+    lastConnectionSyncError: existing?.lastConnectionSyncError ?? null,
   } satisfies Omit<DeviceRecord, "institutionId" | "institutionName">;
 }
 

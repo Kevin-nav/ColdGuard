@@ -5,6 +5,12 @@ This harness gives the ColdGuard app a real ESP32 target for BLE enrollment, gra
 ## Files
 
 - Sketch: `firmware/esp32_transport_harness/esp32_transport_harness.ino`
+- Modules:
+  - `firmware/esp32_transport_harness/src/device_state.cpp`
+  - `firmware/esp32_transport_harness/src/action_ticket.cpp`
+  - `firmware/esp32_transport_harness/src/ble_recovery.cpp`
+  - `firmware/esp32_transport_harness/src/wifi_runtime.cpp`
+- Profile guidance: `docs/runbooks/firmware-profiles.md`
 
 ## Board and Core
 
@@ -39,6 +45,12 @@ The sketch only uses Arduino-ESP32 built-ins:
 
 ## BLE Contract
 
+Production direction:
+
+- BLE is the provisioning and recovery transport
+- Wi-Fi is the runtime transport for connection tests and normal device traffic
+- do not add routine production telemetry exchange over BLE unless the product explicitly needs a fallback mode
+
 ### UUIDs
 
 - Service UUID: `6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110`
@@ -64,34 +76,26 @@ All BLE payloads are JSON strings written to the command characteristic. All res
 
 ## Security Model
 
-Migration target:
-
-- The current harness behavior in this runbook is still the ES256-grant implementation.
-- The intended replacement model is documented in `docs/plans/2026-03-11-device-action-ticket-spec.md`.
-- That target model keeps backend authorization but replaces routine on-device public-key verification with short-lived per-device action tickets plus replay protection.
-
-### Signed grant
-
-`verifySignedGrant()` is isolated in the sketch so the app team can replace the harness verifier later without rewriting the transport flow.
-
 Current harness behavior:
 
-- expects a JWT-like token:
-  - `header.payload.signature`
-- decodes `payload` from base64url JSON
+- expects an `actionTicket` object for `enroll.begin`, `grant.verify`, and `device.decommission`
 - validates:
-  - `alg`
-  - `kid`
-  - `iss`
+  - `v`
+  - `ticketId`
   - `deviceId`
   - `institutionId`
-  - `exp`
-  - `permission`
-  - `grantVersion`
-- verifies the signature as:
-  - `ES256(header + "." + payload)` using the embedded ColdGuard public key
+  - `action`
+  - `issuedAt`
+  - `expiresAt`
+  - `counter`
+  - `mac`
+- recomputes the ticket MAC locally and rejects mismatched or replayed control state
+- still requires the existing handshake proof tied to `deviceNonce`, `deviceId`, and `proofTimestamp`
 
-The app-side backend must sign grants with the private key from `COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64`. The harness no longer accepts shared-secret HS256 grants.
+Reference:
+
+- the target ticket model is documented in `docs/plans/2026-03-11-device-action-ticket-spec.md`
+- the current harness uses a shared harness master key for local verification and should be treated as transitional until per-device secret provisioning is in place
 
 ### Handshake proof
 
@@ -130,7 +134,18 @@ HMAC_SHA256_HEX(handshakeToken, deviceNonce + "|" + deviceId + "|" + proofTimest
   "institutionId": "institution-1",
   "nickname": "Cold Room Alpha",
   "handshakeToken": "clinic-secret-token",
-  "grantToken": "header.payload.signature"
+  "actionTicket": {
+    "v": 1,
+    "ticketId": "ticket-1",
+    "deviceId": "CG-ESP32-A1B2C3",
+    "institutionId": "institution-1",
+    "action": "enroll",
+    "issuedAt": 1700000000000,
+    "expiresAt": 1700000300000,
+    "counter": 1,
+    "operatorId": "firebase-user-1",
+    "mac": "<ticket-mac>"
+  }
 }
 ```
 
@@ -150,7 +165,18 @@ HMAC_SHA256_HEX(handshakeToken, deviceNonce + "|" + deviceId + "|" + proofTimest
   "requestId": "req-4",
   "command": "grant.verify",
   "deviceId": "CG-ESP32-A1B2C3",
-  "grantToken": "header.payload.signature",
+  "actionTicket": {
+    "v": 1,
+    "ticketId": "ticket-2",
+    "deviceId": "CG-ESP32-A1B2C3",
+    "institutionId": "institution-1",
+    "action": "connect",
+    "issuedAt": 1700000000000,
+    "expiresAt": 1700000300000,
+    "counter": 2,
+    "operatorId": "firebase-user-2",
+    "mac": "<ticket-mac>"
+  },
   "handshakeProof": "9a3381f1...",
   "proofTimestamp": 1700000123456
 }
@@ -171,7 +197,18 @@ HMAC_SHA256_HEX(handshakeToken, deviceNonce + "|" + deviceId + "|" + proofTimest
 {
   "requestId": "req-6",
   "command": "device.decommission",
-  "grantToken": "header.payload.signature",
+  "actionTicket": {
+    "v": 1,
+    "ticketId": "ticket-3",
+    "deviceId": "CG-ESP32-A1B2C3",
+    "institutionId": "institution-1",
+    "action": "decommission",
+    "issuedAt": 1700000000000,
+    "expiresAt": 1700000300000,
+    "counter": 3,
+    "operatorId": "firebase-user-1",
+    "mac": "<ticket-mac>"
+  },
   "handshakeProof": "9a3381f1...",
   "proofTimestamp": 1700000123456
 }
@@ -184,7 +221,7 @@ After `grant.verify` succeeds, `wifi.ticket.request` returns:
 - `ssid`
 - `password`
 - `testUrl`
-- `expiresAt`
+- `expiresInMs`
 
 The Android bridge is expected to:
 

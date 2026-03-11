@@ -33,7 +33,11 @@ export const SQLITE_TABLE_DEFINITIONS = {
       door_open INTEGER NOT NULL,
       last_seen_at INTEGER NOT NULL,
       last_connection_test_at INTEGER,
-      last_connection_test_status TEXT
+      last_connection_test_status TEXT,
+      last_connection_sync_status TEXT NOT NULL DEFAULT 'idle',
+      last_connection_sync_updated_at INTEGER,
+      last_connection_sync_failure_stage TEXT,
+      last_connection_sync_error TEXT
     );
   `,
   readings: `
@@ -143,6 +147,12 @@ export const SQLITE_LEGACY_COLUMN_MIGRATIONS = {
     viewer_names_json: "ALTER TABLE devices ADD COLUMN viewer_names_json TEXT NOT NULL DEFAULT '[]'",
     last_connection_test_at: "ALTER TABLE devices ADD COLUMN last_connection_test_at INTEGER",
     last_connection_test_status: "ALTER TABLE devices ADD COLUMN last_connection_test_status TEXT",
+    last_connection_sync_status:
+      "ALTER TABLE devices ADD COLUMN last_connection_sync_status TEXT NOT NULL DEFAULT 'idle'",
+    last_connection_sync_updated_at: "ALTER TABLE devices ADD COLUMN last_connection_sync_updated_at INTEGER",
+    last_connection_sync_failure_stage:
+      "ALTER TABLE devices ADD COLUMN last_connection_sync_failure_stage TEXT",
+    last_connection_sync_error: "ALTER TABLE devices ADD COLUMN last_connection_sync_error TEXT",
   },
   connection_grants: {
     expires_at: "ALTER TABLE connection_grants ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",

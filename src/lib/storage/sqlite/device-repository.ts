@@ -2,6 +2,8 @@ import { initializeSQLite } from "./client";
 
 export type DeviceAccessRole = "manager" | "primary" | "viewer";
 export type DeviceConnectionTestStatus = "idle" | "running" | "success" | "failed" | null;
+export type DeviceConnectionSyncStatus = "idle" | "pending" | "failed" | "synced";
+export type DeviceConnectionSyncFailureStage = "record_connection_test" | null;
 export type DeviceStatus = "enrolled" | "decommissioned";
 
 export type DeviceRecord = {
@@ -26,6 +28,10 @@ export type DeviceRecord = {
   lastSeenAt: number;
   lastConnectionTestAt: number | null;
   lastConnectionTestStatus: DeviceConnectionTestStatus;
+  lastConnectionSyncStatus: DeviceConnectionSyncStatus;
+  lastConnectionSyncUpdatedAt: number | null;
+  lastConnectionSyncFailureStage: DeviceConnectionSyncFailureStage;
+  lastConnectionSyncError: string | null;
 };
 
 export type LegacySavedDevice = {
@@ -60,6 +66,10 @@ type DeviceRow = {
   last_seen_at: number;
   last_connection_test_at: number | null;
   last_connection_test_status: DeviceConnectionTestStatus;
+  last_connection_sync_status: DeviceConnectionSyncStatus;
+  last_connection_sync_updated_at: number | null;
+  last_connection_sync_failure_stage: DeviceConnectionSyncFailureStage;
+  last_connection_sync_error: string | null;
 };
 
 export async function replaceDevicesForInstitution(
@@ -79,9 +89,10 @@ export async function replaceDevicesForInstitution(
             id, institution_id, institution_name, nickname, mac_address, firmware_version, protocol_version,
             device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
             viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
-            last_connection_test_at, last_connection_test_status
+            last_connection_test_at, last_connection_test_status, last_connection_sync_status,
+            last_connection_sync_updated_at, last_connection_sync_failure_stage, last_connection_sync_error
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
         device.id,
         institutionId,
@@ -103,6 +114,10 @@ export async function replaceDevicesForInstitution(
         device.lastSeenAt,
         device.lastConnectionTestAt,
         device.lastConnectionTestStatus,
+        device.lastConnectionSyncStatus,
+        device.lastConnectionSyncUpdatedAt,
+        device.lastConnectionSyncFailureStage,
+        device.lastConnectionSyncError,
       );
     }
   });
@@ -127,6 +142,10 @@ export async function replaceCachedDevicesForInstitution(args: {
     Omit<DeviceRecord, "institutionId" | "institutionName" | "status" | "lastConnectionTestStatus"> & {
       deviceStatus?: DeviceStatus;
       lastConnectionTestStatus?: DeviceConnectionTestStatus | "idle" | "running";
+      lastConnectionSyncError?: string | null;
+      lastConnectionSyncFailureStage?: DeviceConnectionSyncFailureStage;
+      lastConnectionSyncStatus?: DeviceConnectionSyncStatus;
+      lastConnectionSyncUpdatedAt?: number | null;
     }
   )[];
 }) {
@@ -137,6 +156,10 @@ export async function replaceCachedDevicesForInstitution(args: {
       ...device,
       status: device.deviceStatus ?? "enrolled",
       lastConnectionTestStatus: device.lastConnectionTestStatus ?? "idle",
+      lastConnectionSyncStatus: device.lastConnectionSyncStatus ?? "idle",
+      lastConnectionSyncUpdatedAt: device.lastConnectionSyncUpdatedAt ?? null,
+      lastConnectionSyncFailureStage: device.lastConnectionSyncFailureStage ?? null,
+      lastConnectionSyncError: device.lastConnectionSyncError ?? null,
     })),
   );
 }
@@ -223,6 +246,29 @@ export async function updateDeviceConnectionTestStatus(args: {
   );
 }
 
+export async function updateDeviceConnectionSyncState(args: {
+  deviceId: string;
+  errorMessage: string | null;
+  failureStage: DeviceConnectionSyncFailureStage;
+  status: DeviceConnectionSyncStatus;
+  updatedAt: number;
+}) {
+  const database = await initializeSQLite();
+  await database.runAsync(
+    `
+      UPDATE devices
+      SET last_connection_sync_status = ?, last_connection_sync_updated_at = ?,
+          last_connection_sync_failure_stage = ?, last_connection_sync_error = ?
+      WHERE id = ?
+    `,
+    args.status,
+    args.updatedAt,
+    args.failureStage,
+    args.errorMessage,
+    args.deviceId,
+  );
+}
+
 function parseViewerNames(value: string) {
   try {
     const parsed = JSON.parse(value);
@@ -254,6 +300,11 @@ function normalizeSavedDevice(
     protocolVersion: "protocolVersion" in device ? device.protocolVersion : 1,
     status: "status" in device ? device.status : "enrolled",
     viewerNames: "viewerNames" in device ? device.viewerNames : [],
+    lastConnectionSyncStatus: "lastConnectionSyncStatus" in device ? device.lastConnectionSyncStatus : "idle",
+    lastConnectionSyncUpdatedAt: "lastConnectionSyncUpdatedAt" in device ? device.lastConnectionSyncUpdatedAt : null,
+    lastConnectionSyncFailureStage:
+      "lastConnectionSyncFailureStage" in device ? device.lastConnectionSyncFailureStage : null,
+    lastConnectionSyncError: "lastConnectionSyncError" in device ? device.lastConnectionSyncError : null,
   };
 }
 
@@ -267,7 +318,8 @@ function buildDeviceSelectClause(normalizeEmptyInstitutionId: boolean) {
     institution_name, nickname, mac_address, firmware_version, protocol_version,
     device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
     viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
-    last_connection_test_at, last_connection_test_status
+    last_connection_test_at, last_connection_test_status, last_connection_sync_status,
+    last_connection_sync_updated_at, last_connection_sync_failure_stage, last_connection_sync_error
   `;
 }
 
@@ -294,5 +346,9 @@ function mapDeviceRow(row: DeviceRow): DeviceRecord {
     lastSeenAt: row.last_seen_at,
     lastConnectionTestAt: row.last_connection_test_at ?? null,
     lastConnectionTestStatus: row.last_connection_test_status ?? "idle",
+    lastConnectionSyncStatus: row.last_connection_sync_status ?? "idle",
+    lastConnectionSyncUpdatedAt: row.last_connection_sync_updated_at ?? null,
+    lastConnectionSyncFailureStage: row.last_connection_sync_failure_stage ?? null,
+    lastConnectionSyncError: row.last_connection_sync_error ?? null,
   };
 }

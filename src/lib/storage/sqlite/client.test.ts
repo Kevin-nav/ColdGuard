@@ -102,6 +102,9 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
   expect(mockExecAsync).toHaveBeenCalledWith(
     "ALTER TABLE devices ADD COLUMN last_connection_test_status TEXT",
   );
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE devices ADD COLUMN last_connection_sync_status TEXT NOT NULL DEFAULT 'idle'",
+  );
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("UPDATE devices"));
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("SET institution_id ="));
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("FROM profile_cache"));

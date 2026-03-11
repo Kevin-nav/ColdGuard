@@ -3,6 +3,7 @@ import {
   getDevicesForInstitution,
   replaceCachedDevicesForInstitution,
   saveDevicesForInstitution,
+  updateDeviceConnectionSyncState,
   updateDeviceConnectionTestStatus,
 } from "./device-repository";
 
@@ -71,6 +72,10 @@ test("saves legacy seeded devices for an institution", async () => {
     1000,
     null,
     "idle",
+    "idle",
+    null,
+    null,
+    null,
   );
 });
 
@@ -98,6 +103,10 @@ test("replaces cached backend-backed devices for an institution", async () => {
         lastSeenAt: 1200,
         lastConnectionTestAt: 1250,
         lastConnectionTestStatus: "success",
+        lastConnectionSyncStatus: "synced",
+        lastConnectionSyncUpdatedAt: 1260,
+        lastConnectionSyncFailureStage: null,
+        lastConnectionSyncError: null,
       },
     ],
   });
@@ -137,6 +146,10 @@ test("propagates insert failures from the exclusive transaction helper", async (
           lastSeenAt: 1200,
           lastConnectionTestAt: 1250,
           lastConnectionTestStatus: "success",
+          lastConnectionSyncStatus: "idle",
+          lastConnectionSyncUpdatedAt: null,
+          lastConnectionSyncFailureStage: null,
+          lastConnectionSyncError: null,
         },
       ],
     }),
@@ -173,6 +186,10 @@ test("loads devices by institution id and queries legacy empty-string rows", asy
       last_seen_at: 1000,
       last_connection_test_at: 1100,
       last_connection_test_status: "success",
+      last_connection_sync_status: "failed",
+      last_connection_sync_updated_at: 1150,
+      last_connection_sync_failure_stage: "record_connection_test",
+      last_connection_sync_error: "convex unavailable",
     },
   ]);
 
@@ -199,6 +216,10 @@ test("loads devices by institution id and queries legacy empty-string rows", asy
       lastSeenAt: 1000,
       lastConnectionTestAt: 1100,
       lastConnectionTestStatus: "success",
+      lastConnectionSyncStatus: "failed",
+      lastConnectionSyncUpdatedAt: 1150,
+      lastConnectionSyncFailureStage: "record_connection_test",
+      lastConnectionSyncError: "convex unavailable",
     },
   ]);
 
@@ -231,6 +252,10 @@ test("loads a single device by id", async () => {
     last_seen_at: 1000,
     last_connection_test_at: null,
     last_connection_test_status: null,
+    last_connection_sync_status: "idle",
+    last_connection_sync_updated_at: null,
+    last_connection_sync_failure_stage: null,
+    last_connection_sync_error: null,
   });
 
   await expect(getDeviceById("d1")).resolves.toEqual(
@@ -291,6 +316,25 @@ test("updates cached connection test status", async () => {
     expect.stringContaining("UPDATE devices"),
     5000,
     "running",
+    "device-1",
+  );
+});
+
+test("updates cached connection sync status", async () => {
+  await updateDeviceConnectionSyncState({
+    deviceId: "device-1",
+    errorMessage: "convex unavailable",
+    failureStage: "record_connection_test",
+    status: "failed",
+    updatedAt: 6000,
+  });
+
+  expect(mockRunAsync).toHaveBeenCalledWith(
+    expect.stringContaining("UPDATE devices"),
+    "failed",
+    6000,
+    "record_connection_test",
+    "convex unavailable",
     "device-1",
   );
 });

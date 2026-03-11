@@ -1,11 +1,21 @@
-import { deleteConnectionGrant } from "../../../lib/storage/sqlite/connection-grant-repository";
+import {
+  deleteConnectionGrant,
+  deleteDeviceActionTicket,
+} from "../../../lib/storage/sqlite/connection-grant-repository";
 import {
   getDeviceById,
   saveDeviceConnectionSnapshot,
+  updateDeviceConnectionSyncState,
   updateDeviceConnectionTestStatus,
 } from "../../../lib/storage/sqlite/device-repository";
 import type { ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
 import { getClinicHandshakeToken } from "../../../lib/storage/secure-store";
+import {
+  deleteSyncJob,
+  enqueueSyncJob,
+  listPendingSyncJobs,
+  setSyncJobStatus,
+} from "../../../lib/storage/sqlite/sync-job-repository";
 import type {
   CachedDeviceActionTicket,
   ColdGuardConnectionPayload,
@@ -35,12 +45,22 @@ export type ConnectionTestPayload = ColdGuardConnectionPayload & {
   testUrl: string;
 };
 
+type ConnectionSyncJobPayload = {
+  deviceId: string;
+  lastSeenAt?: number;
+  status: "failed" | "success";
+  summary: string;
+  transport: string;
+};
+
 type RemoteConnectionPayload = Omit<ColdGuardConnectionPayload, "lastSeenAt"> & {
   institutionId?: string;
   lastSeenAgeMs?: number;
   lastSeenAt?: number;
   nickname?: string;
 };
+
+const DEVICE_CONNECTION_SYNC_JOB_TYPE = "device_connection_test_reconciliation";
 
 export interface ColdGuardBleClient {
   discoverDevice(args: { deviceId: string; expectedState: "blank" | "enrolled" }): Promise<ColdGuardDiscoveredDevice>;
@@ -252,17 +272,16 @@ export async function runColdGuardConnectionTest(args: {
         status: "success",
       });
 
-      try {
-        await recordDeviceConnectionTest({
+      await syncDeviceConnectionAudit(
+        {
           deviceId: args.deviceId,
           lastSeenAt: payload.lastSeenAt,
-          summary: payload.statusText,
           status: "success",
+          summary: payload.statusText,
           transport: "ble+wifi",
-        });
-      } catch {
-        // Keep the local success result even if backend audit logging is temporarily unavailable.
-      }
+        },
+        { queueOnFailure: true },
+      ).catch(() => undefined);
 
       return payload;
     } finally {
@@ -290,6 +309,30 @@ export async function runColdGuardConnectionTest(args: {
   }
 }
 
+export async function retryPendingDeviceConnectionAuditSync(args?: { deviceId?: string }) {
+  const pendingJobs = await listPendingSyncJobs([DEVICE_CONNECTION_SYNC_JOB_TYPE]);
+
+  for (const job of pendingJobs) {
+    if (!isConnectionSyncJobPayload(job.payload)) {
+      await deleteSyncJob(job.id);
+      continue;
+    }
+    if (args?.deviceId && job.payload.deviceId !== args.deviceId) {
+      continue;
+    }
+
+    await setSyncJobStatus(job.id, "processing");
+    try {
+      await syncDeviceConnectionAudit(job.payload, {
+        existingJobId: job.id,
+        queueOnFailure: false,
+      });
+    } catch {
+      await setSyncJobStatus(job.id, "pending");
+    }
+  }
+}
+
 function normalizeConnectionLastSeenAt(payload: RemoteConnectionPayload, receivedAt: number) {
   if (typeof payload.lastSeenAgeMs === "number" && Number.isFinite(payload.lastSeenAgeMs) && payload.lastSeenAgeMs >= 0) {
     return receivedAt - payload.lastSeenAgeMs;
@@ -298,6 +341,64 @@ function normalizeConnectionLastSeenAt(payload: RemoteConnectionPayload, receive
     return payload.lastSeenAt;
   }
   return receivedAt;
+}
+
+async function syncDeviceConnectionAudit(
+  payload: ConnectionSyncJobPayload,
+  options: {
+    existingJobId?: string;
+    queueOnFailure: boolean;
+  },
+) {
+  await updateDeviceConnectionSyncState({
+    deviceId: payload.deviceId,
+    errorMessage: null,
+    failureStage: "record_connection_test",
+    status: "pending",
+    updatedAt: Date.now(),
+  });
+
+  try {
+    await recordDeviceConnectionTest(payload);
+    await updateDeviceConnectionSyncState({
+      deviceId: payload.deviceId,
+      errorMessage: null,
+      failureStage: null,
+      status: "synced",
+      updatedAt: Date.now(),
+    });
+    if (options.existingJobId) {
+      await deleteSyncJob(options.existingJobId);
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Connection audit sync failed.";
+    if (options.queueOnFailure) {
+      await enqueueSyncJob(DEVICE_CONNECTION_SYNC_JOB_TYPE, payload);
+    }
+    await updateDeviceConnectionSyncState({
+      deviceId: payload.deviceId,
+      errorMessage,
+      failureStage: "record_connection_test",
+      status: "failed",
+      updatedAt: Date.now(),
+    });
+    throw error;
+  }
+}
+
+function isConnectionSyncJobPayload(payload: unknown): payload is ConnectionSyncJobPayload {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Partial<ConnectionSyncJobPayload>;
+  return (
+    typeof candidate.deviceId === "string" &&
+    (candidate.lastSeenAt === undefined || typeof candidate.lastSeenAt === "number") &&
+    (candidate.status === "success" || candidate.status === "failed") &&
+    typeof candidate.summary === "string" &&
+    typeof candidate.transport === "string"
+  );
 }
 
 export async function assignColdGuardDevice(args: {
@@ -335,6 +436,9 @@ export async function decommissionColdGuardDevice(args: {
     handshakeToken,
   });
   await decommissionManagedDevice(args.deviceId);
+  await deleteDeviceActionTicket("admin", args.deviceId, "decommission");
+  await deleteDeviceActionTicket("device", args.deviceId, "connect");
+  await deleteDeviceActionTicket("device", args.deviceId, "wifi_provision");
   await deleteConnectionGrant("admin", args.deviceId);
   await deleteConnectionGrant("device", args.deviceId);
 }

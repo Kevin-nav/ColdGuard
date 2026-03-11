@@ -150,13 +150,23 @@ export class RealColdGuardBleClient {
     const { device, hello } = await connectAndHello(args.deviceId);
 
     try {
+      const proofTimestamp = Date.now();
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
       await sendCommand(device, "enroll.begin", {
         bootstrapToken: args.bootstrapToken,
         deviceId: args.deviceId,
         grantToken: args.adminGrant.token,
+        handshakeProof,
         handshakeToken: args.handshakeToken,
         institutionId: args.institutionId,
         nickname: args.nickname,
+        proofTimestamp,
       });
       await sendCommand(device, "enroll.commit", {});
     } finally {

@@ -9,12 +9,18 @@ import {
 const mockRunAsync: jest.Mock<any, any> = jest.fn(async () => undefined);
 const mockGetAllAsync: jest.Mock<any, any> = jest.fn(async () => []);
 const mockGetFirstAsync: jest.Mock<any, any> = jest.fn(async () => null);
+const mockWithExclusiveTransactionAsync: jest.Mock<any, any> = jest.fn(async (task) =>
+  task({
+    runAsync: mockRunAsync,
+  }),
+);
 
 jest.mock("./client", () => ({
   initializeSQLite: jest.fn(async () => ({
     runAsync: mockRunAsync,
     getAllAsync: mockGetAllAsync,
     getFirstAsync: mockGetFirstAsync,
+    withExclusiveTransactionAsync: mockWithExclusiveTransactionAsync,
   })),
 }));
 
@@ -36,9 +42,14 @@ test("saves legacy seeded devices for an institution", async () => {
     },
   ]);
 
-  expect(mockRunAsync).toHaveBeenNthCalledWith(1, "BEGIN TRANSACTION");
+  expect(mockWithExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
-    3,
+    1,
+    "DELETE FROM devices WHERE institution_id = ?",
+    "Korle-Bu Teaching Hospital",
+  );
+  expect(mockRunAsync).toHaveBeenNthCalledWith(
+    2,
     expect.stringContaining("INSERT INTO devices"),
     "d1",
     "Korle-Bu Teaching Hospital",
@@ -49,7 +60,7 @@ test("saves legacy seeded devices for an institution", async () => {
     1,
     "enrolled",
     1,
-    "manager",
+    "viewer",
     null,
     null,
     "[]",
@@ -61,7 +72,6 @@ test("saves legacy seeded devices for an institution", async () => {
     null,
     "idle",
   );
-  expect(mockRunAsync).toHaveBeenLastCalledWith("COMMIT");
 });
 
 test("replaces cached backend-backed devices for an institution", async () => {
@@ -92,21 +102,16 @@ test("replaces cached backend-backed devices for an institution", async () => {
     ],
   });
 
-  expect(mockRunAsync).toHaveBeenNthCalledWith(1, "BEGIN TRANSACTION");
+  expect(mockWithExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
-    2,
+    1,
     "DELETE FROM devices WHERE institution_id = ?",
     "institution-1",
   );
-  expect(mockRunAsync).toHaveBeenLastCalledWith("COMMIT");
 });
 
-test("rolls back device replacement when an insert fails", async () => {
-  mockRunAsync
-    .mockResolvedValueOnce(undefined)
-    .mockResolvedValueOnce(undefined)
-    .mockRejectedValueOnce(new Error("insert failed"))
-    .mockResolvedValueOnce(undefined);
+test("propagates insert failures from the exclusive transaction helper", async () => {
+  mockRunAsync.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("insert failed"));
 
   await expect(
     replaceCachedDevicesForInstitution({
@@ -137,13 +142,12 @@ test("rolls back device replacement when an insert fails", async () => {
     }),
   ).rejects.toThrow("insert failed");
 
-  expect(mockRunAsync).toHaveBeenNthCalledWith(1, "BEGIN TRANSACTION");
+  expect(mockWithExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
-    2,
+    1,
     "DELETE FROM devices WHERE institution_id = ?",
     "institution-1",
   );
-  expect(mockRunAsync).toHaveBeenLastCalledWith("ROLLBACK");
 });
 
 test("loads devices by institution id or name", async () => {

@@ -68,13 +68,11 @@ export async function replaceDevicesForInstitution(
   devices: Omit<DeviceRecord, "institutionId" | "institutionName">[],
 ) {
   const database = await initializeSQLite();
-  await database.runAsync("BEGIN TRANSACTION");
-
-  try {
-    await database.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
+  await database.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
 
     for (const device of devices) {
-      await database.runAsync(
+      await txn.runAsync(
         `
           INSERT INTO devices
           (
@@ -107,16 +105,7 @@ export async function replaceDevicesForInstitution(
         device.lastConnectionTestStatus,
       );
     }
-
-    await database.runAsync("COMMIT");
-  } catch (error) {
-    try {
-      await database.runAsync("ROLLBACK");
-    } catch {
-      // Preserve the original write error if rollback also fails.
-    }
-    throw error;
-  }
+  });
 }
 
 export async function saveDevicesForInstitution(
@@ -275,7 +264,7 @@ function normalizeSavedDevice(
   device: LegacySavedDevice | Omit<DeviceRecord, "institutionId" | "institutionName">,
 ): Omit<DeviceRecord, "institutionId" | "institutionName"> {
   return {
-    accessRole: "accessRole" in device ? device.accessRole : "manager",
+    accessRole: "accessRole" in device ? device.accessRole : "viewer",
     batteryLevel: device.batteryLevel,
     currentTempC: device.currentTempC,
     doorOpen: device.doorOpen,

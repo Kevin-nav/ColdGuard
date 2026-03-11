@@ -60,6 +60,7 @@ String wifiPassword;
 String lastVerifiedPermission;
 uint32_t grantVersion = 0;
 unsigned long verifiedSessionUntilMs = 0;
+unsigned long wifiTicketExpiryMs = 0;
 bool accessPointStarted = false;
 
 struct PendingEnrollment {
@@ -339,6 +340,7 @@ void resetEnrollment() {
   grantVersion = 0;
   pendingEnrollment = PendingEnrollment{};
   verifiedSessionUntilMs = 0;
+  wifiTicketExpiryMs = 0;
   lastVerifiedPermission = "";
   bootstrapToken = generateBootstrapToken();
   if (accessPointStarted) {
@@ -505,7 +507,11 @@ String buildHelloResponse(const String& requestId) {
          "}";
 }
 
-bool validateGrantClaims(const String& payloadJson, const String& expectedInstitutionId, const String& requiredPermission) {
+bool validateGrantClaims(
+  const String& payloadJson,
+  const String& expectedInstitutionId,
+  const String& requiredPermission,
+  long long currentEpochMs) {
   if (getJsonString(payloadJson, "iss") != kGrantIssuer) {
     return false;
   }
@@ -523,7 +529,6 @@ bool validateGrantClaims(const String& payloadJson, const String& expectedInstit
   }
 
   const long long exp = getJsonInt64(payloadJson, "exp", 0);
-  const long long currentEpochMs = static_cast<long long>(kEpochBaseMs + millis());
   if (exp <= currentEpochMs) {
     return false;
   }
@@ -535,7 +540,12 @@ bool validateGrantClaims(const String& payloadJson, const String& expectedInstit
   return permission == "connect" || permission == "manage";
 }
 
-bool verifySignedGrant(const String& grantToken, const String& expectedInstitutionId, const String& requiredPermission, uint32_t* nextGrantVersion) {
+bool verifySignedGrant(
+  const String& grantToken,
+  const String& expectedInstitutionId,
+  const String& requiredPermission,
+  long long currentEpochMs,
+  uint32_t* nextGrantVersion) {
   const int firstDot = grantToken.indexOf('.');
   const int secondDot = grantToken.indexOf('.', firstDot + 1);
   if (firstDot <= 0 || secondDot <= firstDot + 1) {
@@ -555,7 +565,7 @@ bool verifySignedGrant(const String& grantToken, const String& expectedInstituti
     return false;
   }
 
-  if (!validateGrantClaims(decodedPayload, expectedInstitutionId, requiredPermission)) {
+  if (!validateGrantClaims(decodedPayload, expectedInstitutionId, requiredPermission, currentEpochMs)) {
     return false;
   }
 
@@ -613,24 +623,22 @@ bool verifySignedGrant(const String& grantToken, const String& expectedInstituti
   return true;
 }
 
-bool verifyHandshakeProof(const String& proof, long long timestampMs) {
-  if (handshakeToken.isEmpty() || lastDeviceNonce.isEmpty()) {
+bool verifyHandshakeProofWithToken(const String& sessionHandshakeToken, const String& proof, long long timestampMs) {
+  if (sessionHandshakeToken.isEmpty() || lastDeviceNonce.isEmpty()) {
     return false;
   }
 
-  const unsigned long nowMs = millis();
-  const uint64_t currentPseudoEpoch = kEpochBaseMs + nowMs;
-  const uint64_t submittedEpoch = static_cast<uint64_t>(timestampMs);
-  const uint64_t delta = (currentPseudoEpoch > submittedEpoch)
-    ? (currentPseudoEpoch - submittedEpoch)
-    : (submittedEpoch - currentPseudoEpoch);
-  if (delta > kProofWindowMs) {
+  if (timestampMs <= 0) {
     return false;
   }
 
   const String canonical = lastDeviceNonce + "|" + deviceId + "|" + String(timestampMs);
-  const String expectedProof = hmacSha256Hex(handshakeToken, canonical);
+  const String expectedProof = hmacSha256Hex(sessionHandshakeToken, canonical);
   return !expectedProof.isEmpty() && constantTimeEquals(expectedProof, proof);
+}
+
+bool verifyHandshakeProof(const String& proof, long long timestampMs) {
+  return verifyHandshakeProofWithToken(handshakeToken, proof, timestampMs);
 }
 
 bool hasVerifiedSession(const String& requiredPermission) {
@@ -660,6 +668,13 @@ String buildErrorResponse(const String& command, const String& requestId, const 
 }
 
 bool ensureSoftApStarted() {
+  if (accessPointStarted && wifiTicketExpiryMs != 0 && static_cast<long>(millis() - wifiTicketExpiryMs) > 0) {
+    webServer.stop();
+    WiFi.softAPdisconnect(true);
+    accessPointStarted = false;
+    wifiTicketExpiryMs = 0;
+  }
+
   if (accessPointStarted) {
     return true;
   }
@@ -674,6 +689,14 @@ bool ensureSoftApStarted() {
 
   webServer.stop();
   webServer.on("/api/v1/connection-test", HTTP_GET, []() {
+    if (wifiTicketExpiryMs == 0 || static_cast<long>(millis() - wifiTicketExpiryMs) > 0) {
+      webServer.send(
+        401,
+        "application/json",
+        "{\"ok\":false,\"errorCode\":\"WIFI_TICKET_EXPIRED\",\"message\":\"Wi-Fi ticket expired.\"}");
+      return;
+    }
+
     const unsigned long nowMs = millis();
     const float temp = 4.2f + static_cast<float>((nowMs / 1000UL) % 5) * 0.1f;
     const int batteryLevel = 87 + static_cast<int>((nowMs / 5000UL) % 7);
@@ -718,21 +741,33 @@ void handleEnrollBegin(const String& payload, const String& requestId) {
   const String incomingInstitutionId = getJsonString(payload, "institutionId");
   const String incomingNickname = getJsonString(payload, "nickname");
   const String incomingHandshakeToken = getJsonString(payload, "handshakeToken");
+  const String handshakeProof = getJsonString(payload, "handshakeProof");
   const String grantToken = getJsonString(payload, "grantToken");
+  const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
 
   if (incomingDeviceId != deviceId || incomingBootstrapToken != bootstrapToken) {
     sendBleResponse(buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_BOOTSTRAP_INVALID", "Bootstrap token or device id did not match."));
     return;
   }
 
-  uint32_t nextGrantVersion = 0;
-  if (!verifySignedGrant(grantToken, incomingInstitutionId, "manage", &nextGrantVersion)) {
-    sendBleResponse(buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_GRANT_INVALID", "Supervisor enrollment grant verification failed."));
+  if (incomingInstitutionId.isEmpty()) {
+    sendBleResponse(buildErrorResponse("enroll.begin", requestId, "INSTITUTION_REQUIRED", "Institution id is required for enrollment."));
     return;
   }
 
   if (incomingHandshakeToken.isEmpty()) {
     sendBleResponse(buildErrorResponse("enroll.begin", requestId, "HANDSHAKE_TOKEN_REQUIRED", "Handshake token is required for enrollment."));
+    return;
+  }
+
+  if (!verifyHandshakeProofWithToken(incomingHandshakeToken, handshakeProof, proofTimestamp)) {
+    sendBleResponse(buildErrorResponse("enroll.begin", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate."));
+    return;
+  }
+
+  uint32_t nextGrantVersion = 0;
+  if (!verifySignedGrant(grantToken, incomingInstitutionId, "manage", proofTimestamp, &nextGrantVersion)) {
+    sendBleResponse(buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_GRANT_INVALID", "Supervisor enrollment grant verification failed."));
     return;
   }
 
@@ -792,18 +827,18 @@ void handleGrantVerify(const String& payload, const String& requestId) {
   }
 
   uint32_t nextGrantVersion = 0;
-  if (!verifySignedGrant(grantToken, institutionId, "connect", &nextGrantVersion)) {
+  if (!verifyHandshakeProof(handshakeProof, proofTimestamp)) {
+    sendBleResponse(buildErrorResponse("grant.verify", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate."));
+    return;
+  }
+
+  if (!verifySignedGrant(grantToken, institutionId, "connect", proofTimestamp, &nextGrantVersion)) {
     sendBleResponse(buildErrorResponse("grant.verify", requestId, "GRANT_INVALID", "Signed grant verification failed."));
     return;
   }
 
   if (nextGrantVersion < grantVersion) {
     sendBleResponse(buildErrorResponse("grant.verify", requestId, "GRANT_VERSION_STALE", "Grant version is older than the enrolled version."));
-    return;
-  }
-
-  if (!verifyHandshakeProof(handshakeProof, proofTimestamp)) {
-    sendBleResponse(buildErrorResponse("grant.verify", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate."));
     return;
   }
 
@@ -831,6 +866,8 @@ void handleWifiTicketRequest(const String& requestId) {
     return;
   }
 
+  wifiTicketExpiryMs = millis() + 60000UL;
+
   sendBleResponse("{"
                   "\"ok\":true,"
                   "\"command\":\"wifi.ticket.request\","
@@ -838,7 +875,7 @@ void handleWifiTicketRequest(const String& requestId) {
                   "\"ssid\":\"" + escapeJson(wifiSsid) + "\","
                   "\"password\":\"" + escapeJson(wifiPassword) + "\","
                   "\"testUrl\":\"http://192.168.4.1/api/v1/connection-test\","
-                  "\"expiresAt\":" + uint64ToString(kEpochBaseMs + millis() + 60000UL)
+                  "\"expiresAt\":" + uint64ToString(kEpochBaseMs + wifiTicketExpiryMs)
                   + "}");
 }
 
@@ -853,13 +890,18 @@ void handleDecommission(const String& payload, const String& requestId) {
   const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
 
   uint32_t nextGrantVersion = 0;
-  if (!verifySignedGrant(grantToken, institutionId, "manage", &nextGrantVersion)) {
+  if (!verifyHandshakeProof(handshakeProof, proofTimestamp)) {
+    sendBleResponse(buildErrorResponse("device.decommission", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate."));
+    return;
+  }
+
+  if (!verifySignedGrant(grantToken, institutionId, "manage", proofTimestamp, &nextGrantVersion)) {
     sendBleResponse(buildErrorResponse("device.decommission", requestId, "GRANT_INVALID", "Supervisor decommission grant verification failed."));
     return;
   }
 
-  if (!verifyHandshakeProof(handshakeProof, proofTimestamp)) {
-    sendBleResponse(buildErrorResponse("device.decommission", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate."));
+  if (nextGrantVersion <= grantVersion) {
+    sendBleResponse(buildErrorResponse("device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated."));
     return;
   }
 

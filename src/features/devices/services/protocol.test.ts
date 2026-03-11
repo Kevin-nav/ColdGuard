@@ -1,4 +1,5 @@
-import { decodeBleMessage, encodeBleMessage } from "./protocol";
+import { createHmac } from "crypto";
+import { createHandshakeProof, decodeBleMessage, encodeBleMessage } from "./protocol";
 
 type TestPayload = {
   ok: boolean;
@@ -40,4 +41,18 @@ test("throws a clear error when the BLE payload shape is invalid", () => {
   });
 
   expect(() => decodeBleMessage(encoded, isTestPayload)).toThrow("BLE_MESSAGE_SHAPE_INVALID");
+});
+
+test("creates the expected handshake proof without Web Crypto", async () => {
+  const canonical = "nonce-1|device-1|1700000000000";
+  const expected = createHmac("sha256", "handshake-token").update(canonical).digest("hex");
+
+  await expect(
+    createHandshakeProof({
+      deviceId: "device-1",
+      deviceNonce: "nonce-1",
+      handshakeToken: "handshake-token",
+      proofTimestamp: 1700000000000,
+    }),
+  ).resolves.toBe(expected);
 });

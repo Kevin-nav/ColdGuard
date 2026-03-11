@@ -27,6 +27,8 @@ Keep BLE serial logging, but redact known secret-bearing fields before printing.
 
 **Validation**
 
-- Verify both BLE serial log sites use the sanitizer.
-- Verify startup and SoftAP logs remain redacted by default.
-- Manual/source validation only; no firmware build is available in this session.
+- Add automated tests for the sanitizer itself using representative payloads that include `bootstrapToken`, `grantToken`, `handshakeToken`, `handshakeProof`, and `password`, and assert the logged copy is redacted.
+- Add automated tests for the BLE serial log sites in `CommandCallbacks::onWrite` and `sendBleResponse` so the tests prove redaction is applied to logging flow only and does not mutate the BLE payload bytes sent or received.
+- Add automated tests for the startup and SoftAP log formatting paths so `Bootstrap Token` and the SoftAP `password` are redacted by default.
+- Add automated tests for the `kVerboseSecretLogging` escape hatch so the same log paths remain unredacted only when explicitly enabled.
+- Add regression-oriented test names and assertions that reference the sanitizer, BLE serial log sites, startup/SoftAP logs, and the escape hatch directly so future log additions fail loudly if a sensitive field is emitted unredacted.

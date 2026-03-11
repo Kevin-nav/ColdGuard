@@ -28,6 +28,17 @@ export type DeviceRecord = {
   lastConnectionTestStatus: DeviceConnectionTestStatus;
 };
 
+export type LegacySavedDevice = {
+  id: string;
+  nickname: string;
+  macAddress: string;
+  currentTempC: number;
+  mktStatus: "safe" | "warning" | "alert";
+  batteryLevel: number;
+  doorOpen: boolean;
+  lastSeenAt: number;
+};
+
 type DeviceRow = {
   id: string;
   institution_id: string;
@@ -110,10 +121,14 @@ export async function replaceDevicesForInstitution(
 
 export async function saveDevicesForInstitution(
   institutionId: string,
-  devices: Omit<DeviceRecord, "institutionId" | "institutionName">[],
+  devices: (LegacySavedDevice | Omit<DeviceRecord, "institutionId" | "institutionName">)[],
   institutionName = institutionId,
 ) {
-  await replaceDevicesForInstitution(institutionId, institutionName, devices);
+  await replaceDevicesForInstitution(
+    institutionId,
+    institutionName,
+    devices.map((device) => normalizeSavedDevice(device)),
+  );
 }
 
 export async function replaceCachedDevicesForInstitution(args: {
@@ -254,6 +269,31 @@ function parseViewerNames(value: string) {
   } catch {
     return [];
   }
+}
+
+function normalizeSavedDevice(
+  device: LegacySavedDevice | Omit<DeviceRecord, "institutionId" | "institutionName">,
+): Omit<DeviceRecord, "institutionId" | "institutionName"> {
+  return {
+    accessRole: "accessRole" in device ? device.accessRole : "manager",
+    batteryLevel: device.batteryLevel,
+    currentTempC: device.currentTempC,
+    doorOpen: device.doorOpen,
+    firmwareVersion: "firmwareVersion" in device ? device.firmwareVersion : "legacy-fw-unknown",
+    grantVersion: "grantVersion" in device ? device.grantVersion : 1,
+    id: device.id,
+    lastConnectionTestAt: "lastConnectionTestAt" in device ? device.lastConnectionTestAt : null,
+    lastConnectionTestStatus: "lastConnectionTestStatus" in device ? device.lastConnectionTestStatus : "idle",
+    lastSeenAt: device.lastSeenAt,
+    macAddress: device.macAddress,
+    mktStatus: device.mktStatus,
+    nickname: device.nickname,
+    primaryAssigneeName: "primaryAssigneeName" in device ? device.primaryAssigneeName : null,
+    primaryAssigneeStaffId: "primaryAssigneeStaffId" in device ? device.primaryAssigneeStaffId : null,
+    protocolVersion: "protocolVersion" in device ? device.protocolVersion : 1,
+    status: "status" in device ? device.status : "enrolled",
+    viewerNames: "viewerNames" in device ? device.viewerNames : [],
+  };
 }
 
 function mapDeviceRow(row: DeviceRow): DeviceRecord {

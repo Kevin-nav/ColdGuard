@@ -220,6 +220,36 @@ function ensureSupervisorAdminGrantTargetOwnership(
   }
 }
 
+function ensureExistingEnrollmentOwnership(
+  device: { institutionId: string },
+  userInstitutionId: string,
+) {
+  if (device.institutionId !== userInstitutionId) {
+    throw new Error("DEVICE_ACCESS_DENIED");
+  }
+}
+
+async function ensureUserCanAccessDevice(ctx: any, user: AuthenticatedUser, deviceId: string) {
+  if (user.role === "Supervisor") {
+    return;
+  }
+
+  if (!user.staffId) {
+    throw new Error("DEVICE_ACCESS_DENIED");
+  }
+
+  const assignments = await ctx.db
+    .query("deviceAssignments")
+    .withIndex("by_institution_staff_active", (q: any) =>
+      q.eq("institutionId", user.institutionId).eq("staffId", user.staffId).eq("isActive", true),
+    )
+    .collect();
+
+  if (!assignments.some((item: any) => item.deviceId === deviceId)) {
+    throw new Error("DEVICE_ACCESS_DENIED");
+  }
+}
+
 async function mapDeviceSummary(ctx: any, device: any) {
   const assignments = await listActiveAssignments(ctx, device.deviceId);
   const primaryAssignment = assignments.find((assignment: any) => assignment.assignmentRole === "primary") ?? null;
@@ -342,22 +372,7 @@ export const issueConnectionGrant = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const device = await getActiveDeviceOrThrow(ctx, user.institutionId, args.deviceId);
-
-    if (user.role !== "Supervisor") {
-      if (!user.staffId) {
-        throw new Error("DEVICE_ACCESS_DENIED");
-      }
-
-      const assignment = await ctx.db
-        .query("deviceAssignments")
-        .withIndex("by_institution_staff_active", (q: any) =>
-          q.eq("institutionId", user.institutionId).eq("staffId", user.staffId).eq("isActive", true),
-        )
-        .collect();
-      if (!assignment.some((item: any) => item.deviceId === args.deviceId)) {
-        throw new Error("DEVICE_ACCESS_DENIED");
-      }
-    }
+    await ensureUserCanAccessDevice(ctx, user, args.deviceId);
 
     return await buildGrant({
       deviceId: args.deviceId,
@@ -389,12 +404,13 @@ export const registerEnrollment = mutation({
       .unique();
 
     if (existing) {
+      ensureExistingEnrollmentOwnership(existing, user.institutionId);
+
       await ctx.db.patch(existing._id, {
         bleName: args.bleName,
         decommissionedAt: undefined,
         firmwareVersion: args.firmwareVersion,
         grantVersion: existing.grantVersion + 1,
-        institutionId: user.institutionId as any,
         macAddress: args.macAddress,
         nickname: args.nickname.trim(),
         protocolVersion: args.protocolVersion,
@@ -447,7 +463,7 @@ export const assignDevice = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireSupervisor(ctx);
-    await getActiveDeviceOrThrow(ctx, user.institutionId, args.deviceId);
+    const device = await getActiveDeviceOrThrow(ctx, user.institutionId, args.deviceId);
 
     const staffIds = Array.from(new Set([args.primaryStaffId, ...args.viewerStaffIds])).filter(Boolean);
     const availableNurses = await ctx.db
@@ -475,6 +491,11 @@ export const assignDevice = mutation({
         revokedAt: now,
       });
     }
+
+    await ctx.db.patch(device._id, {
+      grantVersion: device.grantVersion + 1,
+      updatedAt: now,
+    });
 
     for (const staffId of staffIds) {
       const nurse = nursesByStaffId.get(staffId)!;
@@ -562,6 +583,7 @@ export const recordConnectionTest = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const device = await getActiveDeviceOrThrow(ctx, user.institutionId, args.deviceId);
+    await ensureUserCanAccessDevice(ctx, user, args.deviceId);
     const now = Date.now();
 
     await ctx.db.patch(device._id, {
@@ -590,7 +612,9 @@ export const recordConnectionTest = mutation({
 });
 
 export const __testing = {
+  ensureExistingEnrollmentOwnership,
   ensureSupervisorAdminGrantTargetOwnership,
+  ensureUserCanAccessDeviceForTesting: ensureUserCanAccessDevice,
   async buildGrantForTesting(args: {
     deviceId: string;
     expiresAt: number;

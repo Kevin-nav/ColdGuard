@@ -1,4 +1,6 @@
 import { decode as decodeBase64, encode as encodeBase64 } from "base-64";
+import Hex from "crypto-js/enc-hex";
+import HmacSHA256 from "crypto-js/hmac-sha256";
 
 export const COLDGUARD_BLE_SERVICE_UUID = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110";
 export const COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C111";
@@ -18,17 +20,8 @@ export async function createHandshakeProof(args: {
   handshakeToken: string;
   proofTimestamp: number;
 }) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(args.handshakeToken),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-
   const canonical = `${args.deviceNonce}|${args.deviceId}|${args.proofTimestamp}`;
-  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(canonical));
-  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return HmacSHA256(canonical, args.handshakeToken).toString(Hex);
 }
 
 type BleMessageValidator<T> = (value: unknown) => value is T;

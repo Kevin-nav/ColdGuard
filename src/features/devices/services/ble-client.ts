@@ -50,6 +50,68 @@ function isGenericBleResponse(value: unknown): value is GenericBleResponse {
   );
 }
 
+function isHelloResponse(value: unknown): value is HelloResponse {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.command === "hello" &&
+    typeof candidate.bleName === "string" &&
+    typeof candidate.deviceId === "string" &&
+    typeof candidate.deviceNonce === "string" &&
+    typeof candidate.firmwareVersion === "string" &&
+    typeof candidate.macAddress === "string" &&
+    typeof candidate.ok === "boolean" &&
+    typeof candidate.protocolVersion === "number" &&
+    Number.isFinite(candidate.protocolVersion) &&
+    typeof candidate.requestId === "string" &&
+    (candidate.state === "blank" || candidate.state === "enrolled")
+  );
+}
+
+function parseHelloResponse(helloResponse: GenericBleResponse): HelloResponse {
+  if (!isHelloResponse(helloResponse)) {
+    throw new Error("BLE_INVALID_HELLO_RESPONSE");
+  }
+
+  return helloResponse;
+}
+
+function requireWifiTicketStringField(
+  response: GenericBleResponse,
+  fieldName: "password" | "ssid" | "testUrl",
+) {
+  const value = response[fieldName];
+  if (value === null || value === undefined) {
+    throw new Error(`BLE_WIFI_TICKET_${fieldName.toUpperCase()}_MISSING`);
+  }
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`BLE_WIFI_TICKET_${fieldName.toUpperCase()}_INVALID`);
+  }
+  return value;
+}
+
+function parseWifiTicketResponse(response: GenericBleResponse): ColdGuardWifiTicket {
+  const expiresAt = response.expiresAt;
+  if (expiresAt === null || expiresAt === undefined) {
+    throw new Error("BLE_WIFI_TICKET_EXPIRES_AT_MISSING");
+  }
+
+  const normalizedExpiresAt = typeof expiresAt === "number" ? expiresAt : Number(expiresAt);
+  if (!Number.isFinite(normalizedExpiresAt)) {
+    throw new Error("BLE_WIFI_TICKET_EXPIRES_AT_INVALID");
+  }
+
+  return {
+    expiresAt: normalizedExpiresAt,
+    password: requireWifiTicketStringField(response, "password"),
+    ssid: requireWifiTicketStringField(response, "ssid"),
+    testUrl: requireWifiTicketStringField(response, "testUrl"),
+  };
+}
+
 function getBleManager() {
   if (!bleManager) {
     bleManager = new BleManager();
@@ -136,12 +198,7 @@ export class RealColdGuardBleClient {
       });
 
       const response = await sendCommand(device, "wifi.ticket.request", {});
-      return {
-        expiresAt: Number(response.expiresAt),
-        password: String(response.password),
-        ssid: String(response.ssid),
-        testUrl: String(response.testUrl),
-      };
+      return parseWifiTicketResponse(response);
     } finally {
       await device.cancelConnection().catch(() => undefined);
     }
@@ -204,7 +261,14 @@ async function connectAndHello(expectedDeviceId: string) {
   await connectedDevice.discoverAllServicesAndCharacteristics();
 
   const helloResponse = await sendCommand(connectedDevice, "hello", {});
-  const hello = helloResponse as HelloResponse;
+  let hello: HelloResponse;
+  try {
+    hello = parseHelloResponse(helloResponse);
+  } catch (error) {
+    await connectedDevice.cancelConnection().catch(() => undefined);
+    throw error;
+  }
+
   if (hello.deviceId !== expectedDeviceId) {
     await connectedDevice.cancelConnection().catch(() => undefined);
     throw new Error("BLE_DEVICE_ID_MISMATCH");
@@ -339,3 +403,8 @@ async function sendCommand(device: Device, command: string, body: Record<string,
       });
   });
 }
+
+export const __testing = {
+  parseHelloResponse,
+  parseWifiTicketResponse,
+};

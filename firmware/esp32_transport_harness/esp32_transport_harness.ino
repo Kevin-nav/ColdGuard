@@ -634,7 +634,7 @@ bool verifyHandshakeProof(const String& proof, long long timestampMs) {
 }
 
 bool hasVerifiedSession(const String& requiredPermission) {
-  if (millis() > verifiedSessionUntilMs) {
+  if (static_cast<long>(millis() - verifiedSessionUntilMs) > 0) {
     return false;
   }
   if (requiredPermission == "manage") {

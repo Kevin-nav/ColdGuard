@@ -36,7 +36,32 @@ test("saves legacy seeded devices for an institution", async () => {
     },
   ]);
 
-  expect(mockRunAsync).toHaveBeenCalled();
+  expect(mockRunAsync).toHaveBeenNthCalledWith(1, "BEGIN TRANSACTION");
+  expect(mockRunAsync).toHaveBeenNthCalledWith(
+    3,
+    expect.stringContaining("INSERT INTO devices"),
+    "d1",
+    "Korle-Bu Teaching Hospital",
+    "Korle-Bu Teaching Hospital",
+    "Cold Room A",
+    "AA:BB:CC:DD:01",
+    "legacy-fw-unknown",
+    1,
+    "enrolled",
+    1,
+    "manager",
+    null,
+    null,
+    "[]",
+    4.5,
+    "safe",
+    92,
+    0,
+    1000,
+    null,
+    "idle",
+  );
+  expect(mockRunAsync).toHaveBeenLastCalledWith("COMMIT");
 });
 
 test("replaces cached backend-backed devices for an institution", async () => {

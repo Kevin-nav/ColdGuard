@@ -68,6 +68,17 @@ export const SQLITE_TABLE_DEFINITIONS = {
       PRIMARY KEY (scope_type, scope_id)
     );
   `,
+  deviceActionTickets: `
+    CREATE TABLE IF NOT EXISTS device_action_tickets (
+      scope_type TEXT NOT NULL,
+      scope_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (scope_type, scope_id, action)
+    );
+  `,
   notificationCache: `
     CREATE TABLE IF NOT EXISTS notification_cache (
       incident_id TEXT PRIMARY KEY NOT NULL,
@@ -148,6 +159,7 @@ export const SQLITE_SCHEMA_STATEMENTS = [
   SQLITE_TABLE_DEFINITIONS.readings,
   SQLITE_TABLE_DEFINITIONS.syncJobs,
   SQLITE_TABLE_DEFINITIONS.connectionGrants,
+  SQLITE_TABLE_DEFINITIONS.deviceActionTickets,
   SQLITE_TABLE_DEFINITIONS.notificationCache,
   SQLITE_TABLE_DEFINITIONS.notificationStateCache,
   SQLITE_TABLE_DEFINITIONS.notificationPreferencesCache,

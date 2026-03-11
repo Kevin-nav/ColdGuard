@@ -243,6 +243,43 @@ test("loads a single device by id", async () => {
   );
 });
 
+test("loads a single device by id with legacy institution normalization when institution id is provided", async () => {
+  mockGetFirstAsync.mockResolvedValue({
+    id: "d1",
+    institution_id: "institution-1",
+    institution_name: "Korle-Bu Teaching Hospital",
+    nickname: "Cold Room A",
+    mac_address: "AA:BB:CC:DD:01",
+    firmware_version: "fw-1.0.0",
+    protocol_version: 1,
+    device_status: "enrolled",
+    grant_version: 2,
+    access_role: "viewer",
+    primary_assignee_name: null,
+    primary_assignee_staff_id: null,
+    viewer_names_json: "[]",
+    current_temp_c: 4.5,
+    mkt_status: "safe",
+    battery_level: 92,
+    door_open: 0,
+    last_seen_at: 1000,
+    last_connection_test_at: null,
+    last_connection_test_status: null,
+  });
+
+  await expect(getDeviceById("d1", "institution-1")).resolves.toEqual(
+    expect.objectContaining({
+      institutionId: "institution-1",
+    }),
+  );
+
+  expect(mockGetFirstAsync).toHaveBeenCalledWith(
+    expect.stringContaining("COALESCE(NULLIF(institution_id, ''), ?) AS institution_id"),
+    "institution-1",
+    "d1",
+  );
+});
+
 test("updates cached connection test status", async () => {
   await updateDeviceConnectionTestStatus({
     deviceId: "device-1",

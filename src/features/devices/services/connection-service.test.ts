@@ -12,8 +12,8 @@ const mockGetDeviceById = jest.fn();
 const mockSaveDeviceConnectionSnapshot = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
 const mockGetClinicHandshakeToken = jest.fn();
-const mockEnsureDeviceConnectionGrant = jest.fn();
-const mockEnsureSupervisorAdminGrant = jest.fn();
+const mockEnsureDeviceActionTicket = jest.fn();
+const mockEnsureSupervisorActionTicket = jest.fn();
 const mockRegisterEnrolledDevice = jest.fn();
 const mockDecommissionManagedDevice = jest.fn();
 const mockRecordDeviceConnectionTest = jest.fn();
@@ -40,8 +40,8 @@ jest.mock("../../../lib/storage/secure-store", () => ({
 }));
 
 jest.mock("./device-directory", () => ({
-  ensureDeviceConnectionGrant: (...args: unknown[]) => mockEnsureDeviceConnectionGrant(...args),
-  ensureSupervisorAdminGrant: (...args: unknown[]) => mockEnsureSupervisorAdminGrant(...args),
+  ensureDeviceActionTicket: (...args: unknown[]) => mockEnsureDeviceActionTicket(...args),
+  ensureSupervisorActionTicket: (...args: unknown[]) => mockEnsureSupervisorActionTicket(...args),
   registerEnrolledDevice: (...args: unknown[]) => mockRegisterEnrolledDevice(...args),
   decommissionManagedDevice: (...args: unknown[]) => mockDecommissionManagedDevice(...args),
   recordDeviceConnectionTest: (...args: unknown[]) => mockRecordDeviceConnectionTest(...args),
@@ -49,28 +49,31 @@ jest.mock("./device-directory", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.restoreAllMocks();
   resetMockHardwareRegistry();
   mockGetClinicHandshakeToken.mockResolvedValue("handshake-token");
-  mockEnsureSupervisorAdminGrant.mockResolvedValue({
+  mockEnsureSupervisorActionTicket.mockResolvedValue({
+    action: "decommission",
+    counter: 1,
     deviceId: "CG-ESP32-A100",
-    exp: Date.now() + 60_000,
-    grantVersion: 1,
+    expiresAt: Date.now() + 60_000,
     institutionId: "institution-1",
-    issuedToFirebaseUid: "firebase-u1",
-    permission: "manage",
-    role: "Supervisor",
-    token: "admin-grant",
+    issuedAt: Date.now(),
+    mac: "admin-ticket-mac",
+    operatorId: "firebase-u1",
+    ticketId: "admin-ticket",
     v: 1,
   });
-  mockEnsureDeviceConnectionGrant.mockResolvedValue({
+  mockEnsureDeviceActionTicket.mockResolvedValue({
+    action: "connect",
+    counter: 1,
     deviceId: "CG-ESP32-A100",
-    exp: Date.now() + 60_000,
-    grantVersion: 1,
+    expiresAt: Date.now() + 60_000,
     institutionId: "institution-1",
-    issuedToFirebaseUid: "firebase-u2",
-    permission: "connect",
-    role: "Nurse",
-    token: "device-grant",
+    issuedAt: Date.now(),
+    mac: "device-ticket-mac",
+    operatorId: "firebase-u2",
+    ticketId: "device-ticket",
     v: 1,
   });
   mockRegisterEnrolledDevice.mockResolvedValue({
@@ -90,7 +93,7 @@ beforeEach(() => {
       currentTempC: 4.7,
       doorOpen: false,
       firmwareVersion: "fw-1.0.0",
-      lastSeenAt: Date.now(),
+      lastSeenAgeMs: 2_500,
       macAddress: "MOCK-A100",
       mktStatus: "safe",
       statusText: "Mock BLE-to-WiFi handover completed.",
@@ -143,6 +146,7 @@ test("enrolls a blank mock device and registers it", async () => {
 });
 
 test("runs a mock BLE-to-WiFi connection test and records success", async () => {
+  jest.spyOn(Date, "now").mockReturnValue(1_000_000);
   const payload = await runColdGuardConnectionTest({
     deviceId: "CG-ESP32-A100",
     bleClient: new MockColdGuardBleClient(),
@@ -168,10 +172,16 @@ test("runs a mock BLE-to-WiFi connection test and records success", async () => 
       status: "success",
     }),
   );
-  expect(mockSaveDeviceConnectionSnapshot).toHaveBeenCalled();
+  expect(mockSaveDeviceConnectionSnapshot).toHaveBeenCalledWith(
+    "CG-ESP32-A100",
+    expect.objectContaining({
+      lastSeenAt: 997_500,
+    }),
+  );
   expect(mockRecordDeviceConnectionTest).toHaveBeenCalledWith(
     expect.objectContaining({
       deviceId: "CG-ESP32-A100",
+      lastSeenAt: 997_500,
       status: "success",
       transport: "ble+wifi",
     }),

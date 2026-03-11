@@ -6,5 +6,7 @@ Setup notes:
 - the device prints both `Device ID` and `Bootstrap Token` to Serial on boot
 - the QR payload must use that printed bootstrap token, not a shared default token
 - grant verification now expects ES256 tokens signed by the backend private key from `COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64`
+- for Arduino IDE, use `Tools > Partition Scheme > No OTA (2MB APP/2MB SPIFFS)` on a 4MB `ESP32 Dev Module`
+- keep `Tools > Debug Level > None`; the core is already built with size optimization and the current sketch can exceed the default `1310720` byte app limit
 
 For the full contract and test flow, see `docs/runbooks/esp32-transport-harness.md`.

@@ -1,10 +1,19 @@
-import { __testing, assignDevice, recordConnectionTest, registerEnrollment } from "./devices";
+import {
+  __testing,
+  assignDevice,
+  issueDeviceActionTicket,
+  issueSupervisorActionTicket,
+  recordConnectionTest,
+  registerEnrollment,
+} from "./devices";
 
 beforeEach(() => {
   process.env.NODE_ENV = "test";
   process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 =
     "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgs27Y743ykh9PjkxziKEWvye/1w/2NNCs3w8ZQ8zpeDqhRANCAARWXAYGhrfHpfj16UZUSmVL56OnAOBf0BU6Eu+G5gajxwlQxJkuu6kxDxjvpRwp3V7sMkfBp8D1+K0CHnqgWk1P";
+  process.env.TEST_DEVICE_ACTION_TICKET_MASTER_KEY = "coldguard-test-master-key";
   delete process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64;
+  delete process.env.COLDGUARD_DEVICE_ACTION_TICKET_MASTER_KEY;
 });
 
 test("builds ES256 grants with issuer and key metadata", async () => {
@@ -89,6 +98,121 @@ test("rejects the test signing key outside test runtime", async () => {
       role: "Supervisor",
     }),
   ).rejects.toThrow("DEVICE_SIGNING_KEY_TEST_ENV_ONLY");
+});
+
+test("builds device action tickets with canonical metadata and mac", async () => {
+  const ticket = await __testing.buildActionTicketForTesting({
+    action: "connect",
+    counter: 7,
+    deviceId: "device-1",
+    expiresAt: 1_700_000_300_000,
+    institutionId: "institution-1",
+    issuedAt: 1_700_000_000_000,
+    operatorId: "firebase-user-1",
+    ticketId: "ticket-1",
+  });
+
+  expect(ticket).toMatchObject({
+    action: "connect",
+    counter: 7,
+    deviceId: "device-1",
+    expiresAt: 1_700_000_300_000,
+    institutionId: "institution-1",
+    issuedAt: 1_700_000_000_000,
+    operatorId: "firebase-user-1",
+    ticketId: "ticket-1",
+    v: 1,
+  });
+  expect(ticket.mac).toMatch(/^[0-9a-f]{64}$/);
+  expect(__testing.buildActionTicketCanonicalString(ticket)).toBe(
+    "1|ticket-1|device-1|institution-1|connect|1700000000000|1700000300000|7|firebase-user-1",
+  );
+});
+
+test("binds device action ticket macs to the target device", async () => {
+  const baseArgs = {
+    action: "connect" as const,
+    counter: 7,
+    expiresAt: 1_700_000_300_000,
+    institutionId: "institution-1",
+    issuedAt: 1_700_000_000_000,
+    operatorId: "firebase-user-1",
+    ticketId: "ticket-1",
+  };
+
+  const first = await __testing.buildActionTicketForTesting({
+    ...baseArgs,
+    deviceId: "device-1",
+  });
+  const second = await __testing.buildActionTicketForTesting({
+    ...baseArgs,
+    deviceId: "device-2",
+  });
+
+  expect(first.mac).not.toBe(second.mac);
+});
+
+test("issues short-lived supervisor action tickets for enroll", async () => {
+  const now = 1_700_000_000_000;
+  jest.spyOn(Date, "now").mockReturnValue(now);
+
+  const ctx = createMutationCtx({
+    user: {
+      _id: "user-1",
+      displayName: "Supervisor One",
+      firebaseUid: "firebase-user-1",
+      institutionId: "institution-1",
+      role: "Supervisor",
+      staffId: null,
+    },
+  });
+
+  const ticket = await (issueSupervisorActionTicket as any)._handler(ctx, {
+    action: "enroll",
+    deviceId: "device-1",
+  });
+
+  expect(ticket).toMatchObject({
+    action: "enroll",
+    counter: 1,
+    deviceId: "device-1",
+    expiresAt: now + 5 * 60 * 1000,
+    institutionId: "institution-1",
+    issuedAt: now,
+    operatorId: "firebase-user-1",
+    v: 1,
+  });
+  expect(ticket.mac).toMatch(/^[0-9a-f]{64}$/);
+
+  jest.restoreAllMocks();
+});
+
+test("rejects unauthorized device action ticket issuance for an unassigned nurse", async () => {
+  const ctx = createMutationCtx({
+    assignmentsByStaff: [],
+    device: {
+      _id: "device-row-1",
+      deviceId: "device-1",
+      grantVersion: 4,
+      institutionId: "institution-1",
+      status: "active",
+    },
+    user: {
+      _id: "user-2",
+      displayName: "Nurse One",
+      firebaseUid: "firebase-user-2",
+      institutionId: "institution-1",
+      role: "Nurse",
+      staffId: "KB1002",
+    },
+  });
+
+  await expect(
+    (issueDeviceActionTicket as any)._handler(ctx, {
+      action: "connect",
+      deviceId: "device-1",
+    }),
+  ).rejects.toThrow("DEVICE_ACCESS_DENIED");
 });
 
 test("rejects supervisor admin grants for devices owned by another institution", () => {

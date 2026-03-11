@@ -43,23 +43,25 @@ test("parses a valid hello response", () => {
       command: "hello",
       deviceId: "device-1",
       deviceNonce: "nonce-1",
+      deviceTimeMs: 1200,
       firmwareVersion: "fw-1.0.0",
       macAddress: "AA:BB:CC:DD:EE:01",
       ok: true,
       protocolVersion: 1,
       requestId: "req-1",
-      state: "enrolled",
+      state: "pending",
     }),
   ).toEqual(
     expect.objectContaining({
       command: "hello",
       deviceId: "device-1",
-      state: "enrolled",
+      deviceTimeMs: 1200,
+      state: "pending",
     }),
   );
 });
 
-test("rejects wifi ticket responses with missing expiresAt", () => {
+test("rejects wifi ticket responses with missing expiresInMs", () => {
   expect(() =>
     __testing.parseWifiTicketResponse({
       command: "wifi.ticket.request",
@@ -69,14 +71,14 @@ test("rejects wifi ticket responses with missing expiresAt", () => {
       ssid: "ColdGuard_A100",
       testUrl: "http://192.168.4.1/api/v1/connection-test",
     }),
-  ).toThrow("BLE_WIFI_TICKET_EXPIRES_AT_MISSING");
+  ).toThrow("BLE_WIFI_TICKET_EXPIRES_IN_MS_MISSING");
 });
 
 test("rejects wifi ticket responses with missing string fields", () => {
   expect(() =>
     __testing.parseWifiTicketResponse({
       command: "wifi.ticket.request",
-      expiresAt: Date.now() + 60_000,
+      expiresInMs: 60_000,
       ok: true,
       password: "pass-1",
       requestId: "req-1",
@@ -87,10 +89,11 @@ test("rejects wifi ticket responses with missing string fields", () => {
 });
 
 test("parses a valid wifi ticket response", () => {
+  jest.spyOn(Date, "now").mockReturnValue(1000);
   expect(
     __testing.parseWifiTicketResponse({
       command: "wifi.ticket.request",
-      expiresAt: `${Date.now() + 60_000}`,
+      expiresInMs: "60000",
       ok: true,
       password: "pass-1",
       requestId: "req-1",
@@ -98,9 +101,31 @@ test("parses a valid wifi ticket response", () => {
       testUrl: "http://192.168.4.1/api/v1/connection-test",
     }),
   ).toEqual({
-    expiresAt: expect.any(Number),
+    expiresAt: 61_000,
     password: "pass-1",
     ssid: "ColdGuard_A100",
     testUrl: "http://192.168.4.1/api/v1/connection-test",
   });
+  jest.restoreAllMocks();
+});
+
+test("creates a proof timestamp from device uptime plus local elapsed time", () => {
+  jest.spyOn(Date, "now").mockReturnValue(1600);
+  expect(
+    __testing.createProofTimestamp({
+      bleName: "ColdGuard_A100",
+      command: "hello",
+      deviceId: "device-1",
+      deviceNonce: "nonce-1",
+      deviceTimeMs: 5000,
+      firmwareVersion: "fw-1.0.0",
+      macAddress: "AA:BB:CC:DD:EE:01",
+      ok: true,
+      protocolVersion: 1,
+      receivedAtMs: 1200,
+      requestId: "req-1",
+      state: "blank",
+    }),
+  ).toBe(5400);
+  jest.restoreAllMocks();
 });

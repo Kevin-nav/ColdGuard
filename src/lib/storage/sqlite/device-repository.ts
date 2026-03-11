@@ -145,13 +145,7 @@ export async function getDevicesForInstitution(institutionId: string): Promise<D
   const database = await initializeSQLite();
   const rows = await database.getAllAsync<DeviceRow>(
     `
-      SELECT
-        id,
-        COALESCE(NULLIF(institution_id, ''), ?) AS institution_id,
-        institution_name, nickname, mac_address, firmware_version, protocol_version,
-        device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
-        viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
-        last_connection_test_at, last_connection_test_status
+      SELECT ${buildDeviceSelectClause(true)}
       FROM devices
       WHERE institution_id = ? OR institution_id = ''
       ORDER BY nickname ASC
@@ -163,18 +157,15 @@ export async function getDevicesForInstitution(institutionId: string): Promise<D
   return rows.map(mapDeviceRow);
 }
 
-export async function getDeviceById(deviceId: string): Promise<DeviceRecord | null> {
+export async function getDeviceById(deviceId: string, institutionId?: string): Promise<DeviceRecord | null> {
   const database = await initializeSQLite();
   const row = await database.getFirstAsync<DeviceRow>(
     `
-      SELECT
-        id, institution_id, institution_name, nickname, mac_address, firmware_version, protocol_version,
-        device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
-        viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
-        last_connection_test_at, last_connection_test_status
+      SELECT ${buildDeviceSelectClause(institutionId !== undefined)}
       FROM devices
       WHERE id = ?
     `,
+    ...(institutionId !== undefined ? [institutionId] : []),
     deviceId,
   );
 
@@ -264,6 +255,20 @@ function normalizeSavedDevice(
     status: "status" in device ? device.status : "enrolled",
     viewerNames: "viewerNames" in device ? device.viewerNames : [],
   };
+}
+
+function buildDeviceSelectClause(normalizeEmptyInstitutionId: boolean) {
+  const institutionIdSelect = normalizeEmptyInstitutionId
+    ? "COALESCE(NULLIF(institution_id, ''), ?) AS institution_id"
+    : "institution_id";
+  return `
+    id,
+    ${institutionIdSelect},
+    institution_name, nickname, mac_address, firmware_version, protocol_version,
+    device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
+    viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
+    last_connection_test_at, last_connection_test_status
+  `;
 }
 
 function mapDeviceRow(row: DeviceRow): DeviceRecord {

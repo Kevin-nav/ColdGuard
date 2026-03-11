@@ -66,11 +66,18 @@ async function backfillLegacyDeviceInstitutionIds(database: SQLiteDatabase) {
       WHERE id = 1
     )
     WHERE institution_id = ''
+      AND institution_name != ''
+      AND institution_name = (
+        SELECT institution_name
+        FROM profile_cache
+        WHERE id = 1
+      )
       AND EXISTS (
         SELECT 1
         FROM profile_cache
         WHERE id = 1
           AND institution_id != ''
+          AND institution_name != ''
       )
   `);
 }

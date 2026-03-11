@@ -105,4 +105,6 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("UPDATE devices"));
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("SET institution_id ="));
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("FROM profile_cache"));
+  expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("institution_name != ''"));
+  expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("institution_name = ("));
 });

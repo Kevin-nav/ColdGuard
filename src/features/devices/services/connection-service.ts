@@ -7,7 +7,7 @@ import {
 import type { ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
 import { getClinicHandshakeToken } from "../../../lib/storage/secure-store";
 import type {
-  CachedConnectionGrant,
+  CachedDeviceActionTicket,
   ColdGuardConnectionPayload,
   ColdGuardDiscoveredDevice,
   ColdGuardWifiTicket,
@@ -22,8 +22,8 @@ import { createColdGuardWifiBridge } from "./wifi-bridge";
 import {
   assignDeviceUsers,
   decommissionManagedDevice,
-  ensureDeviceConnectionGrant,
-  ensureSupervisorAdminGrant,
+  ensureDeviceActionTicket,
+  ensureSupervisorActionTicket,
   recordDeviceConnectionTest,
   registerEnrolledDevice,
 } from "./device-directory";
@@ -35,10 +35,17 @@ export type ConnectionTestPayload = ColdGuardConnectionPayload & {
   testUrl: string;
 };
 
+type RemoteConnectionPayload = Omit<ColdGuardConnectionPayload, "lastSeenAt"> & {
+  institutionId?: string;
+  lastSeenAgeMs?: number;
+  lastSeenAt?: number;
+  nickname?: string;
+};
+
 export interface ColdGuardBleClient {
   discoverDevice(args: { deviceId: string; expectedState: "blank" | "enrolled" }): Promise<ColdGuardDiscoveredDevice>;
   enrollDevice(args: {
-    adminGrant: CachedConnectionGrant;
+    actionTicket: CachedDeviceActionTicket;
     bootstrapToken: string;
     deviceId: string;
     handshakeToken: string;
@@ -46,12 +53,12 @@ export interface ColdGuardBleClient {
     nickname: string;
   }): Promise<ColdGuardDiscoveredDevice>;
   requestWifiTicket(args: {
+    actionTicket: CachedDeviceActionTicket;
     deviceId: string;
-    grant: CachedConnectionGrant;
     handshakeToken: string;
   }): Promise<ColdGuardWifiTicket>;
   decommissionDevice(args: {
-    adminGrant: CachedConnectionGrant;
+    actionTicket: CachedDeviceActionTicket;
     deviceId: string;
     handshakeToken: string;
   }): Promise<void>;
@@ -86,14 +93,14 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
   }
 
   async enrollDevice(args: {
-    adminGrant: CachedConnectionGrant;
+    actionTicket: CachedDeviceActionTicket;
     bootstrapToken: string;
     deviceId: string;
     handshakeToken: string;
     institutionId: string;
     nickname: string;
   }) {
-    if (!args.adminGrant.token || !args.handshakeToken) {
+    if (!args.actionTicket.mac || !args.handshakeToken) {
       throw new Error("DEVICE_ENROLLMENT_AUTH_FAILED");
     }
 
@@ -107,11 +114,11 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
   }
 
   async requestWifiTicket(args: {
+    actionTicket: CachedDeviceActionTicket;
     deviceId: string;
-    grant: CachedConnectionGrant;
     handshakeToken: string;
   }) {
-    if (!args.handshakeToken || !args.grant.token) {
+    if (!args.handshakeToken || !args.actionTicket.mac) {
       throw new Error("DEVICE_CONNECTION_AUTH_FAILED");
     }
 
@@ -125,11 +132,11 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
   }
 
   async decommissionDevice(args: {
-    adminGrant: CachedConnectionGrant;
+    actionTicket: CachedDeviceActionTicket;
     deviceId: string;
     handshakeToken: string;
   }) {
-    if (!args.handshakeToken || !args.adminGrant.token) {
+    if (!args.handshakeToken || !args.actionTicket.mac) {
       throw new Error("DEVICE_DECOMMISSION_AUTH_FAILED");
     }
 
@@ -153,11 +160,11 @@ export async function enrollColdGuardDevice(args: {
   const handshakeToken = await getRequiredClinicHandshakeToken();
   const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
   const bleClient = args.bleClient ?? realBleClient;
-  const adminGrant = await ensureSupervisorAdminGrant(args.profile, deviceId);
+  const actionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "enroll");
 
   await bleClient.discoverDevice({ deviceId, expectedState: "blank" });
   const enrolledDevice = await bleClient.enrollDevice({
-    adminGrant,
+    actionTicket,
     bootstrapToken,
     deviceId,
     handshakeToken,
@@ -194,7 +201,7 @@ export async function runColdGuardConnectionTest(args: {
 
   try {
     const handshakeToken = await getRequiredClinicHandshakeToken();
-    const grant = await ensureDeviceConnectionGrant(args.deviceId);
+    const actionTicket = await ensureDeviceActionTicket(args.deviceId, "connect");
     const bleClient = args.bleClient ?? realBleClient;
     const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
 
@@ -204,8 +211,8 @@ export async function runColdGuardConnectionTest(args: {
         expectedState: "enrolled",
       });
       const ticket = await bleClient.requestWifiTicket({
+        actionTicket,
         deviceId: args.deviceId,
-        grant,
         handshakeToken,
       });
       const network = await wifiBridge.connect(ticket);
@@ -213,15 +220,17 @@ export async function runColdGuardConnectionTest(args: {
       if (!response.ok) {
         throw new Error(`HTTP_CONNECTION_TEST_FAILED_${response.status}`);
       }
-      const remotePayload = (await response.json()) as ColdGuardConnectionPayload & {
-        institutionId?: string;
-        nickname?: string;
-      };
+      const remotePayload = (await response.json()) as RemoteConnectionPayload;
+      const receivedAt = Date.now();
+      const lastSeenAt = normalizeConnectionLastSeenAt(remotePayload, receivedAt);
+      const { institutionId: _institutionId, lastSeenAgeMs: _lastSeenAgeMs, lastSeenAt: _remoteLastSeenAt, nickname: _nickname, ...payloadBase } =
+        remotePayload;
 
       const payload: ConnectionTestPayload = {
-        ...remotePayload,
+        ...payloadBase,
+        lastSeenAt,
         localIp: network.localIp,
-        receivedAt: Date.now(),
+        receivedAt,
         ssid: ticket.ssid,
         testUrl: ticket.testUrl,
       };
@@ -281,6 +290,16 @@ export async function runColdGuardConnectionTest(args: {
   }
 }
 
+function normalizeConnectionLastSeenAt(payload: RemoteConnectionPayload, receivedAt: number) {
+  if (typeof payload.lastSeenAgeMs === "number" && Number.isFinite(payload.lastSeenAgeMs) && payload.lastSeenAgeMs >= 0) {
+    return receivedAt - payload.lastSeenAgeMs;
+  }
+  if (typeof payload.lastSeenAt === "number" && Number.isFinite(payload.lastSeenAt)) {
+    return payload.lastSeenAt;
+  }
+  return receivedAt;
+}
+
 export async function assignColdGuardDevice(args: {
   deviceId: string;
   primaryStaffId: string | null;
@@ -308,10 +327,10 @@ export async function decommissionColdGuardDevice(args: {
 
   const bleClient = args.bleClient ?? realBleClient;
   const handshakeToken = await getRequiredClinicHandshakeToken();
-  const adminGrant = await ensureSupervisorAdminGrant(args.profile, args.deviceId);
+  const actionTicket = await ensureSupervisorActionTicket(args.profile, args.deviceId, "decommission");
 
   await bleClient.decommissionDevice({
-    adminGrant,
+    actionTicket,
     deviceId: args.deviceId,
     handshakeToken,
   });

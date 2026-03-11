@@ -10,6 +10,24 @@ This harness gives the ColdGuard app a real ESP32 target for BLE enrollment, gra
 
 - Board: standard ESP32 DevKit
 - Tooling: Arduino IDE with Arduino-ESP32
+- Flash size assumption: 4MB module
+- Recommended Arduino IDE settings:
+  - `Tools > Partition Scheme > No OTA (2MB APP/2MB SPIFFS)`
+  - `Tools > Debug Level > None`
+
+## Build Size Notes
+
+The current transport harness links BLE, Wi-Fi, `WebServer`, `Preferences`, and `mbedtls` signature verification in one image. On the default `ESP32 Dev Module` partition layouts with a `1310720` byte app limit, the sketch can exceed available flash even before the full sensor stack is added.
+
+If Arduino IDE reports:
+
+```text
+Sketch uses 1688171 bytes (...) of program storage space. Maximum is 1310720 bytes.
+```
+
+switch the partition scheme to `No OTA (2MB APP/2MB SPIFFS)` or `Huge APP (3MB No OTA/1MB SPIFFS)` before treating it as a code bug.
+
+If the firmware keeps growing after that, the next reduction with the best payoff is migrating the BLE transport from classic ESP32 Bluedroid BLE to NimBLE, since this sketch only uses a basic GATT server and advertising flow.
 
 The sketch only uses Arduino-ESP32 built-ins:
 
@@ -45,6 +63,12 @@ id=<deviceId>;state=<blank|enrolled>;pv=1
 All BLE payloads are JSON strings written to the command characteristic. All responses are JSON strings notified on the response characteristic.
 
 ## Security Model
+
+Migration target:
+
+- The current harness behavior in this runbook is still the ES256-grant implementation.
+- The intended replacement model is documented in `docs/plans/2026-03-11-device-action-ticket-spec.md`.
+- That target model keeps backend authorization but replaces routine on-device public-key verification with short-lived per-device action tickets plus replay protection.
 
 ### Signed grant
 
@@ -194,18 +218,20 @@ Sample JSON shape:
 ## Flash and Test
 
 1. Open `firmware/esp32_transport_harness/esp32_transport_harness.ino` in Arduino IDE.
-2. Select your ESP32 DevKit board and serial port.
-3. Flash the sketch.
-4. Open Serial Monitor at `115200`.
-5. Note the generated `deviceId`.
-6. Note the generated `Bootstrap Token` from Serial Monitor.
-7. Create the QR URL:
+2. Select `ESP32 Dev Module` or your equivalent ESP32 DevKit board profile.
+3. Set `Tools > Partition Scheme > No OTA (2MB APP/2MB SPIFFS)`.
+4. Confirm `Tools > Debug Level > None`.
+5. Flash the sketch.
+6. Open Serial Monitor at `115200`.
+7. Note the generated `deviceId`.
+8. Note the generated `Bootstrap Token` from Serial Monitor.
+9. Create the QR URL:
 
 ```text
 https://coldguard.org/device/<deviceId>?claim=<bootstrapToken>&v=1
 ```
 
-8. Scan from the ColdGuard app and complete the BLE enrollment flow.
+10. Scan from the ColdGuard app and complete the BLE enrollment flow.
 
 ## Notes for App Integration
 

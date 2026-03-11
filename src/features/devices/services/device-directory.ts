@@ -1,13 +1,24 @@
 import { api } from "../../../../convex/_generated/api";
 import { getConvexClient } from "../../../lib/convex/client";
-import { getConnectionGrant, saveConnectionGrant } from "../../../lib/storage/sqlite/connection-grant-repository";
+import {
+  getConnectionGrant,
+  getDeviceActionTicket,
+  saveConnectionGrant,
+  saveDeviceActionTicket,
+} from "../../../lib/storage/sqlite/connection-grant-repository";
 import {
   getDevicesForInstitution,
   replaceCachedDevicesForInstitution,
   type DeviceRecord,
 } from "../../../lib/storage/sqlite/device-repository";
 import type { ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
-import type { CachedConnectionGrant, DeviceAssignmentCandidate, RemoteManagedDevice } from "../types";
+import type {
+  CachedConnectionGrant,
+  CachedDeviceActionTicket,
+  DeviceAction,
+  DeviceAssignmentCandidate,
+  RemoteManagedDevice,
+} from "../types";
 
 const GRANT_STALE_BUFFER_MS = 30_000;
 
@@ -56,6 +67,10 @@ function parseCachedGrant(payloadJson: string): CachedConnectionGrant {
   return JSON.parse(payloadJson) as CachedConnectionGrant;
 }
 
+function parseCachedActionTicket(payloadJson: string): CachedDeviceActionTicket {
+  return JSON.parse(payloadJson) as CachedDeviceActionTicket;
+}
+
 async function cacheGrant(scopeType: "admin" | "device", scopeId: string, grant: CachedConnectionGrant) {
   await saveConnectionGrant({
     expiresAt: grant.exp,
@@ -65,6 +80,23 @@ async function cacheGrant(scopeType: "admin" | "device", scopeId: string, grant:
   });
 
   return grant;
+}
+
+async function cacheActionTicket(
+  scopeType: "admin" | "device",
+  scopeId: string,
+  action: DeviceAction,
+  ticket: CachedDeviceActionTicket,
+) {
+  await saveDeviceActionTicket({
+    action,
+    expiresAt: ticket.expiresAt,
+    payloadJson: JSON.stringify(ticket),
+    scopeId,
+    scopeType,
+  });
+
+  return ticket;
 }
 
 export async function syncVisibleDevices(profile: ProfileSnapshot): Promise<DeviceRecord[]> {
@@ -150,6 +182,44 @@ export async function ensureDeviceConnectionGrant(deviceId: string) {
   })) as CachedConnectionGrant;
 
   return await cacheGrant("device", deviceId, grant);
+}
+
+export async function ensureSupervisorActionTicket(
+  profile: ProfileSnapshot,
+  deviceId: string,
+  action: Exclude<DeviceAction, "connect">,
+) {
+  if (profile.role !== "Supervisor") {
+    throw new Error("SUPERVISOR_REQUIRED");
+  }
+
+  const cached = await getDeviceActionTicket("admin", deviceId, action);
+  if (cached && isGrantFresh(cached.expiresAt)) {
+    return parseCachedActionTicket(cached.payloadJson);
+  }
+
+  const convex = getConvexClient();
+  const ticket = (await convex.mutation((api as any).devices.issueSupervisorActionTicket, {
+    action,
+    deviceId,
+  })) as CachedDeviceActionTicket;
+
+  return await cacheActionTicket("admin", deviceId, action, ticket);
+}
+
+export async function ensureDeviceActionTicket(deviceId: string, action: Extract<DeviceAction, "connect" | "wifi_provision">) {
+  const cached = await getDeviceActionTicket("device", deviceId, action);
+  if (cached && isGrantFresh(cached.expiresAt)) {
+    return parseCachedActionTicket(cached.payloadJson);
+  }
+
+  const convex = getConvexClient();
+  const ticket = (await convex.mutation((api as any).devices.issueDeviceActionTicket, {
+    action,
+    deviceId,
+  })) as CachedDeviceActionTicket;
+
+  return await cacheActionTicket("device", deviceId, action, ticket);
 }
 
 export async function registerEnrolledDevice(args: {

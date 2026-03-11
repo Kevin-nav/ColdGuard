@@ -1,6 +1,6 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleError, BleManager, type Device, type ScanMode, Subscription } from "react-native-ble-plx";
-import type { CachedConnectionGrant, ColdGuardDiscoveredDevice, ColdGuardWifiTicket } from "../types";
+import type { CachedDeviceActionTicket, ColdGuardDiscoveredDevice, ColdGuardWifiTicket } from "../types";
 import {
   COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID,
   COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID,
@@ -15,12 +15,17 @@ type HelloResponse = {
   command: "hello";
   deviceId: string;
   deviceNonce: string;
+  deviceTimeMs: number;
   firmwareVersion: string;
   macAddress: string;
   ok: boolean;
   protocolVersion: number;
   requestId: string;
-  state: "blank" | "enrolled";
+  state: "blank" | "enrolled" | "pending";
+};
+
+type HelloSession = HelloResponse & {
+  receivedAtMs: number;
 };
 
 type GenericBleResponse = {
@@ -61,13 +66,15 @@ function isHelloResponse(value: unknown): value is HelloResponse {
     typeof candidate.bleName === "string" &&
     typeof candidate.deviceId === "string" &&
     typeof candidate.deviceNonce === "string" &&
+    typeof candidate.deviceTimeMs === "number" &&
+    Number.isFinite(candidate.deviceTimeMs) &&
     typeof candidate.firmwareVersion === "string" &&
     typeof candidate.macAddress === "string" &&
     typeof candidate.ok === "boolean" &&
     typeof candidate.protocolVersion === "number" &&
     Number.isFinite(candidate.protocolVersion) &&
     typeof candidate.requestId === "string" &&
-    (candidate.state === "blank" || candidate.state === "enrolled")
+    (candidate.state === "blank" || candidate.state === "enrolled" || candidate.state === "pending")
   );
 }
 
@@ -94,22 +101,27 @@ function requireWifiTicketStringField(
 }
 
 function parseWifiTicketResponse(response: GenericBleResponse): ColdGuardWifiTicket {
-  const expiresAt = response.expiresAt;
-  if (expiresAt === null || expiresAt === undefined) {
-    throw new Error("BLE_WIFI_TICKET_EXPIRES_AT_MISSING");
+  const expiresInMs = response.expiresInMs;
+  if (expiresInMs === null || expiresInMs === undefined) {
+    throw new Error("BLE_WIFI_TICKET_EXPIRES_IN_MS_MISSING");
   }
 
-  const normalizedExpiresAt = typeof expiresAt === "number" ? expiresAt : Number(expiresAt);
-  if (!Number.isFinite(normalizedExpiresAt)) {
-    throw new Error("BLE_WIFI_TICKET_EXPIRES_AT_INVALID");
+  const normalizedExpiresInMs = typeof expiresInMs === "number" ? expiresInMs : Number(expiresInMs);
+  if (!Number.isFinite(normalizedExpiresInMs)) {
+    throw new Error("BLE_WIFI_TICKET_EXPIRES_IN_MS_INVALID");
   }
 
   return {
-    expiresAt: normalizedExpiresAt,
+    expiresAt: Date.now() + normalizedExpiresInMs,
     password: requireWifiTicketStringField(response, "password"),
     ssid: requireWifiTicketStringField(response, "ssid"),
     testUrl: requireWifiTicketStringField(response, "testUrl"),
   };
+}
+
+function createProofTimestamp(hello: HelloSession) {
+  const elapsedSinceHelloMs = Math.max(0, Date.now() - hello.receivedAtMs);
+  return Math.round(hello.deviceTimeMs + elapsedSinceHelloMs);
 }
 
 function getBleManager() {
@@ -140,7 +152,7 @@ export class RealColdGuardBleClient {
   }
 
   async enrollDevice(args: {
-    adminGrant: CachedConnectionGrant;
+    actionTicket: CachedDeviceActionTicket;
     bootstrapToken: string;
     deviceId: string;
     handshakeToken: string;
@@ -150,7 +162,7 @@ export class RealColdGuardBleClient {
     const { device, hello } = await connectAndHello(args.deviceId);
 
     try {
-      const proofTimestamp = Date.now();
+      const proofTimestamp = createProofTimestamp(hello);
       const handshakeProof = await createHandshakeProof({
         deviceId: args.deviceId,
         deviceNonce: hello.deviceNonce,
@@ -159,9 +171,9 @@ export class RealColdGuardBleClient {
       });
 
       await sendCommand(device, "enroll.begin", {
+        actionTicket: args.actionTicket,
         bootstrapToken: args.bootstrapToken,
         deviceId: args.deviceId,
-        grantToken: args.adminGrant.token,
         handshakeProof,
         handshakeToken: args.handshakeToken,
         institutionId: args.institutionId,
@@ -185,14 +197,14 @@ export class RealColdGuardBleClient {
   }
 
   async requestWifiTicket(args: {
+    actionTicket: CachedDeviceActionTicket;
     deviceId: string;
-    grant: CachedConnectionGrant;
     handshakeToken: string;
   }): Promise<ColdGuardWifiTicket> {
     const { device, hello } = await connectAndHello(args.deviceId);
 
     try {
-      const proofTimestamp = Date.now();
+      const proofTimestamp = createProofTimestamp(hello);
       const handshakeProof = await createHandshakeProof({
         deviceId: args.deviceId,
         deviceNonce: hello.deviceNonce,
@@ -201,8 +213,8 @@ export class RealColdGuardBleClient {
       });
 
       await sendCommand(device, "grant.verify", {
+        actionTicket: args.actionTicket,
         deviceId: args.deviceId,
-        grantToken: args.grant.token,
         handshakeProof,
         proofTimestamp,
       });
@@ -215,14 +227,14 @@ export class RealColdGuardBleClient {
   }
 
   async decommissionDevice(args: {
-    adminGrant: CachedConnectionGrant;
+    actionTicket: CachedDeviceActionTicket;
     deviceId: string;
     handshakeToken: string;
   }): Promise<void> {
     const { device, hello } = await connectAndHello(args.deviceId);
 
     try {
-      const proofTimestamp = Date.now();
+      const proofTimestamp = createProofTimestamp(hello);
       const handshakeProof = await createHandshakeProof({
         deviceId: args.deviceId,
         deviceNonce: hello.deviceNonce,
@@ -231,7 +243,7 @@ export class RealColdGuardBleClient {
       });
 
       await sendCommand(device, "device.decommission", {
-        grantToken: args.adminGrant.token,
+        actionTicket: args.actionTicket,
         handshakeProof,
         proofTimestamp,
       });
@@ -271,6 +283,7 @@ async function connectAndHello(expectedDeviceId: string) {
   await connectedDevice.discoverAllServicesAndCharacteristics();
 
   const helloResponse = await sendCommand(connectedDevice, "hello", {});
+  const helloReceivedAtMs = Date.now();
   let hello: HelloResponse;
   try {
     hello = parseHelloResponse(helloResponse);
@@ -286,7 +299,10 @@ async function connectAndHello(expectedDeviceId: string) {
 
   return {
     device: connectedDevice,
-    hello,
+    hello: {
+      ...hello,
+      receivedAtMs: helloReceivedAtMs,
+    } satisfies HelloSession,
   };
 }
 
@@ -415,6 +431,7 @@ async function sendCommand(device: Device, command: string, body: Record<string,
 }
 
 export const __testing = {
+  createProofTimestamp,
   parseHelloResponse,
   parseWifiTicketResponse,
 };

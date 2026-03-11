@@ -6,6 +6,15 @@ const CONNECT_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ADMIN_GRANT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEVICE_GRANT_ISSUER = "coldguard-api";
 const DEVICE_GRANT_KEY_ID = "coldguard-esp32-transport-v1";
+const CONNECT_ACTION_TICKET_TTL_MS = 5 * 60 * 1000;
+const SUPERVISOR_ACTION_TICKET_TTL_MS = 5 * 60 * 1000;
+
+type DeviceActionTicketAction =
+  | "connect"
+  | "decommission"
+  | "enroll"
+  | "reassign"
+  | "wifi_provision";
 
 type AuthenticatedUser = {
   _id: string;
@@ -138,6 +147,103 @@ async function getGrantSigningKey() {
     false,
     ["sign"],
   );
+}
+
+async function getActionTicketMasterKey() {
+  const productionKey = process.env.COLDGUARD_DEVICE_ACTION_TICKET_MASTER_KEY;
+  if (productionKey) {
+    return productionKey;
+  }
+
+  if (process.env.TEST_DEVICE_ACTION_TICKET_MASTER_KEY && process.env.NODE_ENV !== "test") {
+    throw new Error("DEVICE_ACTION_TICKET_MASTER_KEY_TEST_ENV_ONLY");
+  }
+
+  const testKey = process.env.NODE_ENV === "test" ? process.env.TEST_DEVICE_ACTION_TICKET_MASTER_KEY : null;
+  if (!testKey) {
+    throw new Error(
+      "DEVICE_ACTION_TICKET_MASTER_KEY_MISSING: set COLDGUARD_DEVICE_ACTION_TICKET_MASTER_KEY or TEST_DEVICE_ACTION_TICKET_MASTER_KEY",
+    );
+  }
+
+  return testKey;
+}
+
+async function importHmacKey(secret: Uint8Array | string, usages: KeyUsage[]) {
+  const bytes = typeof secret === "string" ? new TextEncoder().encode(secret) : secret;
+  return await crypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, usages);
+}
+
+async function deriveDeviceActionKey(deviceId: string) {
+  const masterKey = await importHmacKey(await getActionTicketMasterKey(), ["sign"]);
+  const derived = await crypto.subtle.sign("HMAC", masterKey, new TextEncoder().encode(deviceId));
+  return new Uint8Array(derived);
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function createActionTicketId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `ticket-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function buildActionTicketCanonicalString(args: {
+  action: DeviceActionTicketAction;
+  counter: number;
+  deviceId: string;
+  expiresAt: number;
+  institutionId: string;
+  issuedAt: number;
+  operatorId?: string;
+  ticketId: string;
+}) {
+  return [
+    "1",
+    args.ticketId,
+    args.deviceId,
+    args.institutionId,
+    args.action,
+    String(args.issuedAt),
+    String(args.expiresAt),
+    String(args.counter),
+    args.operatorId ?? "",
+  ].join("|");
+}
+
+async function buildActionTicket(args: {
+  action: DeviceActionTicketAction;
+  counter: number;
+  deviceId: string;
+  expiresAt: number;
+  institutionId: string;
+  issuedAt: number;
+  operatorId?: string;
+  ticketId?: string;
+}) {
+  const ticketId = args.ticketId ?? createActionTicketId();
+  const canonical = buildActionTicketCanonicalString({
+    ...args,
+    ticketId,
+  });
+  const deviceKey = await importHmacKey(await deriveDeviceActionKey(args.deviceId), ["sign"]);
+  const mac = bytesToHex(new Uint8Array(await crypto.subtle.sign("HMAC", deviceKey, new TextEncoder().encode(canonical))));
+
+  return {
+    v: 1 as const,
+    ticketId,
+    deviceId: args.deviceId,
+    institutionId: args.institutionId,
+    action: args.action,
+    issuedAt: args.issuedAt,
+    expiresAt: args.expiresAt,
+    counter: args.counter,
+    operatorId: args.operatorId,
+    mac,
+  };
 }
 
 async function signGrant(claims: Record<string, unknown>) {
@@ -386,6 +492,62 @@ export const issueConnectionGrant = mutation({
   },
 });
 
+export const issueSupervisorActionTicket = mutation({
+  args: {
+    action: v.union(v.literal("decommission"), v.literal("enroll"), v.literal("reassign"), v.literal("wifi_provision")),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireSupervisor(ctx);
+    const now = Date.now();
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_device_id", (q: any) => q.eq("deviceId", args.deviceId))
+      .unique();
+
+    if (args.action === "enroll") {
+      ensureSupervisorAdminGrantTargetOwnership(device, user.institutionId);
+    } else {
+      if (!device || device.institutionId !== user.institutionId || device.status !== "active") {
+        throw new Error("DEVICE_NOT_FOUND");
+      }
+    }
+
+    return await buildActionTicket({
+      action: args.action,
+      counter: device?.grantVersion ?? 1,
+      deviceId: args.deviceId,
+      expiresAt: now + SUPERVISOR_ACTION_TICKET_TTL_MS,
+      institutionId: user.institutionId,
+      issuedAt: now,
+      operatorId: user.firebaseUid,
+    });
+  },
+});
+
+export const issueDeviceActionTicket = mutation({
+  args: {
+    action: v.union(v.literal("connect"), v.literal("wifi_provision")),
+    deviceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const device = await getActiveDeviceOrThrow(ctx, user.institutionId, args.deviceId);
+    await ensureUserCanAccessDevice(ctx, user, args.deviceId);
+    const now = Date.now();
+
+    return await buildActionTicket({
+      action: args.action,
+      counter: device.grantVersion,
+      deviceId: args.deviceId,
+      expiresAt: now + CONNECT_ACTION_TICKET_TTL_MS,
+      institutionId: user.institutionId,
+      issuedAt: now,
+      operatorId: user.firebaseUid,
+    });
+  },
+});
+
 export const registerEnrollment = mutation({
   args: {
     bleName: v.optional(v.string()),
@@ -615,6 +777,19 @@ export const __testing = {
   ensureExistingEnrollmentOwnership,
   ensureSupervisorAdminGrantTargetOwnership,
   ensureUserCanAccessDeviceForTesting: ensureUserCanAccessDevice,
+  async buildActionTicketForTesting(args: {
+    action: DeviceActionTicketAction;
+    counter: number;
+    deviceId: string;
+    expiresAt: number;
+    institutionId: string;
+    issuedAt: number;
+    operatorId?: string;
+    ticketId?: string;
+  }) {
+    return await buildActionTicket(args);
+  },
+  buildActionTicketCanonicalString,
   async buildGrantForTesting(args: {
     deviceId: string;
     expiresAt: number;

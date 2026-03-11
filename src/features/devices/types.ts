@@ -28,6 +28,26 @@ export type CachedConnectionGrant = {
 
 export type ColdGuardConnectionGrant = CachedConnectionGrant;
 
+export type DeviceAction =
+  | "connect"
+  | "decommission"
+  | "enroll"
+  | "reassign"
+  | "wifi_provision";
+
+export type CachedDeviceActionTicket = {
+  action: DeviceAction;
+  counter: number;
+  deviceId: string;
+  expiresAt: number;
+  institutionId: string;
+  issuedAt: number;
+  mac: string;
+  operatorId?: string;
+  ticketId: string;
+  v: number;
+};
+
 export type ColdGuardDiscoveredDevice = {
   bleName: string;
   bootstrapClaim: string;
@@ -35,7 +55,7 @@ export type ColdGuardDiscoveredDevice = {
   firmwareVersion: string;
   macAddress: string;
   protocolVersion: number;
-  state: "blank" | "enrolled";
+  state: "blank" | "enrolled" | "pending";
 };
 
 export type ColdGuardWifiTicket = {

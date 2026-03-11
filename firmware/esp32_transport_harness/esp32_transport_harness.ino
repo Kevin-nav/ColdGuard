@@ -1,5 +1,6 @@
 #include <BLE2902.h>
 #include <cctype>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <BLEAdvertising.h>
@@ -10,6 +11,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_timer.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/bignum.h>
 #include <mbedtls/ecdsa.h>
@@ -23,7 +25,6 @@ constexpr char kFirmwareVersion[] = "cg-transport-0.1.0";
 constexpr uint8_t kProtocolVersion = 1;
 constexpr unsigned long kProofWindowMs = 5UL * 60UL * 1000UL;
 constexpr unsigned long kVerifiedSessionWindowMs = 60UL * 1000UL;
-constexpr uint64_t kEpochBaseMs = 1700000000000ULL;
 constexpr char kPreferencesNamespace[] = "coldguard";
 constexpr char kGrantIssuer[] = "coldguard-api";
 constexpr char kGrantKeyId[] = "coldguard-esp32-transport-v1";
@@ -61,6 +62,7 @@ String lastVerifiedPermission;
 uint32_t grantVersion = 0;
 unsigned long verifiedSessionUntilMs = 0;
 unsigned long wifiTicketExpiryMs = 0;
+uint64_t lastDeviceNonceIssuedAtMs = 0;
 bool accessPointStarted = false;
 
 struct PendingEnrollment {
@@ -115,17 +117,61 @@ String buildDeviceId(uint64_t mac) {
   return String(buffer);
 }
 
+void appendJsonUnicodeEscape(String& escaped, uint8_t value) {
+  constexpr char kHexDigits[] = "0123456789ABCDEF";
+  escaped += "\\u00";
+  escaped += kHexDigits[(value >> 4) & 0x0F];
+  escaped += kHexDigits[value & 0x0F];
+}
+
 String escapeJson(const String& value) {
   String escaped;
-  escaped.reserve(value.length() + 8);
+  escaped.reserve(value.length() * 6);
   for (size_t index = 0; index < value.length(); index++) {
-    const char current = value.charAt(index);
-    if (current == '\\' || current == '"') {
-      escaped += '\\';
+    const uint8_t current = static_cast<uint8_t>(value.charAt(index));
+    switch (current) {
+      case '"':
+        escaped += "\\\"";
+        break;
+      case '\\':
+        escaped += "\\\\";
+        break;
+      case '/':
+        escaped += "\\/";
+        break;
+      case '\b':
+        escaped += "\\b";
+        break;
+      case '\f':
+        escaped += "\\f";
+        break;
+      case '\n':
+        escaped += "\\n";
+        break;
+      case '\r':
+        escaped += "\\r";
+        break;
+      case '\t':
+        escaped += "\\t";
+        break;
+      default:
+        if (current < 0x20 || std::isprint(current) == 0) {
+          appendJsonUnicodeEscape(escaped, current);
+        } else {
+          escaped += static_cast<char>(current);
+        }
+        break;
     }
-    escaped += current;
   }
   return escaped;
+}
+
+String observableEnrollmentState() {
+  return pendingEnrollment.active ? "pending" : enrollmentState;
+}
+
+uint64_t currentDeviceTimeMs() {
+  return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
 }
 
 String uint64ToString(uint64_t value) {
@@ -309,6 +355,76 @@ String hmacSha256Hex(const String& key, const String& payload) {
   return hex;
 }
 
+size_t ecdsaIntegerContentLength(const uint8_t* raw32) {
+  size_t firstNonZero = 0;
+  while (firstNonZero < 31 && raw32[firstNonZero] == 0) {
+    firstNonZero++;
+  }
+
+  size_t contentLength = 32 - firstNonZero;
+  if ((raw32[firstNonZero] & 0x80) != 0) {
+    contentLength++;
+  }
+  return contentLength;
+}
+
+bool writeEcdsaDerInteger(uint8_t*& cursor, size_t& remaining, const uint8_t* raw32) {
+  const size_t contentLength = ecdsaIntegerContentLength(raw32);
+  const size_t firstNonZero = 32 - (contentLength > 32 ? 32 : contentLength);
+  if (remaining < contentLength + 2) {
+    return false;
+  }
+
+  *cursor++ = 0x02;
+  *cursor++ = static_cast<uint8_t>(contentLength);
+  remaining -= 2;
+
+  if (contentLength > 32) {
+    *cursor++ = 0x00;
+    remaining--;
+  }
+
+  const size_t copyLength = 32 - firstNonZero;
+  memcpy(cursor, raw32 + firstNonZero, copyLength);
+  cursor += copyLength;
+  remaining -= copyLength;
+  return true;
+}
+
+bool rawEcdsaSignatureToDer(
+  const uint8_t* rawSignature,
+  size_t rawSignatureLength,
+  uint8_t* derSignature,
+  size_t derSignatureCapacity,
+  size_t* derSignatureLength) {
+  if (rawSignatureLength != 64 || derSignature == nullptr || derSignatureLength == nullptr) {
+    return false;
+  }
+
+  const size_t rLength = ecdsaIntegerContentLength(rawSignature);
+  const size_t sLength = ecdsaIntegerContentLength(rawSignature + 32);
+  const size_t sequenceLength = 2 + rLength + 2 + sLength;
+  if (sequenceLength > 0x7F || derSignatureCapacity < sequenceLength + 2) {
+    return false;
+  }
+
+  uint8_t* cursor = derSignature;
+  size_t remaining = derSignatureCapacity;
+  *cursor++ = 0x30;
+  *cursor++ = static_cast<uint8_t>(sequenceLength);
+  remaining -= 2;
+
+  if (!writeEcdsaDerInteger(cursor, remaining, rawSignature)) {
+    return false;
+  }
+  if (!writeEcdsaDerInteger(cursor, remaining, rawSignature + 32)) {
+    return false;
+  }
+
+  *derSignatureLength = static_cast<size_t>(cursor - derSignature);
+  return true;
+}
+
 bool constantTimeEquals(const String& left, const String& right) {
   if (left.length() != right.length()) {
     return false;
@@ -475,14 +591,14 @@ void loadPreferences() {
 }
 
 String buildAdvertisementPayload() {
-  return "id=" + deviceId + ";state=" + enrollmentState + ";pv=" + String(kProtocolVersion);
+  return "id=" + deviceId + ";state=" + observableEnrollmentState() + ";pv=" + String(kProtocolVersion);
 }
 
 void restartAdvertising() {
   BLEAdvertisementData advertisingData;
   const String serviceData = buildAdvertisementPayload();
   advertisingData.setName(bleName.c_str());
-  advertisingData.setServiceData(BLEUUID(kServiceUuid), std::string(serviceData.c_str()));
+  advertisingData.setServiceData(BLEUUID(kServiceUuid), serviceData);
 
   advertising->stop();
   advertising->setAdvertisementData(advertisingData);
@@ -491,6 +607,8 @@ void restartAdvertising() {
 
 String buildHelloResponse(const String& requestId) {
   const uint64_t efuseMac = ESP.getEfuseMac();
+  const uint64_t deviceTimeMs = currentDeviceTimeMs();
+  lastDeviceNonceIssuedAtMs = deviceTimeMs;
   lastDeviceNonce = uint64ToString(efuseMac) + "-" + String(static_cast<uint32_t>(esp_random()), HEX);
 
   return "{"
@@ -502,16 +620,16 @@ String buildHelloResponse(const String& requestId) {
          "\"deviceNonce\":\"" + escapeJson(lastDeviceNonce) + "\","
          "\"firmwareVersion\":\"" + escapeJson(kFirmwareVersion) + "\","
          "\"macAddress\":\"" + escapeJson(macAddress) + "\","
+         "\"deviceTimeMs\":" + uint64ToString(deviceTimeMs) + ","
          "\"protocolVersion\":" + String(kProtocolVersion) + ","
-         "\"state\":\"" + escapeJson(enrollmentState) + "\""
+         "\"state\":\"" + escapeJson(observableEnrollmentState()) + "\""
          "}";
 }
 
 bool validateGrantClaims(
   const String& payloadJson,
   const String& expectedInstitutionId,
-  const String& requiredPermission,
-  long long currentEpochMs) {
+  const String& requiredPermission) {
   if (getJsonString(payloadJson, "iss") != kGrantIssuer) {
     return false;
   }
@@ -529,7 +647,7 @@ bool validateGrantClaims(
   }
 
   const long long exp = getJsonInt64(payloadJson, "exp", 0);
-  if (exp <= currentEpochMs) {
+  if (exp <= 0) {
     return false;
   }
 
@@ -540,12 +658,38 @@ bool validateGrantClaims(
   return permission == "connect" || permission == "manage";
 }
 
+bool isProofTimestampFresh(long long timestampMs) {
+  if (timestampMs <= 0) {
+    return false;
+  }
+
+  const uint64_t trustedNowMs = currentDeviceTimeMs();
+  const uint64_t providedTimestampMs = static_cast<uint64_t>(timestampMs);
+  const uint64_t deviceDeltaMs = providedTimestampMs > trustedNowMs
+    ? providedTimestampMs - trustedNowMs
+    : trustedNowMs - providedTimestampMs;
+  if (deviceDeltaMs > static_cast<uint64_t>(kProofWindowMs)) {
+    return false;
+  }
+
+  if (lastDeviceNonceIssuedAtMs == 0) {
+    return false;
+  }
+
+  const uint64_t nonceAgeMs = trustedNowMs - lastDeviceNonceIssuedAtMs;
+  return nonceAgeMs <= static_cast<uint64_t>(kProofWindowMs);
+}
+
 bool verifySignedGrant(
   const String& grantToken,
   const String& expectedInstitutionId,
   const String& requiredPermission,
-  long long currentEpochMs,
+  long long proofTimestampMs,
   uint32_t* nextGrantVersion) {
+  if (!isProofTimestampFresh(proofTimestampMs)) {
+    return false;
+  }
+
   const int firstDot = grantToken.indexOf('.');
   const int secondDot = grantToken.indexOf('.', firstDot + 1);
   if (firstDot <= 0 || secondDot <= firstDot + 1) {
@@ -565,7 +709,7 @@ bool verifySignedGrant(
     return false;
   }
 
-  if (!validateGrantClaims(decodedPayload, expectedInstitutionId, requiredPermission, currentEpochMs)) {
+  if (!validateGrantClaims(decodedPayload, expectedInstitutionId, requiredPermission)) {
     return false;
   }
 
@@ -576,7 +720,7 @@ bool verifySignedGrant(
   }
 
   uint8_t digest[32];
-  if (mbedtls_sha256_ret(
+  if (mbedtls_sha256(
         reinterpret_cast<const unsigned char*>((headerSegment + "." + payloadSegment).c_str()),
         headerSegment.length() + 1 + payloadSegment.length(),
         digest,
@@ -599,18 +743,16 @@ bool verifySignedGrant(
     return false;
   }
 
-  mbedtls_mpi signatureR;
-  mbedtls_mpi signatureS;
-  mbedtls_mpi_init(&signatureR);
-  mbedtls_mpi_init(&signatureS);
-  const int readR = mbedtls_mpi_read_binary(&signatureR, signatureBytes, 32);
-  const int readS = mbedtls_mpi_read_binary(&signatureS, signatureBytes + 32, 32);
-  const auto* ecKey = mbedtls_pk_ec(publicKey);
-  const int verifyResult = (readR == 0 && readS == 0)
-    ? mbedtls_ecdsa_verify(&ecKey->grp, digest, sizeof(digest), &ecKey->Q, &signatureR, &signatureS)
-    : -1;
-  mbedtls_mpi_free(&signatureR);
-  mbedtls_mpi_free(&signatureS);
+  uint8_t derSignature[72];
+  size_t derSignatureLength = 0;
+  int verifyResult = -1;
+  mbedtls_ecdsa_context ecdsaContext;
+  mbedtls_ecdsa_init(&ecdsaContext);
+  if (rawEcdsaSignatureToDer(signatureBytes, signatureLength, derSignature, sizeof(derSignature), &derSignatureLength)
+      && mbedtls_ecdsa_from_keypair(&ecdsaContext, mbedtls_pk_ec(publicKey)) == 0) {
+    verifyResult = mbedtls_ecdsa_read_signature(&ecdsaContext, digest, sizeof(digest), derSignature, derSignatureLength);
+  }
+  mbedtls_ecdsa_free(&ecdsaContext);
   mbedtls_pk_free(&publicKey);
 
   if (verifyResult != 0) {
@@ -628,7 +770,7 @@ bool verifyHandshakeProofWithToken(const String& sessionHandshakeToken, const St
     return false;
   }
 
-  if (timestampMs <= 0) {
+  if (!isProofTimestampFresh(timestampMs)) {
     return false;
   }
 
@@ -710,7 +852,7 @@ bool ensureSoftApStarted() {
                            "\"doorOpen\":" + String(doorOpen ? "true" : "false") + ","
                            "\"mktStatus\":\"safe\","
                            "\"statusText\":\"BLE authentication and Wi-Fi handover completed.\","
-                           "\"lastSeenAt\":" + uint64ToString(kEpochBaseMs + nowMs) + ","
+                           "\"lastSeenAgeMs\":0,"
                            "\"nickname\":\"" + escapeJson(deviceNickname.isEmpty() ? bleName : deviceNickname) + "\","
                            "\"institutionId\":\"" + escapeJson(institutionId) + "\""
                            "}";
@@ -731,6 +873,11 @@ void handleHello(const String& requestId) {
 }
 
 void handleEnrollBegin(const String& payload, const String& requestId) {
+  if (pendingEnrollment.active) {
+    sendBleResponse(buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_PENDING", "Enrollment is already pending."));
+    return;
+  }
+
   if (enrollmentState != "blank") {
     sendBleResponse(buildErrorResponse("enroll.begin", requestId, "DEVICE_ALREADY_ENROLLED", "Device is already enrolled."));
     return;
@@ -776,6 +923,7 @@ void handleEnrollBegin(const String& payload, const String& requestId) {
   pendingEnrollment.nickname = incomingNickname;
   pendingEnrollment.handshakeToken = incomingHandshakeToken;
   pendingEnrollment.grantVersion = nextGrantVersion;
+  restartAdvertising();
 
   sendBleResponse("{"
                   "\"ok\":true,"
@@ -851,7 +999,7 @@ void handleGrantVerify(const String& payload, const String& requestId) {
                   "\"ok\":true,"
                   "\"command\":\"grant.verify\","
                   "\"requestId\":\"" + escapeJson(requestId) + "\","
-                  "\"verifiedUntilMs\":" + uint64ToString(kEpochBaseMs + verifiedSessionUntilMs)
+                  "\"verifiedForMs\":" + String(kVerifiedSessionWindowMs)
                   + "}");
 }
 
@@ -875,7 +1023,7 @@ void handleWifiTicketRequest(const String& requestId) {
                   "\"ssid\":\"" + escapeJson(wifiSsid) + "\","
                   "\"password\":\"" + escapeJson(wifiPassword) + "\","
                   "\"testUrl\":\"http://192.168.4.1/api/v1/connection-test\","
-                  "\"expiresAt\":" + uint64ToString(kEpochBaseMs + wifiTicketExpiryMs)
+                  "\"expiresInMs\":60000"
                   + "}");
 }
 
@@ -949,12 +1097,12 @@ void dispatchCommand(const String& payload) {
 
 class CommandCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* characteristic) override {
-    const std::string rawValue = characteristic->getValue();
-    if (rawValue.empty()) {
+    const String rawValue = characteristic->getValue();
+    if (rawValue.isEmpty()) {
       return;
     }
 
-    const String payload(rawValue.c_str());
+    const String payload(rawValue);
     logBlePayload("[BLE] ", payload);
     dispatchCommand(payload);
   }

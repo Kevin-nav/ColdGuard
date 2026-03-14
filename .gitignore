@@ -60,8 +60,12 @@ coverage/
 *.sqlite3
 *.db-journal
 
-# separate web app
-/coldguard-web/
+# separate web app build outputs
+/coldguard-web/.next/
+/coldguard-web/.open-next/
+/coldguard-web/.wrangler/
+/coldguard-web/out/
+/coldguard-web/.dev.vars
 
 # Firebase
 google-services.json

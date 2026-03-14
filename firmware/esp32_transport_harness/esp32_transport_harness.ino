@@ -42,6 +42,10 @@ constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
   kProtocolVersion,
 };
 
+String buildEnrollmentLink(const coldguard::DeviceState& state) {
+  return "https://coldguard.org/device/" + state.deviceId + "?claim=" + state.bootstrapToken + "&v=1";
+}
+
 void logSecretValue(const String& label, const String& value) {
   if (kVerboseSecretLogging) {
     Serial.println(label + value);
@@ -116,6 +120,7 @@ void setup() {
   Serial.println("ColdGuard ESP32 transport harness ready");
   Serial.println("Device ID: " + deviceState.deviceId);
   logSecretValue("Bootstrap Token: ", deviceState.bootstrapToken);
+  Serial.println("Enrollment Link: " + buildEnrollmentLink(deviceState));
   Serial.println("BLE Name: " + deviceState.bleName);
   Serial.println("MAC: " + deviceState.macAddress);
 }

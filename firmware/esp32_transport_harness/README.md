@@ -3,8 +3,9 @@
 Use `esp32_transport_harness.ino` as the local firmware target for ColdGuard BLE enrollment and Wi-Fi connection testing.
 
 Setup notes:
-- the device prints both `Device ID` and `Bootstrap Token` to Serial on boot
-- the QR payload must use that printed bootstrap token, not a shared default token
+- the device prints `Device ID` and a ready-to-scan `Enrollment Link` to Serial on boot
+- the raw `Bootstrap Token` remains redacted unless you explicitly enable verbose secret logging
+- the QR payload must use that printed enrollment link, not a shared default token
 - local recovery commands now expect backend-issued `actionTicket` payloads instead of ES256 `grantToken` strings
 - the harness currently verifies those tickets with a shared harness master key and should be treated as transitional until per-device secret provisioning is added
 - the sketch is split into `src/device_state.*`, `src/action_ticket.*`, `src/ble_recovery.*`, and `src/wifi_runtime.*` so production recovery logic can evolve without growing one monolithic `.ino`

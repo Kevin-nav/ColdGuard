@@ -9,8 +9,11 @@
  */
 
 import type * as credential_throttle from "../credential_throttle.js";
+import type * as devices from "../devices.js";
+import type * as maintenance from "../maintenance.js";
 import type * as notifications from "../notifications.js";
 import type * as passcodes from "../passcodes.js";
+import type * as roles from "../roles.js";
 import type * as seeds from "../seeds.js";
 import type * as users from "../users.js";
 
@@ -22,8 +25,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   credential_throttle: typeof credential_throttle;
+  devices: typeof devices;
+  maintenance: typeof maintenance;
   notifications: typeof notifications;
   passcodes: typeof passcodes;
+  roles: typeof roles;
   seeds: typeof seeds;
   users: typeof users;
 }>;

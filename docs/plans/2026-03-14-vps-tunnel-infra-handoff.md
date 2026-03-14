@@ -32,8 +32,8 @@ The private infra repository owns:
 
 Application image:
 
-- `ghcr.io/<github-owner>/coldguard-web:latest`
-- `ghcr.io/<github-owner>/coldguard-web:sha-<full-commit-sha>`
+- `ghcr.io/kevin-nav/coldguard-web:latest`
+- `ghcr.io/kevin-nav/coldguard-web:sha-<full-commit-sha>`
 
 The GitHub Actions workflow in this repo publishes both tags on pushes to `main` that touch `coldguard-web/**`.
 
@@ -129,7 +129,7 @@ All paths in this section refer to the **remote VPS**, not a developer workstati
 `stack.env` should contain only non-secret values, for example:
 
 ```dotenv
-GHCR_OWNER=<github-owner>
+GHCR_OWNER=kevin-nav
 COLDGUARD_WEB_TAG=latest
 COMPOSE_PROJECT_NAME=coldguard
 ```

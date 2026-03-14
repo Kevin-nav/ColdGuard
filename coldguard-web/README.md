@@ -55,8 +55,8 @@ GitHub Actions publishes the container image on pushes to `main` that touch `col
 
 Published tags:
 
-- `ghcr.io/<github-owner>/coldguard-web:latest`
-- `ghcr.io/<github-owner>/coldguard-web:sha-<full-commit-sha>`
+- `ghcr.io/kevin-nav/coldguard-web:latest`
+- `ghcr.io/kevin-nav/coldguard-web:sha-<full-commit-sha>`
 
 Repository settings expectations:
 

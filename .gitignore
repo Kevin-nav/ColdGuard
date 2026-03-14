@@ -60,6 +60,9 @@ coverage/
 *.sqlite3
 *.db-journal
 
+# Android module build outputs
+**/android/build/
+
 # separate web app build outputs
 /coldguard-web/.next/
 /coldguard-web/.open-next/

@@ -73,6 +73,11 @@ class ColdGuardWifiBridgeModule : Module() {
         transport = transport,
       )
     )
+    if (!ColdGuardDeviceMonitoringService.canPostNotifications(context)) {
+      return ColdGuardDeviceMonitoringService
+        .markNotificationPermissionRequired(deviceId, transport)
+        .toMap()
+    }
     ContextCompat.startForegroundService(context, intent)
     return MonitoringStatus(
       deviceId = deviceId,

@@ -1,16 +1,19 @@
 package expo.modules.coldguardwifibridge
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -50,6 +53,11 @@ class ColdGuardDeviceMonitoringService : Service() {
 
       ACTION_START -> {
         val nextOptions = MonitoringOptions.fromIntent(intent)
+        if (!canPostNotifications(this)) {
+          markNotificationPermissionRequired(nextOptions.deviceId, nextOptions.transport)
+          stopSelf()
+          return START_NOT_STICKY
+        }
         options = nextOptions
         updateStatus(
           MonitoringStatus(
@@ -99,14 +107,11 @@ class ColdGuardDeviceMonitoringService : Service() {
         else -> "BLE fallback"
       }
 
-      NotificationManagerCompat.from(this).notify(
-        NOTIFICATION_ID,
-        buildOngoingNotification("$transportText: $statusText")
-      )
+      notifyIfPermitted(NOTIFICATION_ID, buildOngoingNotification("$transportText: $statusText"))
       updateStatus(MonitoringStatus(currentOptions.deviceId, null, true, resolved.transport))
       return resolved.nextOptions
     } catch (error: Exception) {
-      NotificationManagerCompat.from(this).notify(
+      notifyIfPermitted(
         NOTIFICATION_ID,
         buildOngoingNotification("Recovering: ${error.message ?: "runtime unavailable"}")
       )
@@ -160,10 +165,7 @@ class ColdGuardDeviceMonitoringService : Service() {
         transport = "ble_fallback",
       )
     )
-    NotificationManagerCompat.from(this).notify(
-      NOTIFICATION_ID,
-      buildOngoingNotification("BLE recovery in progress")
-    )
+    notifyIfPermitted(NOTIFICATION_ID, buildOngoingNotification("BLE recovery in progress"))
 
     val recoveredTicket = bleRecoveryController?.requestWifiTicket(currentOptions)
       ?: throw IllegalStateException("BLE_RECOVERY_UNAVAILABLE")
@@ -292,8 +294,15 @@ class ColdGuardDeviceMonitoringService : Service() {
         )
         .setAutoCancel(true)
         .build()
-      NotificationManagerCompat.from(this).notify((deviceId + cursor).hashCode(), notification)
+      notifyIfPermitted((deviceId + cursor).hashCode(), notification)
     }
+  }
+
+  private fun notifyIfPermitted(notificationId: Int, notification: Notification) {
+    if (!canPostNotifications(this)) {
+      return
+    }
+    NotificationManagerCompat.from(this).notify(notificationId, notification)
   }
 
   private fun buildOngoingNotification(content: String): Notification {
@@ -372,6 +381,20 @@ class ColdGuardDeviceMonitoringService : Service() {
       return Intent(context, ColdGuardDeviceMonitoringService::class.java).apply {
         action = ACTION_STOP
       }
+    }
+
+    fun canPostNotifications(context: Context): Boolean {
+      return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun markNotificationPermissionRequired(deviceId: String, transport: String): MonitoringStatus {
+      return MonitoringStatus(
+        deviceId = deviceId,
+        error = "POST_NOTIFICATIONS_PERMISSION_REQUIRED",
+        isRunning = false,
+        transport = transport,
+      ).also(::updateStatus)
     }
 
     private fun updateStatus(status: MonitoringStatus) {

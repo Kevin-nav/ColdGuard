@@ -28,6 +28,7 @@ import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
@@ -106,6 +107,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
 
     return withTimeout(SCAN_TIMEOUT_MS) {
       suspendCancellableCoroutine { continuation ->
+        val completed = AtomicBoolean(false)
         val callback = object : ScanCallback() {
           override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device ?: return
@@ -113,11 +115,17 @@ class ColdGuardBleRecoveryController(private val context: Context) {
               return
             }
 
+            if (!completed.compareAndSet(false, true)) {
+              return
+            }
             scanner.stopScan(this)
             continuation.resume(device)
           }
 
           override fun onScanFailed(errorCode: Int) {
+            if (!completed.compareAndSet(false, true)) {
+              return
+            }
             scanner.stopScan(this)
             continuation.resumeWithException(IllegalStateException("BLE_SCAN_FAILED_$errorCode"))
           }
@@ -133,7 +141,9 @@ class ColdGuardBleRecoveryController(private val context: Context) {
           .build()
         scanner.startScan(filters, settings, callback)
         continuation.invokeOnCancellation {
-          scanner.stopScan(callback)
+          if (completed.compareAndSet(false, true)) {
+            scanner.stopScan(callback)
+          }
         }
       }
     }

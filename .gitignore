@@ -13,6 +13,9 @@ expo-env.d.ts
 
 # Native
 .kotlin/
+.arduino-build/
+android/build/
+**/build/
 *.orig.*
 *.jks
 *.p8

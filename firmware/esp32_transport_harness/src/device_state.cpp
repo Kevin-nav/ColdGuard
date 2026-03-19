@@ -74,6 +74,11 @@ String buildDeviceId(uint64_t mac) {
   return String(buffer);
 }
 
+String buildEnrollmentLink(const DeviceState& state) {
+  return "https://coldguard.org/device/" + state.deviceId +
+         "?claim=" + state.bootstrapToken + "&v=1";
+}
+
 String escapeJson(const String& value) {
   String escaped;
   escaped.reserve(value.length() * 6);
@@ -151,6 +156,8 @@ void loadDeviceState(Preferences& preferences, const char* preferencesNamespace,
     state->wifiPassword = generateWifiPassword();
     preferences.putString("wifi_pw", state->wifiPassword);
   }
+  state->facilityWifiSsid = preferences.getString("fac_wifi_ssid", "");
+  state->facilityWifiPassword = preferences.getString("fac_wifi_pw", "");
   state->enrollmentState = preferences.getString("state", "blank");
   state->institutionId = preferences.getString("institution", "");
   state->deviceNickname = preferences.getString("nickname", "");
@@ -162,6 +169,8 @@ void saveDeviceState(Preferences& preferences, const DeviceState& state) {
   preferences.putString("deviceId", state.deviceId);
   preferences.putString("bootstrap", state.bootstrapToken);
   preferences.putString("wifi_pw", state.wifiPassword);
+  preferences.putString("fac_wifi_ssid", state.facilityWifiSsid);
+  preferences.putString("fac_wifi_pw", state.facilityWifiPassword);
   preferences.putString("state", state.enrollmentState);
   preferences.putString("institution", state.institutionId);
   preferences.putString("nickname", state.deviceNickname);
@@ -178,7 +187,13 @@ void clearEnrollmentState(DeviceState* state) {
   state->pendingEnrollment = PendingEnrollment{};
   state->verifiedSessionUntilMs = 0;
   state->wifiTicketExpiryMs = 0;
+  state->lastHeartbeatAtMs = 0;
+  state->lastStationConnectAttemptMs = 0;
   state->lastVerifiedPermission = "";
+  state->facilityWifiSsid = "";
+  state->facilityWifiPassword = "";
+  state->runtimeServerStarted = false;
+  state->stationConnected = false;
   state->bootstrapToken = generateBootstrapToken();
 }
 

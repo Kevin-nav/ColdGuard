@@ -6,7 +6,12 @@ const mockReplace = jest.fn();
 const mockRefreshDevices = jest.fn();
 const mockListAssignableNurses = jest.fn();
 const mockAssignColdGuardDevice = jest.fn();
+const mockConnectOrRecoverDevice = jest.fn();
+const mockGetDeviceRuntimeSession = jest.fn();
 const mockRunColdGuardConnectionTest = jest.fn();
+const mockProvisionFacilityWifi = jest.fn();
+const mockStartDeviceMonitoring = jest.fn();
+const mockStopDeviceMonitoring = jest.fn();
 const mockDecommissionColdGuardDevice = jest.fn();
 
 jest.mock("expo-router", () => ({
@@ -66,8 +71,13 @@ jest.mock("../../../../src/features/devices/services/device-directory", () => ({
 
 jest.mock("../../../../src/features/devices/services/connection-service", () => ({
   assignColdGuardDevice: (args: unknown) => mockAssignColdGuardDevice(args),
+  connectOrRecoverDevice: (args: unknown) => mockConnectOrRecoverDevice(args),
   decommissionColdGuardDevice: (args: unknown) => mockDecommissionColdGuardDevice(args),
+  getDeviceRuntimeSession: (deviceId: string) => mockGetDeviceRuntimeSession(deviceId),
+  provisionFacilityWifi: (args: unknown) => mockProvisionFacilityWifi(args),
   runColdGuardConnectionTest: (args: unknown) => mockRunColdGuardConnectionTest(args),
+  startDeviceMonitoring: (deviceId: string) => mockStartDeviceMonitoring(deviceId),
+  stopDeviceMonitoring: (deviceId: string) => mockStopDeviceMonitoring(deviceId),
 }));
 
 beforeEach(() => {
@@ -81,8 +91,41 @@ beforeEach(() => {
     },
   ]);
   mockAssignColdGuardDevice.mockResolvedValue(undefined);
+  mockConnectOrRecoverDevice.mockResolvedValue({
+    transport: "softap",
+  });
+  mockGetDeviceRuntimeSession.mockResolvedValue({
+    activeRuntimeBaseUrl: "http://192.168.4.1",
+    activeTransport: "softap",
+    deviceId: "device-1",
+    facilityWifiPassword: null,
+    facilityWifiRuntimeBaseUrl: null,
+    facilityWifiSsid: null,
+    softApPassword: "softap-secret",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: null,
+    lastMonitorError: null,
+    lastPingAt: null,
+    lastRecoverAt: null,
+    lastRuntimeError: null,
+    monitoringMode: "off",
+    sessionStatus: "connected",
+    updatedAt: 1,
+  });
+  mockProvisionFacilityWifi.mockResolvedValue({
+    password: "secret",
+    runtimeBaseUrl: "http://10.0.0.22",
+    ssid: "ClinicNet",
+  });
   mockRunColdGuardConnectionTest.mockResolvedValue({
     statusText: "Connection confirmed",
+  });
+  mockStartDeviceMonitoring.mockResolvedValue({
+    monitoringMode: "foreground_service",
+  });
+  mockStopDeviceMonitoring.mockResolvedValue({
+    monitoringMode: "off",
   });
   mockDecommissionColdGuardDevice.mockResolvedValue(undefined);
 });
@@ -93,6 +136,7 @@ test("shows supervisor assignment controls", async () => {
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
   expect(ui.getByText("Choose primary nurse")).toBeTruthy();
   expect(ui.getByText("Save assignments")).toBeTruthy();
+  await waitFor(() => expect(mockConnectOrRecoverDevice).toHaveBeenCalledWith({ deviceId: "device-1" }));
 });
 
 test("runs the connection test from device detail", async () => {
@@ -111,4 +155,8 @@ test("shows pending for an idle connection status", async () => {
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
   expect(ui.getByText("Pending")).toBeTruthy();
   expect(ui.queryByText("Running")).toBeNull();
+  expect(ui.getByText("Reconnect")).toBeTruthy();
+  expect(ui.getByText("Diagnostics")).toBeTruthy();
+  expect(ui.getByText("Enable monitoring")).toBeTruthy();
+  expect(ui.getByText("Save facility Wi-Fi")).toBeTruthy();
 });

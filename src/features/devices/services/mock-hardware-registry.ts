@@ -2,6 +2,7 @@ import type {
   ColdGuardConnectionGrant,
   ColdGuardConnectionPayload,
   ColdGuardDiscoveredDevice,
+  FacilityWifiProvisioning,
   ColdGuardWifiTicket,
 } from "../types";
 
@@ -10,6 +11,9 @@ type MockHardwareDevice = {
   bootstrapClaim: string;
   deviceId: string;
   firmwareVersion: string;
+  facilityWifiPassword: string | null;
+  facilityWifiRuntimeBaseUrl: string | null;
+  facilityWifiSsid: string | null;
   institutionId: string | null;
   nickname: string;
   protocolVersion: number;
@@ -21,6 +25,9 @@ const DEFAULT_MOCK_DEVICES: MockHardwareDevice[] = [
     bleName: "ColdGuard_A100",
     bootstrapClaim: "claim-alpha-100",
     deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: null,
+    facilityWifiRuntimeBaseUrl: null,
+    facilityWifiSsid: null,
     firmwareVersion: "fw-1.0.0",
     institutionId: null,
     nickname: "Cold Room Alpha",
@@ -31,6 +38,9 @@ const DEFAULT_MOCK_DEVICES: MockHardwareDevice[] = [
     bleName: "ColdGuard_B200",
     bootstrapClaim: "claim-bravo-200",
     deviceId: "CG-ESP32-B200",
+    facilityWifiPassword: null,
+    facilityWifiRuntimeBaseUrl: null,
+    facilityWifiSsid: null,
     firmwareVersion: "fw-1.0.0",
     institutionId: null,
     nickname: "Carrier Bravo",
@@ -127,6 +137,30 @@ export function decommissionMockHardwareDevice(deviceId: string) {
     throw new Error("MOCK_DEVICE_NOT_FOUND");
   }
 
+  device.facilityWifiPassword = null;
+  device.facilityWifiRuntimeBaseUrl = null;
+  device.facilityWifiSsid = null;
   device.institutionId = null;
   device.state = "blank";
+}
+
+export function provisionMockHardwareWifi(args: {
+  deviceId: string;
+  password: string;
+  ssid: string;
+}): FacilityWifiProvisioning {
+  const device = hardwareDevices.get(args.deviceId);
+  if (!device) {
+    throw new Error("MOCK_DEVICE_NOT_FOUND");
+  }
+
+  device.facilityWifiPassword = args.password;
+  device.facilityWifiRuntimeBaseUrl = `http://10.0.0.${Math.max(20, args.deviceId.length)}`;
+  device.facilityWifiSsid = args.ssid;
+
+  return {
+    password: args.password,
+    runtimeBaseUrl: device.facilityWifiRuntimeBaseUrl,
+    ssid: args.ssid,
+  };
 }

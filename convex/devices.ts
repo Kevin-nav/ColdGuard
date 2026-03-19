@@ -8,6 +8,8 @@ const DEVICE_GRANT_ISSUER = "coldguard-api";
 const DEVICE_GRANT_KEY_ID = "coldguard-esp32-transport-v1";
 const CONNECT_ACTION_TICKET_TTL_MS = 5 * 60 * 1000;
 const SUPERVISOR_ACTION_TICKET_TTL_MS = 5 * 60 * 1000;
+const DEVICE_SIGNING_KEY_ENV = "CG_DEVICE_SIGNING_KEY_PKCS8_B64";
+const DEVICE_ACTION_TICKET_MASTER_KEY_ENV = "CG_DEVICE_ACTION_TICKET_MASTER_KEY";
 
 type DeviceActionTicketAction =
   | "connect"
@@ -118,7 +120,7 @@ function decodeBase64UrlJson<T>(value: string): T {
 }
 
 async function getGrantSigningKey() {
-  const productionKey = process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64;
+  const productionKey = process.env[DEVICE_SIGNING_KEY_ENV];
   if (productionKey) {
     return await crypto.subtle.importKey(
       "pkcs8",
@@ -136,7 +138,7 @@ async function getGrantSigningKey() {
   const testKey = process.env.NODE_ENV === "test" ? process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 : null;
   if (!testKey) {
     throw new Error(
-      "DEVICE_SIGNING_KEY_MISSING: set COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64 or TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64",
+      `DEVICE_SIGNING_KEY_MISSING: set ${DEVICE_SIGNING_KEY_ENV} or TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64`,
     );
   }
 
@@ -150,7 +152,7 @@ async function getGrantSigningKey() {
 }
 
 async function getActionTicketMasterKey() {
-  const productionKey = process.env.COLDGUARD_DEVICE_ACTION_TICKET_MASTER_KEY;
+  const productionKey = process.env[DEVICE_ACTION_TICKET_MASTER_KEY_ENV];
   if (productionKey) {
     return productionKey;
   }
@@ -162,7 +164,7 @@ async function getActionTicketMasterKey() {
   const testKey = process.env.NODE_ENV === "test" ? process.env.TEST_DEVICE_ACTION_TICKET_MASTER_KEY : null;
   if (!testKey) {
     throw new Error(
-      "DEVICE_ACTION_TICKET_MASTER_KEY_MISSING: set COLDGUARD_DEVICE_ACTION_TICKET_MASTER_KEY or TEST_DEVICE_ACTION_TICKET_MASTER_KEY",
+      `DEVICE_ACTION_TICKET_MASTER_KEY_MISSING: set ${DEVICE_ACTION_TICKET_MASTER_KEY_ENV} or TEST_DEVICE_ACTION_TICKET_MASTER_KEY`,
     );
   }
 

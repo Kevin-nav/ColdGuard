@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { CameraView, type BarcodeScanningResult, useCameraPermissions } from "expo-camera";
 import { useEffect, useMemo, useState } from "react";
@@ -60,20 +61,35 @@ export default function DeviceEnrollmentScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
-  const [payload, setPayload] = useState<PendingDeviceEnrollment | null>(() => resolvePayloadFromParams(params));
-  const [payloadInput, setPayloadInput] = useState(() => resolvePayloadFromParams(params)?.sourceUrl ?? "");
+  const initialPayload = useMemo(
+    () =>
+      resolvePayloadFromParams({
+        claim: params.claim,
+        deviceId: params.deviceId,
+        payload: params.payload,
+        v: params.v,
+      }),
+    [params.claim, params.deviceId, params.payload, params.v],
+  );
+  const [payload, setPayload] = useState<PendingDeviceEnrollment | null>(initialPayload);
+  const [payloadInput, setPayloadInput] = useState(() => initialPayload?.sourceUrl ?? "");
 
   useEffect(() => {
-    const nextPayload = resolvePayloadFromParams(params);
+    const nextPayload = initialPayload;
     if (nextPayload) {
-      setPayload(nextPayload);
-      setPayloadInput(nextPayload.sourceUrl);
+      setPayload((current) => (current?.sourceUrl === nextPayload.sourceUrl ? current : nextPayload));
+      setPayloadInput((current) => (current === nextPayload.sourceUrl ? current : nextPayload.sourceUrl));
       void persistPendingDeviceEnrollment(nextPayload);
     }
-    if (typeof params.nickname === "string" && params.nickname.trim()) {
-      setNickname(params.nickname);
+    if (!nextPayload) {
+      setPayload((current) => (current === null ? current : null));
+      setPayloadInput((current) => (current === "" ? current : ""));
     }
-  }, [params]);
+    if (typeof params.nickname === "string" && params.nickname.trim()) {
+      const nextNickname = params.nickname.trim();
+      setNickname((current) => (current === nextNickname ? current : nextNickname));
+    }
+  }, [initialPayload, params.nickname]);
 
   useEffect(() => {
     let isMounted = true;
@@ -120,7 +136,7 @@ export default function DeviceEnrollmentScreen() {
     return () => {
       isMounted = false;
     };
-  }, [isAuthLoading, payload, user]);
+  }, [isAuthLoading, payload, user?.uid, user?.email, user?.displayName]);
 
   async function handleScannerOpen() {
     if (!permission?.granted) {
@@ -165,10 +181,24 @@ export default function DeviceEnrollmentScreen() {
       await discardPendingDeviceEnrollment();
       router.replace(`/device/${result.deviceId}`);
     } catch (error) {
+      if (error instanceof Error && error.message === "CLINIC_HANDSHAKE_TOKEN_MISSING") {
+        await persistPendingDeviceEnrollment(payload);
+        router.replace("/(onboarding)/link-institution");
+        return;
+      }
       setMessage(error instanceof Error ? error.message : "Device enrollment failed.");
     } finally {
       setIsBusy(false);
     }
+  }
+
+  function renderBackButton() {
+    return (
+      <Pressable onPress={() => router.replace("/(tabs)/devices")} style={localStyles.backButton}>
+        <Ionicons color={colors.textPrimary} name="arrow-back" size={20} />
+        <Text style={[styles.secondaryButtonText, localStyles.backButtonText]}>Back to devices</Text>
+      </Pressable>
+    );
   }
 
   if (isAuthLoading || profileState.isLoading) {
@@ -184,6 +214,7 @@ export default function DeviceEnrollmentScreen() {
   if (showScanner) {
     return (
       <DashboardPage>
+        {renderBackButton()}
         <DashboardSection title="Scan Device QR" eyebrow="Camera" description="Point the camera at the ColdGuard device QR label.">
           <PanelCard>
             <View style={localStyles.cameraContainer}>
@@ -205,6 +236,7 @@ export default function DeviceEnrollmentScreen() {
   if (profileState.error && !profileState.profile?.institutionId) {
     return (
       <DashboardPage>
+        {renderBackButton()}
         <DashboardSection title="Institution Required" eyebrow="Blocked" description="Complete your facility setup before enrolling a device.">
           <PanelCard>
             <Text style={styles.bodyText}>{profileState.error}</Text>
@@ -220,6 +252,7 @@ export default function DeviceEnrollmentScreen() {
   if (profileState.profile?.role !== "Supervisor") {
     return (
       <DashboardPage>
+        {renderBackButton()}
         <DashboardSection title="Supervisor Required" eyebrow="Access denied" description="Only supervisors can enroll ColdGuard devices.">
           <PanelCard>
             <Text style={styles.bodyText}>
@@ -232,7 +265,8 @@ export default function DeviceEnrollmentScreen() {
   }
 
   return (
-    <DashboardPage scroll>
+    <DashboardPage contentContainerStyle={localStyles.pageContent} scroll>
+      {renderBackButton()}
       <DashboardSection title="Enroll Device" eyebrow="Supervisor setup" description="Complete real BLE enrollment for the scanned ColdGuard unit.">
         <PanelCard>
           <Text style={styles.bodyText}>Device: {payload?.deviceId ?? "Scan or paste a QR payload"}</Text>
@@ -288,6 +322,16 @@ export default function DeviceEnrollmentScreen() {
 }
 
 const localStyles = StyleSheet.create({
+  backButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 20,
+  },
+  backButtonText: {
+    fontSize: 16,
+  },
   buttonRow: {
     gap: 12,
   },
@@ -303,5 +347,8 @@ const localStyles = StyleSheet.create({
     alignItems: "center",
     flex: 1,
     justifyContent: "center",
+  },
+  pageContent: {
+    paddingTop: 56,
   },
 });

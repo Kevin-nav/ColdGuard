@@ -1,6 +1,11 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleError, BleManager, type Device, type ScanMode, Subscription } from "react-native-ble-plx";
-import type { CachedDeviceActionTicket, ColdGuardDiscoveredDevice, ColdGuardWifiTicket } from "../types";
+import type {
+  CachedDeviceActionTicket,
+  ColdGuardDiscoveredDevice,
+  ColdGuardWifiTicket,
+  FacilityWifiProvisioning,
+} from "../types";
 import {
   COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID,
   COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID,
@@ -38,7 +43,15 @@ type GenericBleResponse = {
 };
 
 const SCAN_TIMEOUT_MS = 12_000;
+const MAX_BLE_WRITE_BYTES = 180;
+const BLE_TRANSPORT_CHUNK_BYTES = 120;
 let bleManager: BleManager | null = null;
+
+type BleCommandSession = {
+  close: () => void;
+  device: Device;
+  sendCommand: (command: string, body: Record<string, unknown>) => Promise<GenericBleResponse>;
+};
 
 function isGenericBleResponse(value: unknown): value is GenericBleResponse {
   if (typeof value !== "object" || value === null) {
@@ -119,9 +132,34 @@ function parseWifiTicketResponse(response: GenericBleResponse): ColdGuardWifiTic
   };
 }
 
+function parseWifiProvisionResponse(response: GenericBleResponse): FacilityWifiProvisioning {
+  const runtimeBaseUrl = response.runtimeBaseUrl;
+  if (typeof runtimeBaseUrl !== "string" || runtimeBaseUrl.length === 0) {
+    throw new Error("BLE_WIFI_PROVISION_RUNTIME_BASE_URL_INVALID");
+  }
+
+  return {
+    password: requireWifiTicketStringField(response, "password"),
+    runtimeBaseUrl,
+    ssid: requireWifiTicketStringField(response, "ssid"),
+  };
+}
+
 function createProofTimestamp(hello: HelloSession) {
   const elapsedSinceHelloMs = Math.max(0, Date.now() - hello.receivedAtMs);
   return Math.round(hello.deviceTimeMs + elapsedSinceHelloMs);
+}
+
+function getUtf8ByteLength(value: string) {
+  return new TextEncoder().encode(value).length;
+}
+
+function splitTransportPayload(value: string, chunkSize = BLE_TRANSPORT_CHUNK_BYTES) {
+  const chunks: string[] = [];
+  for (let index = 0; index < value.length; index += chunkSize) {
+    chunks.push(value.slice(index, index + chunkSize));
+  }
+  return chunks;
 }
 
 function getBleManager() {
@@ -131,9 +169,22 @@ function getBleManager() {
   return bleManager;
 }
 
+function doesDeviceMatchExpectedId(
+  device: Pick<Device, "id" | "localName" | "name">,
+  expectedDeviceId: string,
+) {
+  const expectedSuffix = expectedDeviceId.slice(-4).toUpperCase();
+  return (
+    device.name?.toUpperCase().includes(expectedSuffix) ||
+    device.localName?.toUpperCase().includes(expectedSuffix) ||
+    device.id === expectedDeviceId
+  );
+}
+
 export class RealColdGuardBleClient {
   async discoverDevice(args: { deviceId: string; expectedState: "blank" | "enrolled" }): Promise<ColdGuardDiscoveredDevice> {
-    const { device, hello } = await connectAndHello(args.deviceId);
+    const { close, device, hello } = await connectAndHello(args.deviceId);
+    close();
     await device.cancelConnection().catch(() => undefined);
 
     if (hello.state !== args.expectedState) {
@@ -159,9 +210,13 @@ export class RealColdGuardBleClient {
     institutionId: string;
     nickname: string;
   }): Promise<ColdGuardDiscoveredDevice> {
-    const { device, hello } = await connectAndHello(args.deviceId);
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
 
     try {
+      if (hello.state !== "blank") {
+        throw new Error("BLE_DEVICE_STATE_MISMATCH");
+      }
+
       const proofTimestamp = createProofTimestamp(hello);
       const handshakeProof = await createHandshakeProof({
         deviceId: args.deviceId,
@@ -170,7 +225,7 @@ export class RealColdGuardBleClient {
         proofTimestamp,
       });
 
-      await sendCommand(device, "enroll.begin", {
+      await sendCommand("enroll.begin", {
         actionTicket: args.actionTicket,
         bootstrapToken: args.bootstrapToken,
         deviceId: args.deviceId,
@@ -180,8 +235,9 @@ export class RealColdGuardBleClient {
         nickname: args.nickname,
         proofTimestamp,
       });
-      await sendCommand(device, "enroll.commit", {});
+      await sendCommand("enroll.commit", {});
     } finally {
+      close();
       await device.cancelConnection().catch(() => undefined);
     }
 
@@ -201,7 +257,7 @@ export class RealColdGuardBleClient {
     deviceId: string;
     handshakeToken: string;
   }): Promise<ColdGuardWifiTicket> {
-    const { device, hello } = await connectAndHello(args.deviceId);
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
 
     try {
       const proofTimestamp = createProofTimestamp(hello);
@@ -212,16 +268,49 @@ export class RealColdGuardBleClient {
         proofTimestamp,
       });
 
-      await sendCommand(device, "grant.verify", {
+      await sendCommand("grant.verify", {
         actionTicket: args.actionTicket,
         deviceId: args.deviceId,
         handshakeProof,
         proofTimestamp,
       });
 
-      const response = await sendCommand(device, "wifi.ticket.request", {});
+      const response = await sendCommand("wifi.ticket.request", {});
       return parseWifiTicketResponse(response);
     } finally {
+      close();
+      await device.cancelConnection().catch(() => undefined);
+    }
+  }
+
+  async provisionWifi(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+    password: string;
+    ssid: string;
+  }): Promise<FacilityWifiProvisioning> {
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
+
+    try {
+      const proofTimestamp = createProofTimestamp(hello);
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
+      const response = await sendCommand("wifi.provision", {
+        actionTicket: args.actionTicket,
+        handshakeProof,
+        password: args.password,
+        proofTimestamp,
+        ssid: args.ssid,
+      });
+      return parseWifiProvisionResponse(response);
+    } finally {
+      close();
       await device.cancelConnection().catch(() => undefined);
     }
   }
@@ -231,7 +320,7 @@ export class RealColdGuardBleClient {
     deviceId: string;
     handshakeToken: string;
   }): Promise<void> {
-    const { device, hello } = await connectAndHello(args.deviceId);
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
 
     try {
       const proofTimestamp = createProofTimestamp(hello);
@@ -242,12 +331,13 @@ export class RealColdGuardBleClient {
         proofTimestamp,
       });
 
-      await sendCommand(device, "device.decommission", {
+      await sendCommand("device.decommission", {
         actionTicket: args.actionTicket,
         handshakeProof,
         proofTimestamp,
       });
     } finally {
+      close();
       await device.cancelConnection().catch(() => undefined);
     }
   }
@@ -281,8 +371,9 @@ async function connectAndHello(expectedDeviceId: string) {
   const device = await scanForColdGuardDevice(expectedDeviceId);
   const connectedDevice = await device.connect({ requestMTU: 512 });
   await connectedDevice.discoverAllServicesAndCharacteristics();
+  const session = openCommandSession(connectedDevice);
 
-  const helloResponse = await sendCommand(connectedDevice, "hello", {});
+  const helloResponse = await session.sendCommand("hello", {});
   const helloReceivedAtMs = Date.now();
   let hello: HelloResponse;
   try {
@@ -293,16 +384,19 @@ async function connectAndHello(expectedDeviceId: string) {
   }
 
   if (hello.deviceId !== expectedDeviceId) {
+    session.close();
     await connectedDevice.cancelConnection().catch(() => undefined);
     throw new Error("BLE_DEVICE_ID_MISMATCH");
   }
 
   return {
+    close: session.close,
     device: connectedDevice,
     hello: {
       ...hello,
       receivedAtMs: helloReceivedAtMs,
     } satisfies HelloSession,
+    sendCommand: session.sendCommand,
   };
 }
 
@@ -318,7 +412,7 @@ async function scanForColdGuardDevice(expectedDeviceId: string) {
     }, SCAN_TIMEOUT_MS);
 
     getBleManager().startDeviceScan(
-      [COLDGUARD_BLE_SERVICE_UUID],
+      null,
       { scanMode: 2 as ScanMode },
       async (error: BleError | null, device: Device | null) => {
         if (settled) {
@@ -337,12 +431,7 @@ async function scanForColdGuardDevice(expectedDeviceId: string) {
           return;
         }
 
-        const maybeMatch =
-          device.name?.includes(expectedDeviceId.slice(-4)) ||
-          device.localName?.includes(expectedDeviceId.slice(-4)) ||
-          device.id === expectedDeviceId;
-
-        if (!maybeMatch) {
+        if (!doesDeviceMatchExpectedId(device, expectedDeviceId)) {
           return;
         }
 
@@ -355,83 +444,159 @@ async function scanForColdGuardDevice(expectedDeviceId: string) {
   });
 }
 
-async function sendCommand(device: Device, command: string, body: Record<string, unknown>) {
-  const requestId = `req-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const payload = encodeBleMessage({
-    command,
-    requestId,
-    ...body,
-  });
+function openCommandSession(device: Device): BleCommandSession {
+  const pending = new Map<
+    string,
+    {
+      reject: (error: Error) => void;
+      resolve: (response: GenericBleResponse) => void;
+      timeout: ReturnType<typeof setTimeout>;
+    }
+  >();
 
-  return await new Promise<GenericBleResponse>((resolve, reject) => {
-    let subscription: Subscription | null = null;
-    let timeout: ReturnType<typeof setTimeout> | null = null;
-
-    const cleanup = () => {
-      if (subscription) {
-        subscription.remove();
-        subscription = null;
+  const subscription = getBleManager().monitorCharacteristicForDevice(
+    device.id,
+    COLDGUARD_BLE_SERVICE_UUID,
+    COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID,
+    (error, characteristic) => {
+      if (error) {
+        const wrappedError = new Error(error.message);
+        for (const entry of pending.values()) {
+          clearTimeout(entry.timeout);
+          entry.reject(wrappedError);
+        }
+        pending.clear();
+        return;
       }
-      if (timeout) {
-        clearTimeout(timeout);
-        timeout = null;
-      }
-    };
 
-    subscription = getBleManager().monitorCharacteristicForDevice(
-      device.id,
-      COLDGUARD_BLE_SERVICE_UUID,
-      COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID,
-      (error, characteristic) => {
-        if (error) {
-          cleanup();
-          reject(new Error(error.message));
+      if (!characteristic?.value) {
+        return;
+      }
+
+      try {
+        const response = decodeBleMessage(characteristic.value, isGenericBleResponse);
+        const entry = pending.get(response.requestId);
+        if (!entry) {
           return;
         }
 
-        if (!characteristic?.value) {
+        clearTimeout(entry.timeout);
+        pending.delete(response.requestId);
+        if (!response.ok) {
+          entry.reject(new Error(response.errorCode ?? response.message ?? "BLE_COMMAND_FAILED"));
           return;
         }
-
-        try {
-          const response = decodeBleMessage(characteristic.value, isGenericBleResponse);
-          if (response.requestId !== requestId) {
-            return;
-          }
-
-          cleanup();
-          if (!response.ok) {
-            reject(new Error(response.errorCode ?? response.message ?? "BLE_COMMAND_FAILED"));
-            return;
-          }
-          resolve(response);
-        } catch (nextError) {
-          cleanup();
-          reject(nextError instanceof Error ? nextError : new Error("BLE_RESPONSE_INVALID"));
+        entry.resolve(response);
+      } catch (nextError) {
+        const wrappedError = nextError instanceof Error ? nextError : new Error("BLE_RESPONSE_INVALID");
+        for (const entry of pending.values()) {
+          clearTimeout(entry.timeout);
+          entry.reject(wrappedError);
         }
-      },
-    );
+        pending.clear();
+      }
+    },
+  );
 
-    timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("BLE_RESPONSE_TIMEOUT"));
-    }, 8_000);
-
-    void device
-      .writeCharacteristicWithResponseForService(
-        COLDGUARD_BLE_SERVICE_UUID,
-        COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID,
-        payload,
-      )
-      .catch((error) => {
-        cleanup();
-        reject(error instanceof Error ? error : new Error("BLE_WRITE_FAILED"));
+  return {
+    close() {
+      subscription.remove();
+      for (const entry of pending.values()) {
+        clearTimeout(entry.timeout);
+        entry.reject(new Error("BLE_SESSION_CLOSED"));
+      }
+      pending.clear();
+    },
+    device,
+    async sendCommand(command: string, body: Record<string, unknown>) {
+      const requestId = `req-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+      const rawPayload = JSON.stringify({
+        command,
+        requestId,
+        ...body,
       });
-  });
+      const payload = encodeBleMessage({
+        command,
+        requestId,
+        ...body,
+      });
+
+      async function writePayload(
+        rawJsonPayload: string,
+        expectedResponseId: string | null,
+        commandLabel: string,
+      ) {
+        return await new Promise<GenericBleResponse | null>((resolve, reject) => {
+          let timeout: ReturnType<typeof setTimeout> | null = null;
+
+          if (expectedResponseId) {
+            timeout = setTimeout(() => {
+              pending.delete(expectedResponseId);
+              reject(new Error(`BLE_RESPONSE_TIMEOUT_${commandLabel.toUpperCase().replace(/\./g, "_")}`));
+            }, 8_000);
+
+            pending.set(expectedResponseId, {
+              reject,
+              resolve,
+              timeout,
+            });
+          }
+
+          void device
+            .writeCharacteristicWithResponseForService(
+              COLDGUARD_BLE_SERVICE_UUID,
+              COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID,
+              encodeBleMessage(JSON.parse(rawJsonPayload) as Record<string, unknown>),
+            )
+            .then(() => {
+              if (!expectedResponseId) {
+                resolve(null);
+              }
+            })
+            .catch((error) => {
+              if (timeout) {
+                clearTimeout(timeout);
+              }
+              if (expectedResponseId) {
+                pending.delete(expectedResponseId);
+              }
+              const message = error instanceof Error ? error.message : "BLE_WRITE_FAILED";
+              reject(new Error(`${message} [${commandLabel}]`));
+            });
+        });
+      }
+
+      if (getUtf8ByteLength(payload) <= MAX_BLE_WRITE_BYTES) {
+        return (await writePayload(rawPayload, requestId, command)) as GenericBleResponse;
+      }
+
+      const chunks = splitTransportPayload(payload);
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunkPayload = JSON.stringify({
+          command: "transport.chunk",
+          data: chunks[index],
+          final: index === chunks.length - 1,
+          requestId: `chunk-${requestId}-${index}`,
+          transportId: requestId,
+        });
+        const expectedResponseId = index === chunks.length - 1 ? requestId : null;
+        const response = await writePayload(chunkPayload, expectedResponseId, command);
+        if (response) {
+          return response;
+        }
+      }
+
+      throw new Error(`BLE_CHUNK_DISPATCH_FAILED [${command}]`);
+    },
+  };
 }
 
 export const __testing = {
   createProofTimestamp,
+  doesDeviceMatchExpectedId,
+  getBleManager,
+  splitTransportPayload,
   parseHelloResponse,
+  parseWifiProvisionResponse,
   parseWifiTicketResponse,
 };

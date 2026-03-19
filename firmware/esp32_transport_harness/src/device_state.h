@@ -25,17 +25,24 @@ struct DeviceState {
   String lastDeviceNonce;
   String wifiSsid;
   String wifiPassword;
+  String facilityWifiSsid;
+  String facilityWifiPassword;
   String lastVerifiedPermission;
   uint32_t grantVersion = 0;
   unsigned long verifiedSessionUntilMs = 0;
   unsigned long wifiTicketExpiryMs = 0;
+  unsigned long lastHeartbeatAtMs = 0;
+  unsigned long lastStationConnectAttemptMs = 0;
   uint64_t lastDeviceNonceIssuedAtMs = 0;
   bool accessPointStarted = false;
+  bool runtimeServerStarted = false;
+  bool stationConnected = false;
   PendingEnrollment pendingEnrollment;
 };
 
 String formatMacAddress(uint64_t mac);
 String buildDeviceId(uint64_t mac);
+String buildEnrollmentLink(const DeviceState& state);
 String escapeJson(const String& value);
 String uint64ToString(uint64_t value);
 String observableEnrollmentState(const DeviceState& state);

@@ -12,8 +12,8 @@ beforeEach(() => {
   process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 =
     "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgs27Y743ykh9PjkxziKEWvye/1w/2NNCs3w8ZQ8zpeDqhRANCAARWXAYGhrfHpfj16UZUSmVL56OnAOBf0BU6Eu+G5gajxwlQxJkuu6kxDxjvpRwp3V7sMkfBp8D1+K0CHnqgWk1P";
   process.env.TEST_DEVICE_ACTION_TICKET_MASTER_KEY = "coldguard-test-master-key";
-  delete process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64;
-  delete process.env.COLDGUARD_DEVICE_ACTION_TICKET_MASTER_KEY;
+  delete process.env.CG_DEVICE_SIGNING_KEY_PKCS8_B64;
+  delete process.env.CG_DEVICE_ACTION_TICKET_MASTER_KEY;
 });
 
 test("builds ES256 grants with issuer and key metadata", async () => {
@@ -65,7 +65,7 @@ test("does not emit legacy HS256 grant headers", async () => {
 });
 
 test("throws a clear error when no signing key env var is available", async () => {
-  delete process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64;
+  delete process.env.CG_DEVICE_SIGNING_KEY_PKCS8_B64;
   delete process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64;
 
   await expect(
@@ -83,7 +83,7 @@ test("throws a clear error when no signing key env var is available", async () =
 
 test("rejects the test signing key outside test runtime", async () => {
   process.env.NODE_ENV = "production";
-  delete process.env.COLDGUARD_DEVICE_SIGNING_PRIVATE_KEY_PKCS8_B64;
+  delete process.env.CG_DEVICE_SIGNING_KEY_PKCS8_B64;
   process.env.TEST_DEVICE_GRANT_PRIVATE_KEY_PKCS8_B64 =
     "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgs27Y743ykh9PjkxziKEWvye/1w/2NNCs3w8ZQ8zpeDqhRANCAARWXAYGhrfHpfj16UZUSmVL56OnAOBf0BU6Eu+G5gajxwlQxJkuu6kxDxjvpRwp3V7sMkfBp8D1+K0CHnqgWk1P";
 

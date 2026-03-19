@@ -19,6 +19,10 @@ struct BleRecoveryConfig {
   uint8_t protocolVersion;
 };
 
+struct BleRecoveryDeferredActions {
+  bool restartAdvertising = false;
+};
+
 String sanitizePayloadForLogging(const String& payload);
 void restartAdvertising(BLEAdvertising* advertising, const DeviceState& state, const char* serviceUuid, uint8_t protocolVersion);
 String dispatchCommand(
@@ -27,6 +31,7 @@ String dispatchCommand(
   Preferences& preferences,
   WebServer& webServer,
   BLEAdvertising* advertising,
-  const BleRecoveryConfig& config);
+  const BleRecoveryConfig& config,
+  BleRecoveryDeferredActions* deferredActions);
 
 }  // namespace coldguard

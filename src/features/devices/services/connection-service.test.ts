@@ -5,6 +5,7 @@ import {
   parseDeviceQrPayload,
   retryPendingDeviceConnectionAuditSync,
   runColdGuardConnectionTest,
+  startDeviceMonitoring,
 } from "./connection-service";
 import { resetMockHardwareRegistry } from "./mock-hardware-registry";
 
@@ -19,12 +20,18 @@ const mockSetSyncJobStatus = jest.fn();
 const mockUpdateDeviceConnectionSyncState = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
 const mockGetClinicHandshakeToken = jest.fn();
+const mockGetNativeMonitoringServiceStatus = jest.fn();
 const mockEnsureDeviceActionTicket = jest.fn();
 const mockEnsureSupervisorActionTicket = jest.fn();
+const mockDeleteDeviceRuntimeConfig = jest.fn();
+const mockGetDeviceRuntimeConfig = jest.fn();
 const mockRegisterEnrolledDevice = jest.fn();
 const mockDecommissionManagedDevice = jest.fn();
 const mockRecordDeviceConnectionTest = jest.fn();
+const mockStartNativeMonitoringService = jest.fn();
+const mockStopNativeMonitoringService = jest.fn();
 const mockFetch = jest.fn();
+const mockUpsertDeviceRuntimeConfig = jest.fn();
 const mockWifiBridgeRelease = jest.fn();
 
 Object.defineProperty(global, "fetch", {
@@ -44,6 +51,12 @@ jest.mock("../../../lib/storage/sqlite/device-repository", () => ({
   updateDeviceConnectionTestStatus: (...args: unknown[]) => mockUpdateDeviceConnectionTestStatus(...args),
 }));
 
+jest.mock("../../../lib/storage/sqlite/device-runtime-repository", () => ({
+  deleteDeviceRuntimeConfig: (...args: unknown[]) => mockDeleteDeviceRuntimeConfig(...args),
+  getDeviceRuntimeConfig: (...args: unknown[]) => mockGetDeviceRuntimeConfig(...args),
+  upsertDeviceRuntimeConfig: (...args: unknown[]) => mockUpsertDeviceRuntimeConfig(...args),
+}));
+
 jest.mock("../../../lib/storage/sqlite/sync-job-repository", () => ({
   deleteSyncJob: (...args: unknown[]) => mockDeleteSyncJob(...args),
   enqueueSyncJob: (...args: unknown[]) => mockEnqueueSyncJob(...args),
@@ -61,6 +74,16 @@ jest.mock("./device-directory", () => ({
   registerEnrolledDevice: (...args: unknown[]) => mockRegisterEnrolledDevice(...args),
   decommissionManagedDevice: (...args: unknown[]) => mockDecommissionManagedDevice(...args),
   recordDeviceConnectionTest: (...args: unknown[]) => mockRecordDeviceConnectionTest(...args),
+}));
+
+jest.mock("./wifi-bridge", () => ({
+  createColdGuardWifiBridge: () => ({
+    connect: jest.fn(),
+    release: (...args: unknown[]) => mockWifiBridgeRelease(...args),
+  }),
+  getNativeMonitoringServiceStatus: (...args: unknown[]) => mockGetNativeMonitoringServiceStatus(...args),
+  startNativeMonitoringService: (...args: unknown[]) => mockStartNativeMonitoringService(...args),
+  stopNativeMonitoringService: (...args: unknown[]) => mockStopNativeMonitoringService(...args),
 }));
 
 beforeEach(() => {
@@ -108,8 +131,48 @@ beforeEach(() => {
   mockDeleteSyncJob.mockResolvedValue(undefined);
   mockListPendingSyncJobs.mockResolvedValue([]);
   mockSetSyncJobStatus.mockResolvedValue(undefined);
+  mockDeleteDeviceRuntimeConfig.mockResolvedValue(undefined);
+  mockGetDeviceRuntimeConfig.mockResolvedValue(null);
+  mockGetNativeMonitoringServiceStatus.mockResolvedValue({
+    deviceId: null,
+    error: null,
+    isRunning: false,
+    transport: null,
+  });
+  mockStartNativeMonitoringService.mockResolvedValue({
+    deviceId: "CG-ESP32-A100",
+    error: null,
+    isRunning: true,
+    transport: "softap",
+  });
+  mockStopNativeMonitoringService.mockResolvedValue({
+    deviceId: null,
+    error: null,
+    isRunning: false,
+    transport: null,
+  });
+  mockUpsertDeviceRuntimeConfig.mockImplementation(async (deviceId: string, patch: Record<string, unknown>) => ({
+    activeRuntimeBaseUrl: patch.activeRuntimeBaseUrl ?? null,
+    activeTransport: patch.activeTransport ?? null,
+    deviceId,
+    facilityWifiPassword: patch.facilityWifiPassword ?? null,
+    facilityWifiRuntimeBaseUrl: patch.facilityWifiRuntimeBaseUrl ?? null,
+    facilityWifiSsid: patch.facilityWifiSsid ?? null,
+    softApPassword: patch.softApPassword ?? null,
+    softApRuntimeBaseUrl: patch.softApRuntimeBaseUrl ?? null,
+    softApSsid: patch.softApSsid ?? null,
+    lastMonitorAt: patch.lastMonitorAt ?? null,
+    lastMonitorError: patch.lastMonitorError ?? null,
+    lastPingAt: patch.lastPingAt ?? null,
+    lastRecoverAt: patch.lastRecoverAt ?? null,
+    lastRuntimeError: patch.lastRuntimeError ?? null,
+    monitoringMode: patch.monitoringMode ?? "off",
+    sessionStatus: patch.sessionStatus ?? "idle",
+    updatedAt: Date.now(),
+  }));
   mockFetch.mockResolvedValue({
     json: async () => ({
+      alerts: [],
       batteryLevel: 89,
       currentTempC: 4.7,
       doorOpen: false,
@@ -117,6 +180,7 @@ beforeEach(() => {
       lastSeenAgeMs: 2_500,
       macAddress: "MOCK-A100",
       mktStatus: "safe",
+      runtimeBaseUrl: "http://192.168.4.1",
       statusText: "Mock BLE-to-WiFi handover completed.",
     }),
     ok: true,
@@ -166,6 +230,88 @@ test("enrolls a blank mock device and registers it", async () => {
   );
 });
 
+test("enrollment uses a single BLE session instead of scanning twice", async () => {
+  const discoverDevice = jest.fn(async () => {
+    throw new Error("discoverDevice should not be called during enrollment");
+  });
+  const enrollDevice = jest.fn(async () => ({
+    bleName: "ColdGuard_7BCC",
+    bootstrapClaim: "claim-1",
+    deviceId: "CG-ESP32-5C7BCC",
+    firmwareVersion: "cg-transport-0.1.0",
+    macAddress: "74:24:A8:5C:7B:CC",
+    protocolVersion: 1,
+    state: "enrolled" as const,
+  }));
+
+  await enrollColdGuardDevice({
+    nickname: "Test device",
+    profile: {
+      firebaseUid: "firebase-u1",
+      displayName: "Yaw Boateng",
+      email: "yaw@example.com",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      staffId: "KB1002",
+      role: "Supervisor",
+      lastUpdatedAt: 1,
+    },
+    qrPayload: "coldguard://device/CG-ESP32-5C7BCC?claim=claim-1&v=1",
+    bleClient: {
+      decommissionDevice: jest.fn(),
+      discoverDevice,
+      enrollDevice,
+      provisionWifi: jest.fn(),
+      requestWifiTicket: jest.fn(),
+    },
+  });
+
+  expect(discoverDevice).not.toHaveBeenCalled();
+  expect(enrollDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      bootstrapToken: "claim-1",
+      deviceId: "CG-ESP32-5C7BCC",
+      nickname: "Test device",
+    }),
+  );
+});
+
+test("starts native monitoring with facility and softap recovery context", async () => {
+  mockUpsertDeviceRuntimeConfig.mockResolvedValueOnce({
+    activeRuntimeBaseUrl: "http://192.168.4.1",
+    activeTransport: "softap",
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: Date.now(),
+    lastMonitorError: null,
+    lastPingAt: null,
+    lastRecoverAt: null,
+    lastRuntimeError: null,
+    monitoringMode: "foreground_service",
+    sessionStatus: "connected",
+    updatedAt: Date.now(),
+  });
+
+  await startDeviceMonitoring("CG-ESP32-A100");
+
+  expect(mockEnsureDeviceActionTicket).toHaveBeenCalledWith("CG-ESP32-A100", "connect");
+  expect(mockStartNativeMonitoringService).toHaveBeenCalledWith({
+    connectActionTicketJson: expect.stringContaining("\"ticketId\":\"device-ticket\""),
+    deviceId: "CG-ESP32-A100",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    handshakeToken: "handshake-token",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    transport: "softap",
+  });
+});
+
 test("runs a mock BLE-to-WiFi connection test and records success", async () => {
   jest.spyOn(Date, "now").mockReturnValue(1_000_000);
   const payload = await runColdGuardConnectionTest({
@@ -204,7 +350,7 @@ test("runs a mock BLE-to-WiFi connection test and records success", async () => 
       deviceId: "CG-ESP32-A100",
       lastSeenAt: 997_500,
       status: "success",
-      transport: "ble+wifi",
+      transport: "softap",
     }),
   );
   expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
@@ -221,7 +367,7 @@ test("runs a mock BLE-to-WiFi connection test and records success", async () => 
       status: "synced",
     }),
   );
-  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
+  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(0);
 });
 
 test("keeps the local connection success and queues sync when backend audit logging fails", async () => {
@@ -252,7 +398,7 @@ test("keeps the local connection success and queues sync when backend audit logg
       deviceId: "CG-ESP32-A100",
       lastSeenAt: expect.any(Number),
       status: "success",
-      transport: "ble+wifi",
+      transport: "softap",
     }),
   );
   expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
@@ -275,7 +421,7 @@ test("retries pending device connection audit jobs and clears sync failure state
         lastSeenAt: 997_500,
         status: "success",
         summary: "Mock BLE-to-WiFi handover completed.",
-        transport: "ble+wifi",
+        transport: "softap",
       },
       status: "pending",
       updatedAt: 1,
@@ -290,7 +436,7 @@ test("retries pending device connection audit jobs and clears sync failure state
     lastSeenAt: 997_500,
     status: "success",
     summary: "Mock BLE-to-WiFi handover completed.",
-    transport: "ble+wifi",
+    transport: "softap",
   });
   expect(mockDeleteSyncJob).toHaveBeenCalledWith("sync-job-1");
   expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
@@ -324,4 +470,5 @@ test("decommissions a mock device and clears cached grants", async () => {
   expect(mockDeleteDeviceActionTicket).toHaveBeenCalledWith("device", "CG-ESP32-A100", "wifi_provision");
   expect(mockDeleteConnectionGrant).toHaveBeenCalledWith("admin", "CG-ESP32-A100");
   expect(mockDeleteConnectionGrant).toHaveBeenCalledWith("device", "CG-ESP32-A100");
+  expect(mockDeleteDeviceRuntimeConfig).toHaveBeenCalledWith("CG-ESP32-A100");
 });

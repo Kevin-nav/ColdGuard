@@ -118,4 +118,3 @@ Expected: PASS
 
 Run: `git diff -- coldguard-web android/app/src/main/AndroidManifest.xml`
 Expected: only deployment, route, and app-link changes
-

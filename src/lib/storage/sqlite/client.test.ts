@@ -27,6 +27,14 @@ test("initializes sqlite and creates all required tables", async () => {
   expect(db.execAsync).toHaveBeenCalledTimes(SQLITE_SCHEMA_STATEMENTS.length + 1);
 });
 
+test("reuses a single sqlite initialization across concurrent callers", async () => {
+  const [first, second] = await Promise.all([initializeSQLite(), initializeSQLite()]);
+
+  expect(first).toBe(second);
+  expect(openDatabaseAsync).toHaveBeenCalledTimes(1);
+  expect(mockExecAsync).toHaveBeenCalledTimes(SQLITE_SCHEMA_STATEMENTS.length + 1);
+});
+
 test("resets the cached promise when opening sqlite fails", async () => {
   jest.mocked(openDatabaseAsync).mockRejectedValueOnce(new Error("open failed"));
 
@@ -59,7 +67,7 @@ test("ignores missing-database delete errors during reset", async () => {
 });
 
 test("migrates legacy sqlite tables without dropping cached data", async () => {
-  mockGetAllAsync.mockImplementation(async (query: string) => {
+  mockGetAllAsync.mockImplementation((async (query: string) => {
     if (query.includes("profile_cache")) {
       return [
         { name: "id" },
@@ -88,7 +96,7 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
     }
 
     return [];
-  });
+  }) as any);
 
   await initializeSQLite();
 

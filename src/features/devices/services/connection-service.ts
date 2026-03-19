@@ -8,6 +8,11 @@ import {
   updateDeviceConnectionSyncState,
   updateDeviceConnectionTestStatus,
 } from "../../../lib/storage/sqlite/device-repository";
+import {
+  deleteDeviceRuntimeConfig,
+  getDeviceRuntimeConfig,
+  upsertDeviceRuntimeConfig,
+} from "../../../lib/storage/sqlite/device-runtime-repository";
 import type { ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
 import { getClinicHandshakeToken } from "../../../lib/storage/secure-store";
 import {
@@ -20,15 +25,25 @@ import type {
   CachedDeviceActionTicket,
   ColdGuardConnectionPayload,
   ColdGuardDiscoveredDevice,
+  DeviceRuntimeSnapshot,
+  FacilityWifiProvisioning,
   ColdGuardWifiTicket,
+  RuntimeAlertRecord,
+  RuntimeTransportMode,
 } from "../types";
 import { RealColdGuardBleClient } from "./ble-client";
 import {
   claimMockHardwareDevice,
   decommissionMockHardwareDevice,
   discoverMockHardwareDevice,
+  provisionMockHardwareWifi,
 } from "./mock-hardware-registry";
-import { createColdGuardWifiBridge } from "./wifi-bridge";
+import {
+  createColdGuardWifiBridge,
+  getNativeMonitoringServiceStatus,
+  startNativeMonitoringService,
+  stopNativeMonitoringService,
+} from "./wifi-bridge";
 import {
   assignDeviceUsers,
   decommissionManagedDevice,
@@ -38,12 +53,7 @@ import {
   registerEnrolledDevice,
 } from "./device-directory";
 
-export type ConnectionTestPayload = ColdGuardConnectionPayload & {
-  localIp: string;
-  receivedAt: number;
-  ssid: string;
-  testUrl: string;
-};
+export type ConnectionTestPayload = DeviceRuntimeSnapshot;
 
 type ConnectionSyncJobPayload = {
   deviceId: string;
@@ -54,10 +64,12 @@ type ConnectionSyncJobPayload = {
 };
 
 type RemoteConnectionPayload = Omit<ColdGuardConnectionPayload, "lastSeenAt"> & {
+  alerts?: RuntimeAlertRecord[];
   institutionId?: string;
   lastSeenAgeMs?: number;
   lastSeenAt?: number;
   nickname?: string;
+  runtimeBaseUrl?: string;
 };
 
 const DEVICE_CONNECTION_SYNC_JOB_TYPE = "device_connection_test_reconciliation";
@@ -77,6 +89,13 @@ export interface ColdGuardBleClient {
     deviceId: string;
     handshakeToken: string;
   }): Promise<ColdGuardWifiTicket>;
+  provisionWifi(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+    password: string;
+    ssid: string;
+  }): Promise<FacilityWifiProvisioning>;
   decommissionDevice(args: {
     actionTicket: CachedDeviceActionTicket;
     deviceId: string;
@@ -151,6 +170,25 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
     };
   }
 
+  async provisionWifi(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+    password: string;
+    ssid: string;
+  }) {
+    if (!args.handshakeToken || !args.actionTicket.mac) {
+      throw new Error("DEVICE_WIFI_PROVISION_AUTH_FAILED");
+    }
+
+    await delay(120);
+    return provisionMockHardwareWifi({
+      deviceId: args.deviceId,
+      password: args.password,
+      ssid: args.ssid,
+    });
+  }
+
   async decommissionDevice(args: {
     actionTicket: CachedDeviceActionTicket;
     deviceId: string;
@@ -166,6 +204,198 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
 }
 
 const realBleClient = new RealColdGuardBleClient();
+const RUNTIME_STATUS_PATH = "/api/v1/runtime/status";
+const RUNTIME_ALERTS_PATH = "/api/v1/runtime/alerts";
+
+function normalizeRuntimeBaseUrl(value: string) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/+$/, "");
+  }
+}
+
+function buildRuntimeUrl(baseUrl: string, path: string) {
+  return `${normalizeRuntimeBaseUrl(baseUrl)}${path}`;
+}
+
+function normalizeRuntimeAlerts(value: unknown): RuntimeAlertRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const candidate = entry as Partial<RuntimeAlertRecord>;
+    if (
+      typeof candidate.title !== "string" ||
+      typeof candidate.body !== "string" ||
+      typeof candidate.triggeredAt !== "number" ||
+      (candidate.severity !== "warning" && candidate.severity !== "critical") ||
+      (candidate.status !== "open" && candidate.status !== "resolved") ||
+      (candidate.incidentType !== "temperature" &&
+        candidate.incidentType !== "door_open" &&
+        candidate.incidentType !== "device_offline" &&
+        candidate.incidentType !== "battery_low")
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        body: candidate.body,
+        cursor: typeof candidate.cursor === "string" ? candidate.cursor : `alert-${index}-${candidate.triggeredAt}`,
+        incidentType: candidate.incidentType,
+        severity: candidate.severity,
+        status: candidate.status,
+        title: candidate.title,
+        triggeredAt: candidate.triggeredAt,
+      },
+    ];
+  });
+}
+
+async function fetchRuntimeStatus(baseUrl: string) {
+  const response = await fetch(buildRuntimeUrl(baseUrl, RUNTIME_STATUS_PATH));
+  if (!response.ok) {
+    throw new Error(`HTTP_RUNTIME_STATUS_FAILED_${response.status}`);
+  }
+
+  return (await response.json()) as RemoteConnectionPayload;
+}
+
+async function fetchRuntimeAlerts(baseUrl: string) {
+  try {
+    const response = await fetch(buildRuntimeUrl(baseUrl, RUNTIME_ALERTS_PATH));
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as { alerts?: unknown };
+    return normalizeRuntimeAlerts(payload.alerts);
+  } catch {
+    return [];
+  }
+}
+
+function buildRuntimeSnapshot(args: {
+  alerts: RuntimeAlertRecord[];
+  localIp: string | null;
+  receivedAt: number;
+  response: RemoteConnectionPayload;
+  runtimeBaseUrl: string;
+  ssid: string | null;
+  transport: RuntimeTransportMode;
+}): DeviceRuntimeSnapshot {
+  const {
+    institutionId: _institutionId,
+    lastSeenAgeMs: _lastSeenAgeMs,
+    lastSeenAt: _remoteLastSeenAt,
+    nickname: _nickname,
+    alerts: _alerts,
+    runtimeBaseUrl: _reportedRuntimeBaseUrl,
+    ...payloadBase
+  } = args.response;
+
+  return {
+    ...(payloadBase as ColdGuardConnectionPayload),
+    alerts: args.alerts,
+    lastSeenAt: normalizeConnectionLastSeenAt(args.response, args.receivedAt),
+    localIp: args.localIp,
+    receivedAt: args.receivedAt,
+    runtimeBaseUrl: normalizeRuntimeBaseUrl(args.runtimeBaseUrl),
+    ssid: args.ssid,
+    transport: args.transport,
+  };
+}
+
+async function fetchAndBuildRuntimeSnapshot(args: {
+  localIp: string | null;
+  runtimeBaseUrl: string;
+  ssid: string | null;
+  transport: RuntimeTransportMode;
+}) {
+  const response = await fetchRuntimeStatus(args.runtimeBaseUrl);
+  const alerts = response.alerts ? normalizeRuntimeAlerts(response.alerts) : await fetchRuntimeAlerts(args.runtimeBaseUrl);
+  const receivedAt = Date.now();
+
+  return buildRuntimeSnapshot({
+    alerts,
+    localIp: args.localIp,
+    receivedAt,
+    response,
+    runtimeBaseUrl: response.runtimeBaseUrl ?? args.runtimeBaseUrl,
+    ssid: args.ssid,
+    transport: args.transport,
+  });
+}
+
+async function connectViaFacilityWifi(deviceId: string) {
+  const config = await getDeviceRuntimeConfig(deviceId);
+  const runtimeBaseUrl = config?.facilityWifiRuntimeBaseUrl;
+  if (!runtimeBaseUrl) {
+    throw new Error("FACILITY_WIFI_NOT_PROVISIONED");
+  }
+
+  const snapshot = await fetchAndBuildRuntimeSnapshot({
+    localIp: null,
+    runtimeBaseUrl,
+    ssid: config?.facilityWifiSsid ?? null,
+    transport: "facility_wifi",
+  });
+
+  await upsertDeviceRuntimeConfig(deviceId, {
+    activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+    activeTransport: "facility_wifi",
+    lastPingAt: snapshot.receivedAt,
+    lastRuntimeError: null,
+    sessionStatus: "connected",
+  });
+
+  return snapshot;
+}
+
+async function connectViaSoftAp(args: {
+  bleClient: ColdGuardBleClient;
+  deviceId: string;
+  wifiBridge: ColdGuardWifiBridge;
+}) {
+  const handshakeToken = await getRequiredClinicHandshakeToken();
+  const actionTicket = await ensureDeviceActionTicket(args.deviceId, "connect");
+
+  await args.bleClient.discoverDevice({
+    deviceId: args.deviceId,
+    expectedState: "enrolled",
+  });
+  const ticket = await args.bleClient.requestWifiTicket({
+    actionTicket,
+    deviceId: args.deviceId,
+    handshakeToken,
+  });
+  const network = await args.wifiBridge.connect(ticket);
+  const snapshot = await fetchAndBuildRuntimeSnapshot({
+    localIp: network.localIp,
+    runtimeBaseUrl: normalizeRuntimeBaseUrl(ticket.testUrl),
+    ssid: ticket.ssid,
+    transport: "softap",
+  });
+
+  await upsertDeviceRuntimeConfig(args.deviceId, {
+    activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+    activeTransport: "softap",
+    lastPingAt: snapshot.receivedAt,
+    lastRecoverAt: snapshot.receivedAt,
+    lastRuntimeError: null,
+    sessionStatus: "connected",
+    softApPassword: ticket.password,
+    softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+    softApSsid: ticket.ssid,
+  });
+
+  return snapshot;
+}
 
 export async function enrollColdGuardDevice(args: {
   nickname: string;
@@ -181,8 +411,6 @@ export async function enrollColdGuardDevice(args: {
   const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
   const bleClient = args.bleClient ?? realBleClient;
   const actionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "enroll");
-
-  await bleClient.discoverDevice({ deviceId, expectedState: "blank" });
   const enrolledDevice = await bleClient.enrollDevice({
     actionTicket,
     bootstrapToken,
@@ -200,6 +428,212 @@ export async function enrollColdGuardDevice(args: {
     nickname: args.nickname.trim() || `ColdGuard ${enrolledDevice.deviceId.slice(-4).toUpperCase()}`,
     protocolVersion: enrolledDevice.protocolVersion,
   });
+}
+
+export async function connectOrRecoverDevice(args: {
+  deviceId: string;
+  bleClient?: ColdGuardBleClient;
+  wifiBridge?: ColdGuardWifiBridge;
+}) {
+  const device = await getDeviceById(args.deviceId);
+  if (!device) {
+    throw new Error("DEVICE_NOT_FOUND");
+  }
+
+  await upsertDeviceRuntimeConfig(args.deviceId, {
+    lastRuntimeError: null,
+    sessionStatus: "connecting",
+  });
+
+  try {
+    return await connectViaFacilityWifi(args.deviceId);
+  } catch (facilityError) {
+    const bleClient = args.bleClient ?? realBleClient;
+    const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
+
+    try {
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        lastRuntimeError: facilityError instanceof Error ? facilityError.message : "Facility Wi-Fi unavailable.",
+        sessionStatus: "recovering",
+      });
+      return await connectViaSoftAp({
+        bleClient,
+        deviceId: args.deviceId,
+        wifiBridge,
+      });
+    } catch (softApError) {
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        activeRuntimeBaseUrl: null,
+        activeTransport: "ble_fallback",
+        lastRuntimeError: softApError instanceof Error ? softApError.message : "Runtime recovery failed.",
+        sessionStatus: "failed",
+      });
+      throw softApError;
+    }
+  }
+}
+
+export async function pingOrRecoverDevice(args: {
+  deviceId: string;
+  bleClient?: ColdGuardBleClient;
+  wifiBridge?: ColdGuardWifiBridge;
+}) {
+  const config = await getDeviceRuntimeConfig(args.deviceId);
+  const runtimeBaseUrl = config?.activeRuntimeBaseUrl ?? config?.facilityWifiRuntimeBaseUrl ?? null;
+  const transport = config?.activeTransport ?? (config?.facilityWifiRuntimeBaseUrl ? "facility_wifi" : null);
+
+  if (runtimeBaseUrl && transport) {
+    try {
+      const snapshot = await fetchAndBuildRuntimeSnapshot({
+        localIp: null,
+        runtimeBaseUrl,
+        ssid: config?.facilityWifiSsid ?? null,
+        transport,
+      });
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+        activeTransport: snapshot.transport,
+        lastPingAt: snapshot.receivedAt,
+        lastRuntimeError: null,
+        sessionStatus: "connected",
+      });
+      return snapshot;
+    } catch (error) {
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        lastRuntimeError: error instanceof Error ? error.message : "Runtime ping failed.",
+        sessionStatus: "recovering",
+      });
+    }
+  }
+
+  return await connectOrRecoverDevice(args);
+}
+
+export async function provisionFacilityWifi(args: {
+  deviceId: string;
+  password: string;
+  ssid: string;
+  bleClient?: ColdGuardBleClient;
+}) {
+  const device = await getDeviceById(args.deviceId);
+  if (!device) {
+    throw new Error("DEVICE_NOT_FOUND");
+  }
+
+  const bleClient = args.bleClient ?? realBleClient;
+  const handshakeToken = await getRequiredClinicHandshakeToken();
+  const actionTicket = await ensureDeviceActionTicket(args.deviceId, "wifi_provision");
+  const provisioning = await bleClient.provisionWifi({
+    actionTicket,
+    deviceId: args.deviceId,
+    handshakeToken,
+    password: args.password,
+    ssid: args.ssid,
+  });
+
+  await upsertDeviceRuntimeConfig(args.deviceId, {
+    facilityWifiPassword: args.password,
+    facilityWifiRuntimeBaseUrl: provisioning.runtimeBaseUrl,
+    facilityWifiSsid: args.ssid,
+    lastRuntimeError: null,
+  });
+
+  return provisioning;
+}
+
+export async function startDeviceMonitoring(deviceId: string) {
+  const [handshakeToken, connectActionTicket, config] = await Promise.all([
+    getRequiredClinicHandshakeToken(),
+    ensureDeviceActionTicket(deviceId, "connect"),
+    upsertDeviceRuntimeConfig(deviceId, {
+      lastMonitorAt: Date.now(),
+      lastMonitorError: null,
+      monitoringMode: "foreground_service",
+    }),
+  ]);
+  const facilityWifiRuntimeBaseUrl = config.facilityWifiRuntimeBaseUrl ?? null;
+  const softApRuntimeBaseUrl =
+    config.softApRuntimeBaseUrl ??
+    (config.activeTransport === "softap" ? config.activeRuntimeBaseUrl : null);
+  const monitoringTransport =
+    config.activeTransport ??
+    (facilityWifiRuntimeBaseUrl ? "facility_wifi" : softApRuntimeBaseUrl ? "softap" : "ble_fallback");
+
+  if (!facilityWifiRuntimeBaseUrl && !softApRuntimeBaseUrl) {
+    throw new Error("RUNTIME_MONITORING_REQUIRES_RUNTIME_TARGET");
+  }
+
+  await startNativeMonitoringService({
+    connectActionTicketJson: JSON.stringify(connectActionTicket),
+    deviceId,
+    facilityWifiRuntimeBaseUrl,
+    handshakeToken,
+    softApPassword: config.softApPassword,
+    softApRuntimeBaseUrl,
+    softApSsid: config.softApSsid,
+    transport: monitoringTransport,
+  });
+
+  return config;
+}
+
+export async function stopDeviceMonitoring(deviceId: string) {
+  await stopNativeMonitoringService();
+  return await upsertDeviceRuntimeConfig(deviceId, {
+    monitoringMode: "off",
+  });
+}
+
+export async function getDeviceRuntimeSession(deviceId: string) {
+  const [config, serviceStatus] = await Promise.all([
+    getDeviceRuntimeConfig(deviceId),
+    getNativeMonitoringServiceStatus(),
+  ]);
+  if (!config) {
+    return null;
+  }
+
+  if (serviceStatus.deviceId === deviceId && serviceStatus.isRunning) {
+    return {
+      ...config,
+      activeTransport: serviceStatus.transport ?? config.activeTransport,
+      lastMonitorError: serviceStatus.error ?? config.lastMonitorError,
+      monitoringMode: "foreground_service",
+    };
+  }
+
+  return config;
+}
+
+export async function pollMonitoredDeviceRuntime(args: {
+  deviceId: string;
+  bleClient?: ColdGuardBleClient;
+  wifiBridge?: ColdGuardWifiBridge;
+}) {
+  try {
+    const snapshot = await pingOrRecoverDevice(args);
+    await saveDeviceConnectionSnapshot(args.deviceId, {
+      batteryLevel: snapshot.batteryLevel,
+      currentTempC: snapshot.currentTempC,
+      doorOpen: snapshot.doorOpen,
+      lastConnectionTestAt: snapshot.receivedAt,
+      lastConnectionTestStatus: "success",
+      lastSeenAt: snapshot.lastSeenAt,
+      macAddress: snapshot.macAddress,
+      mktStatus: snapshot.mktStatus,
+    });
+    await upsertDeviceRuntimeConfig(args.deviceId, {
+      lastMonitorAt: snapshot.receivedAt,
+      lastMonitorError: null,
+    });
+    return snapshot;
+  } catch (error) {
+    await upsertDeviceRuntimeConfig(args.deviceId, {
+      lastMonitorAt: Date.now(),
+      lastMonitorError: error instanceof Error ? error.message : "Monitoring poll failed.",
+    });
+    throw error;
+  }
 }
 
 export async function runColdGuardConnectionTest(args: {
@@ -220,73 +654,37 @@ export async function runColdGuardConnectionTest(args: {
   });
 
   try {
-    const handshakeToken = await getRequiredClinicHandshakeToken();
-    const actionTicket = await ensureDeviceActionTicket(args.deviceId, "connect");
-    const bleClient = args.bleClient ?? realBleClient;
-    const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
+    const payload = await pingOrRecoverDevice(args);
 
-    try {
-      await bleClient.discoverDevice({
+    await saveDeviceConnectionSnapshot(args.deviceId, {
+      batteryLevel: payload.batteryLevel,
+      currentTempC: payload.currentTempC,
+      doorOpen: payload.doorOpen,
+      lastConnectionTestAt: payload.receivedAt,
+      lastConnectionTestStatus: "success",
+      lastSeenAt: payload.lastSeenAt,
+      macAddress: payload.macAddress,
+      mktStatus: payload.mktStatus,
+    });
+
+    await updateDeviceConnectionTestStatus({
+      deviceId: args.deviceId,
+      testedAt: payload.receivedAt,
+      status: "success",
+    });
+
+    await syncDeviceConnectionAudit(
+      {
         deviceId: args.deviceId,
-        expectedState: "enrolled",
-      });
-      const ticket = await bleClient.requestWifiTicket({
-        actionTicket,
-        deviceId: args.deviceId,
-        handshakeToken,
-      });
-      const network = await wifiBridge.connect(ticket);
-      const response = await fetch(ticket.testUrl);
-      if (!response.ok) {
-        throw new Error(`HTTP_CONNECTION_TEST_FAILED_${response.status}`);
-      }
-      const remotePayload = (await response.json()) as RemoteConnectionPayload;
-      const receivedAt = Date.now();
-      const lastSeenAt = normalizeConnectionLastSeenAt(remotePayload, receivedAt);
-      const { institutionId: _institutionId, lastSeenAgeMs: _lastSeenAgeMs, lastSeenAt: _remoteLastSeenAt, nickname: _nickname, ...payloadBase } =
-        remotePayload;
-
-      const payload: ConnectionTestPayload = {
-        ...payloadBase,
-        lastSeenAt,
-        localIp: network.localIp,
-        receivedAt,
-        ssid: ticket.ssid,
-        testUrl: ticket.testUrl,
-      };
-
-      await saveDeviceConnectionSnapshot(args.deviceId, {
-        batteryLevel: payload.batteryLevel,
-        currentTempC: payload.currentTempC,
-        doorOpen: payload.doorOpen,
-        lastConnectionTestAt: payload.receivedAt,
-        lastConnectionTestStatus: "success",
         lastSeenAt: payload.lastSeenAt,
-        macAddress: payload.macAddress,
-        mktStatus: payload.mktStatus,
-      });
-
-      await updateDeviceConnectionTestStatus({
-        deviceId: args.deviceId,
-        testedAt: payload.receivedAt,
         status: "success",
-      });
+        summary: payload.statusText,
+        transport: payload.transport,
+      },
+      { queueOnFailure: true },
+    ).catch(() => undefined);
 
-      await syncDeviceConnectionAudit(
-        {
-          deviceId: args.deviceId,
-          lastSeenAt: payload.lastSeenAt,
-          status: "success",
-          summary: payload.statusText,
-          transport: "ble+wifi",
-        },
-        { queueOnFailure: true },
-      ).catch(() => undefined);
-
-      return payload;
-    } finally {
-      await wifiBridge.release().catch(() => undefined);
-    }
+    return payload;
   } catch (error) {
     await updateDeviceConnectionTestStatus({
       deviceId: args.deviceId,
@@ -299,7 +697,7 @@ export async function runColdGuardConnectionTest(args: {
         deviceId: args.deviceId,
         summary: error instanceof Error ? error.message : "Connection test failed.",
         status: "failed",
-        transport: "ble+wifi",
+        transport: "runtime",
       });
     } catch {
       // Preserve the local failure state even if backend audit logging is unavailable.
@@ -441,6 +839,7 @@ export async function decommissionColdGuardDevice(args: {
   await deleteDeviceActionTicket("device", args.deviceId, "wifi_provision");
   await deleteConnectionGrant("admin", args.deviceId);
   await deleteConnectionGrant("device", args.deviceId);
+  await deleteDeviceRuntimeConfig(args.deviceId);
 }
 
 async function getRequiredClinicHandshakeToken() {

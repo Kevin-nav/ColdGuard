@@ -147,9 +147,7 @@ void setup() {
   Serial.println("ColdGuard ESP32 transport harness ready");
   Serial.println("Device ID: " + deviceState.deviceId);
   logSecretValue("Bootstrap Token: ", deviceState.bootstrapToken);
-  Serial.println(
-    "Enrollment Link: https://coldguard.org/device/" + deviceState.deviceId +
-    "?claim=" + deviceState.bootstrapToken + "&v=1");
+  Serial.println("Enrollment Link: " + coldguard::buildEnrollmentLink(deviceState));
   Serial.println("BLE Name: " + deviceState.bleName);
   Serial.println("MAC: " + deviceState.macAddress);
 }

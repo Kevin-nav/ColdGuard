@@ -42,6 +42,7 @@ struct DeviceState {
 
 String formatMacAddress(uint64_t mac);
 String buildDeviceId(uint64_t mac);
+String buildEnrollmentLink(const DeviceState& state);
 String escapeJson(const String& value);
 String uint64ToString(uint64_t value);
 String observableEnrollmentState(const DeviceState& state);

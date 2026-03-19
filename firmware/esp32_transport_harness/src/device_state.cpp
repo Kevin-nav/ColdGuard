@@ -74,6 +74,11 @@ String buildDeviceId(uint64_t mac) {
   return String(buffer);
 }
 
+String buildEnrollmentLink(const DeviceState& state) {
+  return "https://coldguard.org/device/" + state.deviceId +
+         "?claim=" + state.bootstrapToken + "&v=1";
+}
+
 String escapeJson(const String& value) {
   String escaped;
   escaped.reserve(value.length() * 6);

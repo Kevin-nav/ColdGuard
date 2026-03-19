@@ -566,7 +566,7 @@ function openCommandSession(device: Device): BleCommandSession {
         });
       }
 
-      if (getUtf8ByteLength(rawPayload) <= MAX_BLE_WRITE_BYTES) {
+      if (getUtf8ByteLength(payload) <= MAX_BLE_WRITE_BYTES) {
         return (await writePayload(rawPayload, requestId, command)) as GenericBleResponse;
       }
 

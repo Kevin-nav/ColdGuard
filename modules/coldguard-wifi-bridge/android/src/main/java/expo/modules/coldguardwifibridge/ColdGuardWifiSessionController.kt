@@ -44,10 +44,11 @@ class ColdGuardWifiSessionController(private val context: Context) {
 
     return suspendCancellableCoroutine { continuation ->
       val handler = Handler(Looper.getMainLooper())
+      lateinit var timeoutRunnable: Runnable
       lateinit var callback: ConnectivityManager.NetworkCallback
 
       fun clearRequestedNetworkBinding() {
-        handler.removeCallbacksAndMessages(null)
+        handler.removeCallbacks(timeoutRunnable)
         try {
           connectivityManager.unregisterNetworkCallback(callback)
         } catch (_: Exception) {
@@ -63,8 +64,16 @@ class ColdGuardWifiSessionController(private val context: Context) {
         }
       }
 
+      timeoutRunnable = Runnable {
+        clearRequestedNetworkBinding()
+        if (continuation.isActive) {
+          continuation.resumeWithException(IllegalStateException("WIFI_AP_TIMEOUT"))
+        }
+      }
+
       callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
+          handler.removeCallbacks(timeoutRunnable)
           if (bindProcess) {
             connectivityManager.bindProcessToNetwork(network)
           }
@@ -96,15 +105,7 @@ class ColdGuardWifiSessionController(private val context: Context) {
       }
 
       connectivityManager.requestNetwork(request, callback)
-      handler.postDelayed(
-        {
-          clearRequestedNetworkBinding()
-          if (continuation.isActive) {
-            continuation.resumeWithException(IllegalStateException("WIFI_AP_TIMEOUT"))
-          }
-        },
-        15_000L
-      )
+      handler.postDelayed(timeoutRunnable, 15_000L)
 
       continuation.invokeOnCancellation {
         clearRequestedNetworkBinding()

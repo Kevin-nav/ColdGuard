@@ -16,8 +16,15 @@ void debugBleRecovery(const String& message) {
   Serial.println("[BLE_DEBUG] " + message);
 }
 
+constexpr size_t kMaxPendingTransportPayloadSize = 8192;
+
 String pendingTransportId;
 String pendingTransportPayload;
+
+void resetPendingTransport() {
+  pendingTransportId = "";
+  pendingTransportPayload = "";
+}
 
 String getJsonString(const String& payload, const char* key) {
   const String needle = "\"" + String(key) + "\":";
@@ -635,16 +642,35 @@ String handleTransportChunk(
     debugBleRecovery("transport reset for transportId=" + transportId);
   }
 
+  if (pendingTransportPayload.length() + data.length() > kMaxPendingTransportPayloadSize) {
+    debugBleRecovery("transport payload too large transportId=" + transportId);
+    resetPendingTransport();
+    return buildErrorResponse(
+      "transport.chunk",
+      requestId,
+      "TRANSPORT_CHUNK_TOO_LARGE",
+      "Chunk transport payload exceeds maximum allowed size.");
+  }
+
   pendingTransportPayload += data;
 
   if (!isFinal) {
     return "";
   }
 
+  if (pendingTransportPayload.length() > kMaxPendingTransportPayloadSize) {
+    debugBleRecovery("transport payload too large before decode transportId=" + transportId);
+    resetPendingTransport();
+    return buildErrorResponse(
+      "transport.chunk",
+      requestId,
+      "TRANSPORT_CHUNK_TOO_LARGE",
+      "Chunk transport payload exceeds maximum allowed size.");
+  }
+
   debugBleRecovery("transport final chunk received transportId=" + transportId + " encodedLength=" + String(pendingTransportPayload.length()));
   const String decodedPayload = decodeBase64Payload(pendingTransportPayload);
-  pendingTransportId = "";
-  pendingTransportPayload = "";
+  resetPendingTransport();
 
   if (decodedPayload.isEmpty()) {
     debugBleRecovery("transport decode failed transportId=" + transportId);

@@ -215,13 +215,7 @@ void maybeEnsureStationConnected(DeviceState* state) {
   WiFi.mode(state->accessPointStarted ? WIFI_AP_STA : WIFI_STA);
   WiFi.begin(state->facilityWifiSsid.c_str(), state->facilityWifiPassword.c_str());
   state->lastStationConnectAttemptMs = nowMs;
-
-  const unsigned long startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED && static_cast<long>(millis() - startedAt) < 5000L) {
-    delay(50);
-  }
-
-  state->stationConnected = WiFi.status() == WL_CONNECTED;
+  state->stationConnected = false;
 }
 
 }  // namespace
@@ -282,7 +276,7 @@ bool provisionFacilityWifi(
     ensureRuntimeRoutesRegistered(webServer, state, firmwareVersion);
   }
 
-  return state->stationConnected;
+  return !state->facilityWifiSsid.isEmpty();
 }
 
 String currentRuntimeBaseUrl(DeviceState* state) {

@@ -9,6 +9,7 @@
 
 #include "src/ble_recovery.h"
 #include "src/device_state.h"
+#include "src/wifi_runtime.h"
 
 namespace {
 
@@ -140,6 +141,7 @@ void initializeBle() {
 void setup() {
   Serial.begin(115200);
   coldguard::loadDeviceState(preferences, kPreferencesNamespace, &deviceState);
+  coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
   initializeBle();
 
   Serial.println("ColdGuard ESP32 transport harness ready");
@@ -153,7 +155,8 @@ void setup() {
 }
 
 void loop() {
-  if (deviceState.accessPointStarted) {
+  coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
+  if (deviceState.accessPointStarted || deviceState.stationConnected) {
     webServer.handleClient();
   }
 }

@@ -498,6 +498,60 @@ String handleWifiTicketRequest(
          "}";
 }
 
+String handleWifiProvision(
+  const String& payload,
+  const String& requestId,
+  DeviceState* state,
+  Preferences& preferences,
+  WebServer& webServer,
+  const BleRecoveryConfig& config) {
+  if (state->enrollmentState != "enrolled") {
+    return buildErrorResponse("wifi.provision", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before Wi-Fi provisioning.");
+  }
+
+  const String actionTicket = getJsonObject(payload, "actionTicket");
+  const String handshakeProof = getJsonString(payload, "handshakeProof");
+  const String ssid = getJsonString(payload, "ssid");
+  const String password = getJsonString(payload, "password");
+  const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
+
+  if (ssid.isEmpty() || password.length() < 8) {
+    return buildErrorResponse("wifi.provision", requestId, "WIFI_PROVISION_INPUT_INVALID", "Facility Wi-Fi credentials are incomplete.");
+  }
+
+  uint32_t nextGrantVersion = 0;
+  if (!verifyHandshakeProof(*state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
+    return buildErrorResponse("wifi.provision", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+  }
+
+  if (!verifyActionTicket(
+        actionTicket,
+        *state,
+        state->institutionId,
+        "wifi_provision",
+        proofTimestamp,
+        config.proofWindowMs,
+        config.actionTicketMasterKey,
+        &nextGrantVersion)) {
+    return buildErrorResponse("wifi.provision", requestId, "ACTION_TICKET_INVALID", "Wi-Fi provisioning action ticket verification failed.");
+  }
+
+  if (!provisionFacilityWifi(webServer, state, config.firmwareVersion, ssid, password)) {
+    return buildErrorResponse("wifi.provision", requestId, "FACILITY_WIFI_CONNECT_FAILED", "ESP32 could not join the provisioned Wi-Fi network.");
+  }
+
+  saveDeviceState(preferences, *state);
+
+  return "{"
+         "\"ok\":true,"
+         "\"command\":\"wifi.provision\","
+         "\"requestId\":\"" + escapeJson(requestId) + "\","
+         "\"ssid\":\"" + escapeJson(state->facilityWifiSsid) + "\","
+         "\"password\":\"" + escapeJson(state->facilityWifiPassword) + "\","
+         "\"runtimeBaseUrl\":\"" + escapeJson(currentRuntimeBaseUrl(state)) + "\""
+         "}";
+}
+
 String handleDecommission(
   const String& payload,
   const String& requestId,
@@ -650,6 +704,9 @@ String dispatchCommand(
   }
   if (hasCommand(payload, "wifi.ticket.request")) {
     return handleWifiTicketRequest(requestId, state, webServer, config);
+  }
+  if (hasCommand(payload, "wifi.provision")) {
+    return handleWifiProvision(payload, requestId, state, preferences, webServer, config);
   }
   if (hasCommand(payload, "device.decommission")) {
     return handleDecommission(payload, requestId, state, preferences, webServer, advertising, config, deferredActions);

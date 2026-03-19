@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { useDashboardBootstrap } from "../../dashboard/providers/dashboard-bootstrap";
 import { ensureLocalProfileForUser } from "../../dashboard/services/profile-hydration";
+import { listMonitoredDeviceRuntimeConfigs } from "../../../lib/storage/sqlite/device-runtime-repository";
+import { pollMonitoredDeviceRuntime } from "../../devices/services/connection-service";
 import { useNetworkStatus } from "../../network/network-status";
 import {
   type NotificationIncidentRecord,
@@ -150,6 +152,47 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     if (!institutionName || !isOnline) return;
     void flushPendingNotificationSyncJobs({ institutionName, isOnline });
   }, [institutionName, isOnline]);
+
+  useEffect(() => {
+    if (!institutionName || !isReady || !user?.uid) {
+      return;
+    }
+
+    let active = true;
+
+    async function pollMonitoredDevices() {
+      try {
+        const monitored = await listMonitoredDeviceRuntimeConfigs();
+        for (const runtime of monitored) {
+          await pollMonitoredDeviceRuntime({ deviceId: runtime.deviceId }).catch(() => undefined);
+        }
+
+        const [nextInbox, nextPreferences] = await Promise.all([
+          syncNotificationInbox(institutionName, { isOnline }),
+          syncNotificationPreferences({ isOnline }),
+        ]);
+
+        if (!active) return;
+
+        setIncidents(nextInbox.incidents);
+        setPreferences(nextPreferences);
+        setError(nextInbox.syncError);
+        await mirrorNotificationsLocally(nextInbox.incidents, nextPreferences);
+      } catch {
+        // Monitoring is best-effort in the JS runtime.
+      }
+    }
+
+    void pollMonitoredDevices();
+    const interval = setInterval(() => {
+      void pollMonitoredDevices();
+    }, 60_000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [institutionName, isOnline, isReady, user?.uid]);
 
   async function refresh() {
     if (!institutionName) return;

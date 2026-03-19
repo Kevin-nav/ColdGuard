@@ -181,8 +181,6 @@ export async function enrollColdGuardDevice(args: {
   const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
   const bleClient = args.bleClient ?? realBleClient;
   const actionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "enroll");
-
-  await bleClient.discoverDevice({ deviceId, expectedState: "blank" });
   const enrolledDevice = await bleClient.enrollDevice({
     actionTicket,
     bootstrapToken,

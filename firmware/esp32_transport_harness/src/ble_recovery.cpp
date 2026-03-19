@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <mbedtls/base64.h>
 #include <BLEAdvertising.h>
 
 #include "action_ticket.h"
@@ -10,6 +11,13 @@
 namespace coldguard {
 
 namespace {
+
+void debugBleRecovery(const String& message) {
+  Serial.println("[BLE_DEBUG] " + message);
+}
+
+String pendingTransportId;
+String pendingTransportPayload;
 
 String getJsonString(const String& payload, const char* key) {
   const String needle = "\"" + String(key) + "\":";
@@ -46,6 +54,27 @@ String getJsonString(const String& payload, const char* key) {
     value += current;
   }
   return value;
+}
+
+bool getJsonBool(const String& payload, const char* key, bool fallbackValue = false) {
+  const String needle = "\"" + String(key) + "\":";
+  const int keyIndex = payload.indexOf(needle);
+  if (keyIndex < 0) {
+    return fallbackValue;
+  }
+
+  int valueIndex = keyIndex + needle.length();
+  while (valueIndex < static_cast<int>(payload.length()) && isspace(payload.charAt(valueIndex))) {
+    valueIndex++;
+  }
+
+  if (payload.startsWith("true", valueIndex)) {
+    return true;
+  }
+  if (payload.startsWith("false", valueIndex)) {
+    return false;
+  }
+  return fallbackValue;
 }
 
 long long getJsonInt64(const String& payload, const char* key, long long fallbackValue = 0) {
@@ -129,6 +158,37 @@ String getJsonObject(const String& payload, const char* key) {
   }
 
   return "";
+}
+
+String decodeBase64Payload(const String& encodedValue) {
+  size_t outputLength = 0;
+  int result = mbedtls_base64_decode(
+    nullptr,
+    0,
+    &outputLength,
+    reinterpret_cast<const unsigned char*>(encodedValue.c_str()),
+    encodedValue.length());
+
+  if (result != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL && result != 0) {
+    return "";
+  }
+
+  unsigned char* buffer = new unsigned char[outputLength + 1];
+  result = mbedtls_base64_decode(
+    buffer,
+    outputLength,
+    &outputLength,
+    reinterpret_cast<const unsigned char*>(encodedValue.c_str()),
+    encodedValue.length());
+  if (result != 0) {
+    delete[] buffer;
+    return "";
+  }
+
+  buffer[outputLength] = '\0';
+  const String decoded(reinterpret_cast<char*>(buffer));
+  delete[] buffer;
+  return decoded;
 }
 
 String redactJsonObjectField(const String& payload, const char* key) {
@@ -252,11 +312,14 @@ String handleEnrollBegin(
   Preferences& preferences,
   BLEAdvertising* advertising,
   const BleRecoveryConfig& config) {
+  debugBleRecovery("enter enroll.begin requestId=" + requestId);
   if (state->pendingEnrollment.active) {
+    debugBleRecovery("enroll.begin rejected: pending enrollment already active");
     return buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_PENDING", "Enrollment is already pending.");
   }
 
   if (state->enrollmentState != "blank") {
+    debugBleRecovery("enroll.begin rejected: device already enrolled");
     return buildErrorResponse("enroll.begin", requestId, "DEVICE_ALREADY_ENROLLED", "Device is already enrolled.");
   }
 
@@ -270,20 +333,25 @@ String handleEnrollBegin(
   const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
 
   if (incomingDeviceId != state->deviceId || incomingBootstrapToken != state->bootstrapToken) {
+    debugBleRecovery("enroll.begin rejected: bootstrap/device mismatch");
     return buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_BOOTSTRAP_INVALID", "Bootstrap token or device id did not match.");
   }
 
   if (incomingInstitutionId.isEmpty()) {
+    debugBleRecovery("enroll.begin rejected: institution missing");
     return buildErrorResponse("enroll.begin", requestId, "INSTITUTION_REQUIRED", "Institution id is required for enrollment.");
   }
 
   if (incomingHandshakeToken.isEmpty()) {
+    debugBleRecovery("enroll.begin rejected: handshake token missing");
     return buildErrorResponse("enroll.begin", requestId, "HANDSHAKE_TOKEN_REQUIRED", "Handshake token is required for enrollment.");
   }
 
   if (!verifyHandshakeProofWithToken(incomingHandshakeToken, *state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
+    debugBleRecovery("enroll.begin rejected: handshake proof invalid");
     return buildErrorResponse("enroll.begin", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
   }
+  debugBleRecovery("enroll.begin handshake proof passed");
 
   uint32_t nextGrantVersion = 0;
   if (!verifyActionTicket(
@@ -295,16 +363,17 @@ String handleEnrollBegin(
         config.proofWindowMs,
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
+    debugBleRecovery("enroll.begin rejected: action ticket invalid");
     return buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_TICKET_INVALID", "Supervisor enrollment action ticket verification failed.");
   }
+  debugBleRecovery("enroll.begin action ticket passed");
 
   state->pendingEnrollment.active = true;
   state->pendingEnrollment.institutionId = incomingInstitutionId;
   state->pendingEnrollment.nickname = incomingNickname;
   state->pendingEnrollment.handshakeToken = incomingHandshakeToken;
   state->pendingEnrollment.grantVersion = nextGrantVersion;
-  saveDeviceState(preferences, *state);
-  restartAdvertising(advertising, *state, config.serviceUuid, config.protocolVersion);
+  debugBleRecovery("enroll.begin completed: pending state staged");
 
   return "{"
          "\"ok\":true,"
@@ -319,8 +388,11 @@ String handleEnrollCommit(
   DeviceState* state,
   Preferences& preferences,
   BLEAdvertising* advertising,
-  const BleRecoveryConfig& config) {
+  const BleRecoveryConfig& config,
+  BleRecoveryDeferredActions* deferredActions) {
+  debugBleRecovery("enter enroll.commit requestId=" + requestId);
   if (!state->pendingEnrollment.active) {
+    debugBleRecovery("enroll.commit rejected: no pending enrollment");
     return buildErrorResponse("enroll.commit", requestId, "NO_PENDING_ENROLLMENT", "Call enroll.begin before enroll.commit.");
   }
 
@@ -330,8 +402,12 @@ String handleEnrollCommit(
   state->handshakeToken = state->pendingEnrollment.handshakeToken;
   state->grantVersion = state->pendingEnrollment.grantVersion;
   state->pendingEnrollment = PendingEnrollment{};
+  debugBleRecovery("enroll.commit persisting enrolled state");
   saveDeviceState(preferences, *state);
-  restartAdvertising(advertising, *state, config.serviceUuid, config.protocolVersion);
+  if (deferredActions != nullptr) {
+    deferredActions->restartAdvertising = true;
+  }
+  debugBleRecovery("enroll.commit completed: advertising restart deferred until after response");
 
   return "{"
          "\"ok\":true,"
@@ -429,8 +505,11 @@ String handleDecommission(
   Preferences& preferences,
   WebServer& webServer,
   BLEAdvertising* advertising,
-  const BleRecoveryConfig& config) {
+  const BleRecoveryConfig& config,
+  BleRecoveryDeferredActions* deferredActions) {
+  debugBleRecovery("enter device.decommission requestId=" + requestId);
   if (state->enrollmentState != "enrolled") {
+    debugBleRecovery("device.decommission rejected: device not enrolled");
     return buildErrorResponse("device.decommission", requestId, "DEVICE_NOT_ENROLLED", "Device is already blank.");
   }
 
@@ -440,6 +519,7 @@ String handleDecommission(
 
   uint32_t nextGrantVersion = 0;
   if (!verifyHandshakeProof(*state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
+    debugBleRecovery("device.decommission rejected: handshake proof invalid");
     return buildErrorResponse("device.decommission", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
   }
 
@@ -452,17 +532,23 @@ String handleDecommission(
         config.proofWindowMs,
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
+    debugBleRecovery("device.decommission rejected: action ticket invalid");
     return buildErrorResponse("device.decommission", requestId, "ACTION_TICKET_INVALID", "Supervisor decommission action ticket verification failed.");
   }
 
   if (nextGrantVersion <= state->grantVersion) {
+    debugBleRecovery("device.decommission rejected: stale grant");
     return buildErrorResponse("device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated.");
   }
 
+  debugBleRecovery("device.decommission clearing enrollment state");
   stopSoftAp(webServer, state);
   clearEnrollmentState(state);
   saveDeviceState(preferences, *state);
-  restartAdvertising(advertising, *state, config.serviceUuid, config.protocolVersion);
+  if (deferredActions != nullptr) {
+    deferredActions->restartAdvertising = true;
+  }
+  debugBleRecovery("device.decommission completed: advertising restart deferred until after response");
 
   return "{"
          "\"ok\":true,"
@@ -470,6 +556,50 @@ String handleDecommission(
          "\"requestId\":\"" + escapeJson(requestId) + "\","
          "\"state\":\"blank\""
          "}";
+}
+
+String handleTransportChunk(
+  const String& payload,
+  DeviceState* state,
+  Preferences& preferences,
+  WebServer& webServer,
+  BLEAdvertising* advertising,
+  const BleRecoveryConfig& config,
+  BleRecoveryDeferredActions* deferredActions) {
+  const String transportId = getJsonString(payload, "transportId");
+  const String data = getJsonString(payload, "data");
+  const bool isFinal = getJsonBool(payload, "final", false);
+  const String requestId = getJsonString(payload, "requestId");
+
+  if (transportId.isEmpty() || data.isEmpty()) {
+    return buildErrorResponse("transport.chunk", requestId, "TRANSPORT_CHUNK_INVALID", "Chunk transport payload is missing required fields.");
+  }
+
+  if (pendingTransportId != transportId) {
+    pendingTransportId = transportId;
+    pendingTransportPayload = "";
+    debugBleRecovery("transport reset for transportId=" + transportId);
+  }
+
+  pendingTransportPayload += data;
+
+  if (!isFinal) {
+    return "";
+  }
+
+  debugBleRecovery("transport final chunk received transportId=" + transportId + " encodedLength=" + String(pendingTransportPayload.length()));
+  const String decodedPayload = decodeBase64Payload(pendingTransportPayload);
+  pendingTransportId = "";
+  pendingTransportPayload = "";
+
+  if (decodedPayload.isEmpty()) {
+    debugBleRecovery("transport decode failed transportId=" + transportId);
+    return buildErrorResponse("transport.chunk", requestId, "TRANSPORT_CHUNK_DECODE_FAILED", "Chunk transport payload could not be decoded.");
+  }
+
+  debugBleRecovery("transport decode ok command=" + getJsonString(decodedPayload, "command") + " requestId=" + getJsonString(decodedPayload, "requestId"));
+
+  return dispatchCommand(decodedPayload, state, preferences, webServer, advertising, config, deferredActions);
 }
 
 }  // namespace
@@ -501,8 +631,10 @@ String dispatchCommand(
   Preferences& preferences,
   WebServer& webServer,
   BLEAdvertising* advertising,
-  const BleRecoveryConfig& config) {
+  const BleRecoveryConfig& config,
+  BleRecoveryDeferredActions* deferredActions) {
   const String requestId = getJsonString(payload, "requestId");
+  debugBleRecovery("dispatch command=" + getJsonString(payload, "command") + " requestId=" + requestId);
 
   if (hasCommand(payload, "hello")) {
     return buildHelloResponse(state, requestId, config);
@@ -511,7 +643,7 @@ String dispatchCommand(
     return handleEnrollBegin(payload, requestId, state, preferences, advertising, config);
   }
   if (hasCommand(payload, "enroll.commit")) {
-    return handleEnrollCommit(requestId, state, preferences, advertising, config);
+    return handleEnrollCommit(requestId, state, preferences, advertising, config, deferredActions);
   }
   if (hasCommand(payload, "grant.verify")) {
     return handleGrantVerify(payload, requestId, state, preferences, config);
@@ -520,7 +652,10 @@ String dispatchCommand(
     return handleWifiTicketRequest(requestId, state, webServer, config);
   }
   if (hasCommand(payload, "device.decommission")) {
-    return handleDecommission(payload, requestId, state, preferences, webServer, advertising, config);
+    return handleDecommission(payload, requestId, state, preferences, webServer, advertising, config, deferredActions);
+  }
+  if (hasCommand(payload, "transport.chunk")) {
+    return handleTransportChunk(payload, state, preferences, webServer, advertising, config, deferredActions);
   }
 
   return buildErrorResponse("unknown", requestId, "UNKNOWN_COMMAND", "Command not recognized by the transport harness.");

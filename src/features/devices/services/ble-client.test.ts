@@ -129,3 +129,24 @@ test("creates a proof timestamp from device uptime plus local elapsed time", () 
   ).toBe(5400);
   jest.restoreAllMocks();
 });
+
+test("matches scan results by BLE name suffix even without a service filter", () => {
+  expect(
+    __testing.doesDeviceMatchExpectedId(
+      {
+        id: "AA:BB:CC:DD:EE:FF",
+        localName: null,
+        name: "ColdGuard_7BCC",
+      } as any,
+      "CG-ESP32-5C7BCC",
+    ),
+  ).toBe(true);
+});
+
+test("splits oversized BLE transport payloads into multiple chunks", () => {
+  expect(__testing.splitTransportPayload("a".repeat(250), 120)).toEqual([
+    "a".repeat(120),
+    "a".repeat(120),
+    "a".repeat(10),
+  ]);
+});

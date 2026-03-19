@@ -4,6 +4,7 @@ import { SQLITE_LEGACY_COLUMN_MIGRATIONS, SQLITE_SCHEMA_STATEMENTS } from "./sch
 const SQLITE_DATABASE_NAME = "coldguard.db";
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
+let initializationPromise: Promise<SQLiteDatabase> | null = null;
 
 export async function getSQLiteDatabase() {
   if (!databasePromise) {
@@ -17,15 +18,24 @@ export async function getSQLiteDatabase() {
 }
 
 export async function initializeSQLite() {
-  const database = await getSQLiteDatabase();
+  if (!initializationPromise) {
+    initializationPromise = (async () => {
+      const database = await getSQLiteDatabase();
 
-  for (const statement of SQLITE_SCHEMA_STATEMENTS) {
-    await database.execAsync(statement);
+      for (const statement of SQLITE_SCHEMA_STATEMENTS) {
+        await database.execAsync(statement);
+      }
+
+      await migrateLegacySQLiteSchema(database);
+
+      return database;
+    })().catch((error) => {
+      initializationPromise = null;
+      throw error;
+    });
   }
 
-  await migrateLegacySQLiteSchema(database);
-
-  return database;
+  return await initializationPromise;
 }
 
 type SQLiteTableInfoRow = {
@@ -91,6 +101,7 @@ function isMissingDatabaseError(error: unknown) {
 export async function resetSQLiteForTests() {
   const pendingDatabase = databasePromise;
   databasePromise = null;
+  initializationPromise = null;
 
   try {
     const database = pendingDatabase ? await pendingDatabase.catch(() => null) : null;

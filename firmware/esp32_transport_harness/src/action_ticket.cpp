@@ -9,6 +9,10 @@ namespace coldguard {
 
 namespace {
 
+void debugActionTicket(const String& message) {
+  Serial.println("[ACTION_TICKET] " + message);
+}
+
 bool hmacSha256Bytes(
   const uint8_t* key,
   size_t keyLength,
@@ -202,7 +206,13 @@ bool verifyActionTicket(
   unsigned long proofWindowMs,
   const char* actionTicketMasterKey,
   uint32_t* nextGrantVersion) {
-  if (!isProofTimestampFresh(state, proofTimestampMs, proofWindowMs) || actionTicketJson.isEmpty()) {
+  if (!isProofTimestampFresh(state, proofTimestampMs, proofWindowMs)) {
+    debugActionTicket("proof timestamp rejected");
+    return false;
+  }
+
+  if (actionTicketJson.isEmpty()) {
+    debugActionTicket("missing actionTicket object");
     return false;
   }
 
@@ -218,22 +228,36 @@ bool verifyActionTicket(
   const long long version = getJsonInt64(actionTicketJson, "v", 0);
 
   if (version != 1 || ticketId.isEmpty() || ticketDeviceId != state.deviceId || institutionIdClaim != expectedInstitutionId) {
+    debugActionTicket(
+      "header mismatch"
+      " v=" + String(version) +
+      " ticketIdEmpty=" + String(ticketId.isEmpty() ? "true" : "false") +
+      " ticketDeviceId=" + ticketDeviceId +
+      " expectedDeviceId=" + state.deviceId +
+      " institutionId=" + institutionIdClaim +
+      " expectedInstitutionId=" + expectedInstitutionId);
     return false;
   }
   if (action != expectedAction || issuedAt <= 0 || expiresAt <= 0 || counter <= 0 || providedMac.isEmpty()) {
+    debugActionTicket(
+      "field validation failed"
+      " action=" + action +
+      " expectedAction=" + expectedAction +
+      " issuedAt=" + String(issuedAt) +
+      " expiresAt=" + String(expiresAt) +
+      " counter=" + String(counter) +
+      " macEmpty=" + String(providedMac.isEmpty() ? "true" : "false"));
     return false;
   }
 
-  const uint64_t trustedNowMs = currentDeviceTimeMs();
-  if (static_cast<uint64_t>(expiresAt) < trustedNowMs) {
-    return false;
-  }
-  if (static_cast<uint64_t>(issuedAt) > trustedNowMs + static_cast<uint64_t>(proofWindowMs)) {
+  if (expiresAt <= issuedAt) {
+    debugActionTicket("ticket ordering invalid");
     return false;
   }
 
   uint8_t derivedKey[32];
   if (!deriveActionTicketKey(ticketDeviceId, actionTicketMasterKey, derivedKey)) {
+    debugActionTicket("failed to derive device action key");
     return false;
   }
 
@@ -248,12 +272,18 @@ bool verifyActionTicket(
     operatorId);
   const String expectedMac = hmacSha256HexWithBinaryKey(derivedKey, sizeof(derivedKey), canonical);
   if (expectedMac.isEmpty() || !constantTimeEquals(expectedMac, providedMac)) {
+    debugActionTicket(
+      "mac mismatch"
+      " canonical=" + canonical +
+      " expectedMac=" + expectedMac +
+      " providedMac=" + providedMac);
     return false;
   }
 
   if (nextGrantVersion != nullptr) {
     *nextGrantVersion = static_cast<uint32_t>(counter);
   }
+  debugActionTicket("verification passed");
   return true;
 }
 

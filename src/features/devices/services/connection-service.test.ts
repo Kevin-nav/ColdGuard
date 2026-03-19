@@ -166,6 +166,51 @@ test("enrolls a blank mock device and registers it", async () => {
   );
 });
 
+test("enrollment uses a single BLE session instead of scanning twice", async () => {
+  const discoverDevice = jest.fn(async () => {
+    throw new Error("discoverDevice should not be called during enrollment");
+  });
+  const enrollDevice = jest.fn(async () => ({
+    bleName: "ColdGuard_7BCC",
+    bootstrapClaim: "claim-1",
+    deviceId: "CG-ESP32-5C7BCC",
+    firmwareVersion: "cg-transport-0.1.0",
+    macAddress: "74:24:A8:5C:7B:CC",
+    protocolVersion: 1,
+    state: "enrolled" as const,
+  }));
+
+  await enrollColdGuardDevice({
+    nickname: "Test device",
+    profile: {
+      firebaseUid: "firebase-u1",
+      displayName: "Yaw Boateng",
+      email: "yaw@example.com",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      staffId: "KB1002",
+      role: "Supervisor",
+      lastUpdatedAt: 1,
+    },
+    qrPayload: "coldguard://device/CG-ESP32-5C7BCC?claim=claim-1&v=1",
+    bleClient: {
+      decommissionDevice: jest.fn(),
+      discoverDevice,
+      enrollDevice,
+      requestWifiTicket: jest.fn(),
+    },
+  });
+
+  expect(discoverDevice).not.toHaveBeenCalled();
+  expect(enrollDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      bootstrapToken: "claim-1",
+      deviceId: "CG-ESP32-5C7BCC",
+      nickname: "Test device",
+    }),
+  );
+});
+
 test("runs a mock BLE-to-WiFi connection test and records success", async () => {
   jest.spyOn(Date, "now").mockReturnValue(1_000_000);
   const payload = await runColdGuardConnectionTest({

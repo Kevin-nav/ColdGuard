@@ -32,6 +32,7 @@ BLECharacteristic* commandCharacteristic = nullptr;
 BLECharacteristic* responseCharacteristic = nullptr;
 BLEAdvertising* advertising = nullptr;
 coldguard::DeviceState deviceState;
+bool pendingAdvertisingRefreshOnDisconnect = false;
 
 constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
   kActionTicketMasterKey,
@@ -60,6 +61,9 @@ void logBlePayload(const String& label, const String& payload) {
 }
 
 void sendBleResponse(const String& payload) {
+  if (payload.isEmpty()) {
+    return;
+  }
   responseCharacteristic->setValue(payload.c_str());
   responseCharacteristic->notify();
   logBlePayload("[BLE] ", payload);
@@ -74,20 +78,45 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
 
     const String payload(rawValue);
     logBlePayload("[BLE] ", payload);
+    coldguard::BleRecoveryDeferredActions deferredActions;
     const String response = coldguard::dispatchCommand(
       payload,
       &deviceState,
       preferences,
       webServer,
       advertising,
-      kBleRecoveryConfig);
+      kBleRecoveryConfig,
+      &deferredActions);
     sendBleResponse(response);
+    if (deferredActions.restartAdvertising) {
+      pendingAdvertisingRefreshOnDisconnect = true;
+      Serial.println("[BLE_DEBUG] advertising refresh scheduled for disconnect");
+    }
+  }
+};
+
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer* server) override {
+    (void)server;
+    Serial.println("[BLE_DEBUG] central connected");
+  }
+
+  void onDisconnect(BLEServer* server) override {
+    (void)server;
+    if (pendingAdvertisingRefreshOnDisconnect) {
+      Serial.println("[BLE_DEBUG] central disconnected; applying deferred advertising refresh");
+    } else {
+      Serial.println("[BLE_DEBUG] central disconnected; resuming advertising");
+    }
+    pendingAdvertisingRefreshOnDisconnect = false;
+    coldguard::restartAdvertising(advertising, deviceState, kServiceUuid, kProtocolVersion);
   }
 };
 
 void initializeBle() {
   BLEDevice::init(deviceState.bleName.c_str());
   bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new ServerCallbacks());
   BLEService* service = bleServer->createService(kServiceUuid);
 
   commandCharacteristic = service->createCharacteristic(
@@ -116,6 +145,9 @@ void setup() {
   Serial.println("ColdGuard ESP32 transport harness ready");
   Serial.println("Device ID: " + deviceState.deviceId);
   logSecretValue("Bootstrap Token: ", deviceState.bootstrapToken);
+  Serial.println(
+    "Enrollment Link: https://coldguard.org/device/" + deviceState.deviceId +
+    "?claim=" + deviceState.bootstrapToken + "&v=1");
   Serial.println("BLE Name: " + deviceState.bleName);
   Serial.println("MAC: " + deviceState.macAddress);
 }

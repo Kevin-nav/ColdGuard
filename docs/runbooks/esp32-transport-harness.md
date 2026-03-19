@@ -112,6 +112,10 @@ HMAC_SHA256_HEX(handshakeToken, deviceNonce + "|" + deviceId + "|" + proofTimest
 
 `handshakeToken` is stored when the supervisor enrolls the device.
 
+`proofTimestamp` is **not** a Unix epoch timestamp in this harness. It must be in the same
+device-time domain as `hello.deviceTimeMs`, with the app deriving it from the last `hello`
+response plus local elapsed time.
+
 ## Example BLE Payloads
 
 ### `hello`
@@ -178,7 +182,7 @@ HMAC_SHA256_HEX(handshakeToken, deviceNonce + "|" + deviceId + "|" + proofTimest
     "mac": "<ticket-mac>"
   },
   "handshakeProof": "9a3381f1...",
-  "proofTimestamp": 1700000123456
+  "proofTimestamp": 123456
 }
 ```
 
@@ -210,7 +214,7 @@ HMAC_SHA256_HEX(handshakeToken, deviceNonce + "|" + deviceId + "|" + proofTimest
     "mac": "<ticket-mac>"
   },
   "handshakeProof": "9a3381f1...",
-  "proofTimestamp": 1700000123456
+  "proofTimestamp": 123456
 }
 ```
 

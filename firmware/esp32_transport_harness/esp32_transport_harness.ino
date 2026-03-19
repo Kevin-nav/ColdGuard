@@ -44,6 +44,10 @@ constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
   kProtocolVersion,
 };
 
+String buildEnrollmentLink(const coldguard::DeviceState& state) {
+  return "https://coldguard.org/device/" + state.deviceId + "?claim=" + state.bootstrapToken + "&v=1";
+}
+
 void logSecretValue(const String& label, const String& value) {
   if (kVerboseSecretLogging) {
     Serial.println(label + value);

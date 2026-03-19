@@ -1,6 +1,16 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const persistedRoleValidator = v.optional(
+  v.union(
+    v.literal("Supervisor"),
+    v.literal("Nurse"),
+    v.literal("Cold Chain Officer"),
+    v.literal("Nurse Supervisor"),
+    v.literal("Community Health Nurse"),
+  ),
+);
+
 export default defineSchema({
   institutions: defineTable({
     code: v.string(),
@@ -15,7 +25,7 @@ export default defineSchema({
     staffId: v.string(),
     passcode: v.string(),
     displayName: v.optional(v.string()),
-    role: v.optional(v.union(v.literal("Supervisor"), v.literal("Nurse"))),
+    role: persistedRoleValidator,
     isActive: v.boolean(),
   }).index("by_institution_staff_id", ["institutionId", "staffId"]),
   institutionCredentialAttempts: defineTable({
@@ -30,7 +40,7 @@ export default defineSchema({
     email: v.optional(v.string()),
     displayName: v.optional(v.string()),
     institutionId: v.optional(v.id("institutions")),
-    role: v.optional(v.union(v.literal("Supervisor"), v.literal("Nurse"))),
+    role: persistedRoleValidator,
     staffId: v.optional(v.string()),
   }).index("by_firebase_uid", ["firebaseUid"]).index("by_institution_id", ["institutionId"]),
   devices: defineTable({

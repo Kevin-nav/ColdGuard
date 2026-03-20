@@ -1,4 +1,8 @@
-import type { ColdGuardWifiBridgeModuleContract } from "./ColdGuardWifiBridge.types";
+import type {
+  ColdGuardMonitoringDeviceStatus,
+  ColdGuardMonitoringStatusMap,
+  ColdGuardWifiBridgeModuleContract,
+} from "./ColdGuardWifiBridge.types";
 
 function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract {
   return {
@@ -15,12 +19,16 @@ function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract
       throw new Error("WIFI_BRIDGE_UNAVAILABLE");
     },
     async stopMonitoringDeviceAsync(deviceId: string) {
-      return {
+      const status: ColdGuardMonitoringDeviceStatus = {
         deviceId,
         error: null,
         isRunning: false,
         transport: null,
       };
+      const statuses: ColdGuardMonitoringStatusMap = {
+        [deviceId]: status,
+      };
+      return statuses;
     },
   };
 }

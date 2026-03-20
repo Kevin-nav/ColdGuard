@@ -53,3 +53,19 @@ describe("getColdGuardWifiBridgeModule", () => {
     });
   });
 });
+
+describe("ColdGuardWifiBridgeModule.web", () => {
+  test("stopMonitoringDeviceAsync returns a status map keyed by device id", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require("./ColdGuardWifiBridgeModule.web");
+
+    await expect(module.default().stopMonitoringDeviceAsync("device-123")).resolves.toEqual({
+      "device-123": {
+        deviceId: "device-123",
+        error: null,
+        isRunning: false,
+        transport: null,
+      },
+    });
+  });
+});

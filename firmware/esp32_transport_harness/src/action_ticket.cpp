@@ -265,6 +265,18 @@ bool verifyActionTicket(
     return false;
   }
 
+  const long long now = static_cast<long long>(currentDeviceTimeMs());
+  if (issuedAt > now || now > expiresAt) {
+    debugActionTicket(
+      "ticket time window invalid"
+      " issuedAt=" + String(issuedAt) +
+      " now=" + String(now) +
+      " expiresAt=" + String(expiresAt) +
+      " ticketLifetimeMs=" + String(ticketLifetimeMs) +
+      " maxLifetimeMs=" + String(kMaxActionTicketLifetimeMs));
+    return false;
+  }
+
   uint8_t derivedKey[32];
   if (!deriveActionTicketKey(ticketDeviceId, actionTicketMasterKey, derivedKey)) {
     debugActionTicket("failed to derive device action key");

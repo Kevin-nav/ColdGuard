@@ -49,7 +49,7 @@ class ColdGuardDeviceMonitoringService : Service() {
       ACTION_STOP -> {
         val deviceId = intent.getStringExtra("deviceId") ?: return START_NOT_STICKY
         stopMonitoringDevice(deviceId)
-        return START_NOT_STICKY
+        return if (hasMonitoredDevices()) START_REDELIVER_INTENT else START_NOT_STICKY
       }
 
       ACTION_START -> {
@@ -84,9 +84,11 @@ class ColdGuardDeviceMonitoringService : Service() {
     synchronized(registryLock) {
       val existing = monitoredDevices[options.deviceId]
       val nextAlertCursors = existing?.activeAlertCursors ?: mutableSetOf()
+      val nextRevision = (existing?.revision ?: 0L) + 1L
       monitoredDevices[options.deviceId] = MonitoredDeviceState(
         options = options,
         activeAlertCursors = nextAlertCursors,
+        revision = nextRevision,
       )
     }
     updateStatus(
@@ -129,6 +131,7 @@ class ColdGuardDeviceMonitoringService : Service() {
             MonitoredDeviceState(
               options = state.options,
               activeAlertCursors = state.activeAlertCursors.toMutableSet(),
+              revision = state.revision,
             )
           }
         }
@@ -142,9 +145,12 @@ class ColdGuardDeviceMonitoringService : Service() {
             break
           }
 
-          val nextResult = pollOnce(state.options, state.activeAlertCursors)
+          val nextResult = pollOnce(state.options, state.activeAlertCursors, state.revision)
           synchronized(registryLock) {
             monitoredDevices[state.options.deviceId]?.let { liveState ->
+              if (liveState.revision != state.revision) {
+                return@let
+              }
               liveState.options = nextResult.options
               liveState.activeAlertCursors.clear()
               liveState.activeAlertCursors.addAll(nextResult.activeAlertCursors)
@@ -176,11 +182,37 @@ class ColdGuardDeviceMonitoringService : Service() {
   private suspend fun pollOnce(
     currentOptions: MonitoringOptions,
     activeAlertCursors: Set<String>,
+    revision: Long,
   ): MonitoredPollResult {
+    if (!isCurrentRevision(currentOptions.deviceId, revision)) {
+      return MonitoredPollResult(
+        activeAlertCursors = activeAlertCursors.toMutableSet(),
+        options = currentOptions,
+      )
+    }
+
     try {
-      val resolved = resolveRuntimePoll(currentOptions)
+      val resolved = resolveRuntimePoll(currentOptions, revision)
+      if (!isCurrentRevision(currentOptions.deviceId, revision)) {
+        return MonitoredPollResult(
+          activeAlertCursors = activeAlertCursors.toMutableSet(),
+          options = currentOptions,
+        )
+      }
       val nextAlertCursors = notifyAlerts(currentOptions.deviceId, resolved.alerts, activeAlertCursors)
+      if (!isCurrentRevision(currentOptions.deviceId, revision)) {
+        return MonitoredPollResult(
+          activeAlertCursors = activeAlertCursors.toMutableSet(),
+          options = currentOptions,
+        )
+      }
       postHeartbeat(resolved.runtimeBaseUrl, resolved.network)
+      if (!isCurrentRevision(currentOptions.deviceId, revision)) {
+        return MonitoredPollResult(
+          activeAlertCursors = activeAlertCursors.toMutableSet(),
+          options = currentOptions,
+        )
+      }
       updateStatus(
         MonitoringStatus(
           deviceId = currentOptions.deviceId,
@@ -194,7 +226,18 @@ class ColdGuardDeviceMonitoringService : Service() {
         activeAlertCursors = nextAlertCursors,
         options = resolved.nextOptions,
       )
+    } catch (_: StalePollException) {
+      return MonitoredPollResult(
+        activeAlertCursors = activeAlertCursors.toMutableSet(),
+        options = currentOptions,
+      )
     } catch (error: Exception) {
+      if (!isCurrentRevision(currentOptions.deviceId, revision)) {
+        return MonitoredPollResult(
+          activeAlertCursors = activeAlertCursors.toMutableSet(),
+          options = currentOptions,
+        )
+      }
       updateStatus(
         MonitoringStatus(
           deviceId = currentOptions.deviceId,
@@ -211,10 +254,11 @@ class ColdGuardDeviceMonitoringService : Service() {
     }
   }
 
-  private suspend fun resolveRuntimePoll(currentOptions: MonitoringOptions): ResolvedRuntimePoll {
+  private suspend fun resolveRuntimePoll(currentOptions: MonitoringOptions, revision: Long): ResolvedRuntimePoll {
     currentOptions.facilityWifiRuntimeBaseUrl
       ?.takeIf { it.isNotBlank() }
       ?.let { runtimeBaseUrl ->
+        ensureCurrentRevision(currentOptions.deviceId, revision)
         try {
           return fetchRuntimePoll(
             network = null,
@@ -230,6 +274,7 @@ class ColdGuardDeviceMonitoringService : Service() {
     val softApSsid = currentOptions.softApSsid?.takeIf { it.isNotBlank() }
     val softApPassword = currentOptions.softApPassword?.takeIf { it.isNotBlank() }
     if (softApRuntimeBaseUrl != null && softApSsid != null && softApPassword != null) {
+      ensureCurrentRevision(currentOptions.deviceId, revision)
       try {
         return fetchSoftApRuntimePoll(
           nextOptions = currentOptions.copy(transport = "softap"),
@@ -241,6 +286,7 @@ class ColdGuardDeviceMonitoringService : Service() {
       }
     }
 
+    ensureCurrentRevision(currentOptions.deviceId, revision)
     updateStatus(
       MonitoringStatus(
         deviceId = currentOptions.deviceId,
@@ -251,6 +297,7 @@ class ColdGuardDeviceMonitoringService : Service() {
     )
     updateOngoingNotification()
 
+    ensureCurrentRevision(currentOptions.deviceId, revision)
     val recoveredTicket = bleRecoveryController?.requestWifiTicket(currentOptions)
       ?: throw IllegalStateException("BLE_RECOVERY_UNAVAILABLE")
     val recoveredOptions = currentOptions.copy(
@@ -259,12 +306,29 @@ class ColdGuardDeviceMonitoringService : Service() {
       softApSsid = recoveredTicket.ssid,
       transport = "softap",
     )
+    ensureCurrentRevision(currentOptions.deviceId, revision)
     return fetchSoftApRuntimePoll(
       nextOptions = recoveredOptions,
       password = recoveredTicket.password,
       runtimeBaseUrl = recoveredTicket.runtimeBaseUrl,
       ssid = recoveredTicket.ssid,
     )
+  }
+
+  private fun currentRevision(deviceId: String): Long? {
+    return synchronized(registryLock) {
+      monitoredDevices[deviceId]?.revision
+    }
+  }
+
+  private fun ensureCurrentRevision(deviceId: String, revision: Long) {
+    if (!isCurrentRevision(deviceId, revision)) {
+      throw StalePollException()
+    }
+  }
+
+  private fun isCurrentRevision(deviceId: String, revision: Long): Boolean {
+    return currentRevision(deviceId) == revision
   }
 
   private suspend fun fetchSoftApRuntimePoll(
@@ -599,9 +663,12 @@ data class ResolvedRuntimePoll(
 private data class MonitoredDeviceState(
   var options: MonitoringOptions,
   val activeAlertCursors: MutableSet<String>,
+  val revision: Long,
 )
 
 private data class MonitoredPollResult(
   val activeAlertCursors: MutableSet<String>,
   val options: MonitoringOptions,
 )
+
+private class StalePollException : Exception()

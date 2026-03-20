@@ -195,14 +195,15 @@ export default function DeviceDetailsScreen() {
 
   useEffect(() => {
     let isMounted = true;
+    const deviceId = device?.id;
 
     async function loadRuntimeSession() {
-      if (!device) {
+      if (!deviceId) {
         if (isMounted) setRuntimeSession(null);
         return;
       }
 
-      const nextSession = await getDeviceRuntimeSession(device.id);
+      const nextSession = await getDeviceRuntimeSession(deviceId);
       if (!isMounted) return;
 
       setRuntimeSession(nextSession);
@@ -219,7 +220,7 @@ export default function DeviceDetailsScreen() {
     return () => {
       isMounted = false;
     };
-  }, [device]);
+  }, [device?.id]);
 
   if (enrollmentLink) {
     if (Platform.OS === "web") {

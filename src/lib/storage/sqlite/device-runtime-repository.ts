@@ -142,7 +142,10 @@ export async function listMonitoredDeviceRuntimeConfigs(
   options?: { excludeDeviceIds?: string[] },
 ): Promise<DeviceRuntimeConfig[]> {
   const database = await initializeSQLite();
-  const excludeDeviceIds = options?.excludeDeviceIds?.filter((deviceId) => deviceId.trim().length > 0) ?? [];
+  const excludeDeviceIds =
+    options?.excludeDeviceIds
+      ?.map((deviceId) => deviceId.trim())
+      .filter((deviceId) => deviceId.length > 0) ?? [];
   const exclusionClause =
     excludeDeviceIds.length > 0
       ? ` AND device_id NOT IN (${excludeDeviceIds.map(() => "?").join(", ")})`

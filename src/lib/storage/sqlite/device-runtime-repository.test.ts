@@ -163,3 +163,17 @@ test("lists monitored runtime configs", async () => {
     }),
   ]);
 });
+
+test("trims excluded device ids before building the query bindings", async () => {
+  mockGetAllAsync.mockResolvedValue([]);
+
+  await listMonitoredDeviceRuntimeConfigs({
+    excludeDeviceIds: [" device-1 ", "   ", "device-2"],
+  });
+
+  expect(mockGetAllAsync).toHaveBeenCalledWith(
+    expect.stringContaining("device_id NOT IN (?, ?)"),
+    "device-1",
+    "device-2",
+  );
+});

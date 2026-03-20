@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { listMonitoredDeviceRuntimeConfigsForJsPolling } from "../../../lib/storage/sqlite/device-runtime-repository";
+import { listMonitoredDeviceRuntimeConfigs } from "../../../lib/storage/sqlite/device-runtime-repository";
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { useDashboardBootstrap } from "../../dashboard/providers/dashboard-bootstrap";
 import { ensureLocalProfileForUser } from "../../dashboard/services/profile-hydration";
@@ -193,7 +193,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         const nativelyMonitoredDeviceIds = Object.values(nativeStatuses)
           .filter((status) => status.isRunning)
           .map((status) => status.deviceId);
-        const monitored = await listMonitoredDeviceRuntimeConfigsForJsPolling(nativelyMonitoredDeviceIds);
+        const monitored = await listMonitoredDeviceRuntimeConfigs({
+          excludeDeviceIds: nativelyMonitoredDeviceIds,
+        });
 
         for (const runtime of monitored) {
           await pollMonitoredDeviceRuntime({ deviceId: runtime.deviceId }).catch(() => undefined);

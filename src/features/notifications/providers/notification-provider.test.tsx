@@ -6,7 +6,7 @@ const mockUseAuthSession = jest.fn();
 const mockUseDashboardBootstrap = jest.fn();
 const mockUseNetworkStatus = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
-const mockListMonitoredDeviceRuntimeConfigsForJsPolling = jest.fn();
+const mockListMonitoredDeviceRuntimeConfigs = jest.fn();
 const mockPollMonitoredDeviceRuntime = jest.fn();
 const mockGetNativeMonitoringServiceStatuses = jest.fn();
 const mockSyncNotificationInbox = jest.fn();
@@ -34,8 +34,8 @@ jest.mock("../../dashboard/services/profile-hydration", () => ({
 }));
 
 jest.mock("../../../lib/storage/sqlite/device-runtime-repository", () => ({
-  listMonitoredDeviceRuntimeConfigsForJsPolling: (...args: unknown[]) =>
-    mockListMonitoredDeviceRuntimeConfigsForJsPolling(...args),
+  listMonitoredDeviceRuntimeConfigs: (...args: unknown[]) =>
+    mockListMonitoredDeviceRuntimeConfigs(...args),
 }));
 
 jest.mock("../../devices/services/connection-service", () => ({
@@ -98,7 +98,7 @@ beforeEach(() => {
       transport: "facility_wifi",
     },
   });
-  mockListMonitoredDeviceRuntimeConfigsForJsPolling.mockResolvedValue([
+  mockListMonitoredDeviceRuntimeConfigs.mockResolvedValue([
     {
       activeRuntimeBaseUrl: "http://192.168.4.2",
       activeTransport: "softap",
@@ -153,7 +153,9 @@ test("skips JS polling for devices already owned by the native monitoring servic
   await waitFor(() => expect(ui.getByText("ready")).toBeTruthy());
 
   expect(mockGetNativeMonitoringServiceStatuses).toHaveBeenCalled();
-  expect(mockListMonitoredDeviceRuntimeConfigsForJsPolling).toHaveBeenCalledWith(["device-1"]);
+  expect(mockListMonitoredDeviceRuntimeConfigs).toHaveBeenCalledWith({
+    excludeDeviceIds: ["device-1"],
+  });
   expect(mockPollMonitoredDeviceRuntime).toHaveBeenCalledTimes(1);
   expect(mockPollMonitoredDeviceRuntime).toHaveBeenCalledWith({ deviceId: "device-2" });
   expect(mockSyncNotificationInbox).toHaveBeenCalledWith(

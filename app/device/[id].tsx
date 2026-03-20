@@ -219,33 +219,7 @@ export default function DeviceDetailsScreen() {
     return () => {
       isMounted = false;
     };
-  }, [device?.id]);
-
-  useEffect(() => {
-    let active = true;
-
-    async function autoConnectOnOpen() {
-      if (!device) return;
-
-      try {
-        const session = await connectOrRecoverDevice({ deviceId: device.id });
-        if (!active) return;
-        setRuntimeSession(await getDeviceRuntimeSession(device.id));
-        setActionMessage(`Connected over ${formatRuntimeTransportLabel(session.transport)}.`);
-        await refreshDevices();
-      } catch (error) {
-        if (!active) return;
-        setRuntimeSession(await getDeviceRuntimeSession(device.id));
-        setActionMessage(error instanceof Error ? error.message : "Automatic reconnect failed.");
-      }
-    }
-
-    void autoConnectOnOpen();
-
-    return () => {
-      active = false;
-    };
-  }, [device?.id]);
+  }, [device]);
 
   if (enrollmentLink) {
     if (Platform.OS === "web") {

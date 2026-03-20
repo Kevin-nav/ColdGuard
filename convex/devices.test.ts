@@ -215,6 +215,52 @@ test("rejects unauthorized device action ticket issuance for an unassigned nurse
   ).rejects.toThrow("DEVICE_ACCESS_DENIED");
 });
 
+test("issues connect action tickets at the device's current grant version", async () => {
+  const now = 1_700_000_000_000;
+  jest.spyOn(Date, "now").mockReturnValue(now);
+
+  const ctx = createMutationCtx({
+    assignmentsByStaff: [
+      {
+        deviceId: "device-1",
+        isActive: true,
+        staffId: "KB1002",
+      },
+    ],
+    device: {
+      _id: "device-row-1",
+      deviceId: "device-1",
+      grantVersion: 4,
+      institutionId: "institution-1",
+      status: "active",
+    },
+    user: {
+      _id: "user-2",
+      displayName: "Nurse One",
+      firebaseUid: "firebase-user-2",
+      institutionId: "institution-1",
+      role: "Nurse",
+      staffId: "KB1002",
+    },
+  });
+
+  const ticket = await (issueDeviceActionTicket as any)._handler(ctx, {
+    action: "connect",
+    deviceId: "device-1",
+  });
+
+  expect(ticket).toMatchObject({
+    action: "connect",
+    counter: 4,
+    deviceId: "device-1",
+    expiresAt: now + 5 * 60 * 1000,
+    institutionId: "institution-1",
+    issuedAt: now,
+  });
+
+  jest.restoreAllMocks();
+});
+
 test("rejects supervisor admin grants for devices owned by another institution", () => {
   expect(() =>
     __testing.ensureSupervisorAdminGrantTargetOwnership(

@@ -17,6 +17,7 @@ export function useNetworkStatus() {
 
   useEffect(() => {
     let mounted = true;
+    let subscription: { remove?: () => void } | null = null;
 
     async function refresh() {
       try {
@@ -30,13 +31,15 @@ export function useNetworkStatus() {
     }
 
     void refresh();
-    const id = setInterval(() => {
-      void refresh();
-    }, 7000);
+
+    subscription = Network.addNetworkStateListener((state) => {
+      if (!mounted) return;
+      setIsOnline(Boolean(state.isConnected && state.isInternetReachable !== false));
+    });
 
     return () => {
       mounted = false;
-      clearInterval(id);
+      subscription?.remove?.();
     };
   }, []);
 

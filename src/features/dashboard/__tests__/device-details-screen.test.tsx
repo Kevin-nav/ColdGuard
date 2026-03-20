@@ -136,7 +136,7 @@ test("shows supervisor assignment controls", async () => {
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
   expect(ui.getByText("Choose primary nurse")).toBeTruthy();
   expect(ui.getByText("Save assignments")).toBeTruthy();
-  await waitFor(() => expect(mockConnectOrRecoverDevice).toHaveBeenCalledWith({ deviceId: "device-1" }));
+  expect(mockConnectOrRecoverDevice).not.toHaveBeenCalled();
 });
 
 test("runs the connection test from device detail", async () => {

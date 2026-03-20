@@ -49,7 +49,7 @@ String buildAlertsJson() {
 
   if (temp >= 4.5f) {
     alerts += "{"
-              "\"cursor\":\"temperature-" + String(nowMs) + "\","
+              "\"cursor\":\"temperature-warning\","
               "\"incidentType\":\"temperature\","
               "\"severity\":\"warning\","
               "\"status\":\"open\","
@@ -65,7 +65,7 @@ String buildAlertsJson() {
       alerts += ",";
     }
     alerts += "{"
-              "\"cursor\":\"door-" + String(nowMs) + "\","
+              "\"cursor\":\"door-open\","
               "\"incidentType\":\"door_open\","
               "\"severity\":\"warning\","
               "\"status\":\"open\","
@@ -81,7 +81,7 @@ String buildAlertsJson() {
       alerts += ",";
     }
     alerts += "{"
-              "\"cursor\":\"battery-" + String(nowMs) + "\","
+              "\"cursor\":\"battery-low\","
               "\"incidentType\":\"battery_low\","
               "\"severity\":\"warning\","
               "\"status\":\"open\","
@@ -100,6 +100,7 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
   const float temp = currentMockTemperature();
   const int batteryLevel = currentMockBatteryLevel();
   const bool doorOpen = currentMockDoorOpen();
+  const bool hasWarning = temp >= 4.5f || doorOpen || batteryLevel < 90;
 
   return "{"
          "\"deviceId\":\"" + escapeJson(state->deviceId) + "\","
@@ -108,7 +109,7 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
          "\"currentTempC\":" + String(temp, 2) + ","
          "\"batteryLevel\":" + String(batteryLevel) + ","
          "\"doorOpen\":" + String(doorOpen ? "true" : "false") + ","
-         "\"mktStatus\":\"safe\","
+         "\"mktStatus\":\"" + String(hasWarning ? "warning" : "safe") + "\","
          "\"statusText\":\"Runtime status available.\","
          "\"lastSeenAgeMs\":0,"
          "\"nickname\":\"" + escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname) + "\","
@@ -271,12 +272,17 @@ bool provisionFacilityWifi(
   state->facilityWifiPassword = password;
   state->lastStationConnectAttemptMs = 0;
   maybeEnsureStationConnected(state);
+  const unsigned long startedAtMs = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAtMs < 15000UL) {
+    delay(250);
+  }
+  state->stationConnected = WiFi.status() == WL_CONNECTED;
 
   if (state->stationConnected && !state->runtimeServerStarted) {
     ensureRuntimeRoutesRegistered(webServer, state, firmwareVersion);
   }
 
-  return !state->facilityWifiSsid.isEmpty();
+  return state->stationConnected;
 }
 
 String currentRuntimeBaseUrl(DeviceState* state) {

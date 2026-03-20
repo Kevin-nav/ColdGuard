@@ -138,8 +138,15 @@ export async function deleteDeviceRuntimeConfig(deviceId: string) {
   await database.runAsync("DELETE FROM device_runtime_config WHERE device_id = ?", deviceId);
 }
 
-export async function listMonitoredDeviceRuntimeConfigs(): Promise<DeviceRuntimeConfig[]> {
+export async function listMonitoredDeviceRuntimeConfigs(
+  options?: { excludeDeviceIds?: string[] },
+): Promise<DeviceRuntimeConfig[]> {
   const database = await initializeSQLite();
+  const excludeDeviceIds = options?.excludeDeviceIds?.filter((deviceId) => deviceId.trim().length > 0) ?? [];
+  const exclusionClause =
+    excludeDeviceIds.length > 0
+      ? ` AND device_id NOT IN (${excludeDeviceIds.map(() => "?").join(", ")})`
+      : "";
   const rows = await database.getAllAsync<DeviceRuntimeConfigRow>(
     `
       SELECT device_id, active_transport, session_status, monitoring_mode, active_runtime_base_url,
@@ -147,9 +154,10 @@ export async function listMonitoredDeviceRuntimeConfigs(): Promise<DeviceRuntime
              softap_ssid, softap_password, softap_runtime_base_url,
              last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
       FROM device_runtime_config
-      WHERE monitoring_mode = 'foreground_service'
+      WHERE monitoring_mode = 'foreground_service'${exclusionClause}
       ORDER BY device_id ASC
     `,
+    ...excludeDeviceIds,
   );
 
   return rows.map(mapRow);

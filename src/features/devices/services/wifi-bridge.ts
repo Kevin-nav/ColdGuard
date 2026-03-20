@@ -1,6 +1,9 @@
 import { Platform } from "react-native";
 import getColdGuardWifiBridgeModule from "../../../../modules/coldguard-wifi-bridge";
-import type { ColdGuardMonitoringServiceOptions } from "../../../../modules/coldguard-wifi-bridge";
+import type {
+  ColdGuardMonitoringServiceOptions,
+  ColdGuardMonitoringStatusMap,
+} from "../../../../modules/coldguard-wifi-bridge";
 import type { ColdGuardWifiTicket } from "../types";
 
 export type ColdGuardWifiBridge = {
@@ -13,8 +16,7 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
 
   if (Platform.OS === "android" && wifiBridgeModule?.connectToAccessPointAsync) {
     return {
-      connect: (ticket) =>
-        wifiBridgeModule.connectToAccessPointAsync(ticket.ssid, ticket.password),
+      connect: (ticket) => wifiBridgeModule.connectToAccessPointAsync(ticket.ssid, ticket.password),
       release: async () => {
         if (wifiBridgeModule.releaseNetworkBindingAsync) {
           await wifiBridgeModule.releaseNetworkBindingAsync();
@@ -33,36 +35,28 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
   };
 }
 
-export async function startNativeMonitoringService(options: ColdGuardMonitoringServiceOptions) {
+export async function startNativeMonitoringDevice(
+  options: ColdGuardMonitoringServiceOptions,
+): Promise<ColdGuardMonitoringStatusMap> {
   const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
-  if (!wifiBridgeModule?.startMonitoringServiceAsync) {
+  if (!wifiBridgeModule?.startMonitoringDeviceAsync) {
     throw new Error("WIFI_BRIDGE_MONITORING_UNAVAILABLE");
   }
-  return await wifiBridgeModule.startMonitoringServiceAsync(options);
+  return await wifiBridgeModule.startMonitoringDeviceAsync(options);
 }
 
-export async function stopNativeMonitoringService() {
+export async function stopNativeMonitoringDevice(deviceId: string): Promise<ColdGuardMonitoringStatusMap> {
   const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
-  if (!wifiBridgeModule?.stopMonitoringServiceAsync) {
-    return {
-      deviceId: null,
-      error: null,
-      isRunning: false,
-      transport: null,
-    };
+  if (!wifiBridgeModule?.stopMonitoringDeviceAsync) {
+    return {};
   }
-  return await wifiBridgeModule.stopMonitoringServiceAsync();
+  return await wifiBridgeModule.stopMonitoringDeviceAsync(deviceId);
 }
 
-export async function getNativeMonitoringServiceStatus() {
+export async function getNativeMonitoringServiceStatuses(): Promise<ColdGuardMonitoringStatusMap> {
   const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
-  if (!wifiBridgeModule?.getMonitoringServiceStatusAsync) {
-    return {
-      deviceId: null,
-      error: null,
-      isRunning: false,
-      transport: null,
-    };
+  if (!wifiBridgeModule?.getMonitoringStatusesAsync) {
+    return {};
   }
-  return await wifiBridgeModule.getMonitoringServiceStatusAsync();
+  return await wifiBridgeModule.getMonitoringStatusesAsync();
 }

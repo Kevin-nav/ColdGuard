@@ -29,11 +29,11 @@ import java.net.URL
 
 class ColdGuardDeviceMonitoringService : Service() {
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+  private val registryLock = Any()
+  private val monitoredDevices = linkedMapOf<String, MonitoredDeviceState>()
   private var bleRecoveryController: ColdGuardBleRecoveryController? = null
   private var pollingJob: Job? = null
   private var wifiController: ColdGuardWifiSessionController? = null
-  private var options: MonitoringOptions? = null
-  private var lastAlertCursor: String? = null
 
   override fun onBind(intent: Intent?): IBinder? = null
 
@@ -47,7 +47,8 @@ class ColdGuardDeviceMonitoringService : Service() {
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     when (intent?.action) {
       ACTION_STOP -> {
-        stopMonitoring()
+        val deviceId = intent.getStringExtra("deviceId") ?: return START_NOT_STICKY
+        stopMonitoringDevice(deviceId)
         return START_NOT_STICKY
       }
 
@@ -58,17 +59,10 @@ class ColdGuardDeviceMonitoringService : Service() {
           stopSelf()
           return START_NOT_STICKY
         }
-        options = nextOptions
-        updateStatus(
-          MonitoringStatus(
-            deviceId = nextOptions.deviceId,
-            error = null,
-            isRunning = true,
-            transport = nextOptions.transport,
-          )
-        )
-        startForeground(NOTIFICATION_ID, buildOngoingNotification("Starting monitor..."))
-        startPolling(nextOptions)
+
+        registerMonitoring(nextOptions)
+        startForeground(NOTIFICATION_ID, buildOngoingNotification(buildServiceStatusText()))
+        ensurePolling()
       }
     }
 
@@ -78,43 +72,129 @@ class ColdGuardDeviceMonitoringService : Service() {
   override fun onDestroy() {
     stopPolling()
     wifiController?.release(bindProcess = false)
+    synchronized(registryLock) {
+      monitoredDevices.clear()
+    }
+    clearAllStatuses()
     scope.cancel()
-    updateStatus(MonitoringStatus(null, null, false, null))
     super.onDestroy()
   }
 
-  private fun startPolling(initialOptions: MonitoringOptions) {
+  private fun registerMonitoring(options: MonitoringOptions) {
+    synchronized(registryLock) {
+      val existing = monitoredDevices[options.deviceId]
+      val nextAlertCursors = existing?.activeAlertCursors ?: mutableSetOf()
+      monitoredDevices[options.deviceId] = MonitoredDeviceState(
+        options = options,
+        activeAlertCursors = nextAlertCursors,
+      )
+    }
+    updateStatus(
+      MonitoringStatus(
+        deviceId = options.deviceId,
+        error = null,
+        isRunning = true,
+        transport = options.transport,
+      )
+    )
+  }
+
+  private fun stopMonitoringDevice(deviceId: String) {
+    synchronized(registryLock) {
+      monitoredDevices.remove(deviceId)
+    }
+    clearDeviceStatus(deviceId)
+
+    if (hasMonitoredDevices()) {
+      updateOngoingNotification()
+      ensurePolling()
+      return
+    }
+
     stopPolling()
+    wifiController?.release(bindProcess = false)
+    stopForeground(STOP_FOREGROUND_REMOVE)
+    stopSelf()
+  }
+
+  private fun ensurePolling() {
+    if (pollingJob?.isActive == true) {
+      return
+    }
+
     pollingJob = scope.launch {
-      var currentOptions = initialOptions
       while (isActive) {
-        currentOptions = pollOnce(currentOptions)
+        val snapshot = synchronized(registryLock) {
+          monitoredDevices.values.map { state ->
+            MonitoredDeviceState(
+              options = state.options,
+              activeAlertCursors = state.activeAlertCursors.toMutableSet(),
+            )
+          }
+        }
+
+        if (snapshot.isEmpty()) {
+          break
+        }
+
+        for (state in snapshot) {
+          if (!isActive) {
+            break
+          }
+
+          val nextResult = pollOnce(state.options, state.activeAlertCursors)
+          synchronized(registryLock) {
+            monitoredDevices[state.options.deviceId]?.let { liveState ->
+              liveState.options = nextResult.options
+              liveState.activeAlertCursors.clear()
+              liveState.activeAlertCursors.addAll(nextResult.activeAlertCursors)
+            }
+          }
+        }
+
         delay(POLL_INTERVAL_MS)
+      }
+
+      if (!hasMonitoredDevices()) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
       }
     }
   }
 
-  private suspend fun pollOnce(currentOptions: MonitoringOptions): MonitoringOptions {
+  private fun stopPolling() {
+    pollingJob?.cancel()
+    pollingJob = null
+  }
+
+  private fun hasMonitoredDevices(): Boolean {
+    return synchronized(registryLock) {
+      monitoredDevices.isNotEmpty()
+    }
+  }
+
+  private suspend fun pollOnce(
+    currentOptions: MonitoringOptions,
+    activeAlertCursors: Set<String>,
+  ): MonitoredPollResult {
     try {
       val resolved = resolveRuntimePoll(currentOptions)
-      notifyAlerts(currentOptions.deviceId, resolved.alerts)
+      val nextAlertCursors = notifyAlerts(currentOptions.deviceId, resolved.alerts, activeAlertCursors)
       postHeartbeat(resolved.runtimeBaseUrl, resolved.network)
-
-      val statusText = resolved.statusJson.optString("statusText", "Monitoring active")
-      val transportText = when (resolved.transport) {
-        "facility_wifi" -> "facility Wi-Fi"
-        "softap" -> "local SoftAP"
-        else -> "BLE fallback"
-      }
-
-      notifyIfPermitted(NOTIFICATION_ID, buildOngoingNotification("$transportText: $statusText"))
-      updateStatus(MonitoringStatus(currentOptions.deviceId, null, true, resolved.transport))
-      return resolved.nextOptions
-    } catch (error: Exception) {
-      notifyIfPermitted(
-        NOTIFICATION_ID,
-        buildOngoingNotification("Recovering: ${error.message ?: "runtime unavailable"}")
+      updateStatus(
+        MonitoringStatus(
+          deviceId = currentOptions.deviceId,
+          error = null,
+          isRunning = true,
+          transport = resolved.transport,
+        )
       )
+      updateOngoingNotification()
+      return MonitoredPollResult(
+        activeAlertCursors = nextAlertCursors,
+        options = resolved.nextOptions,
+      )
+    } catch (error: Exception) {
       updateStatus(
         MonitoringStatus(
           deviceId = currentOptions.deviceId,
@@ -123,7 +203,11 @@ class ColdGuardDeviceMonitoringService : Service() {
           transport = currentOptions.transport,
         )
       )
-      return currentOptions
+      updateOngoingNotification()
+      return MonitoredPollResult(
+        activeAlertCursors = activeAlertCursors.toMutableSet(),
+        options = currentOptions,
+      )
     }
   }
 
@@ -165,7 +249,7 @@ class ColdGuardDeviceMonitoringService : Service() {
         transport = "ble_fallback",
       )
     )
-    notifyIfPermitted(NOTIFICATION_ID, buildOngoingNotification("BLE recovery in progress"))
+    updateOngoingNotification()
 
     val recoveredTicket = bleRecoveryController?.requestWifiTicket(currentOptions)
       ?: throw IllegalStateException("BLE_RECOVERY_UNAVAILABLE")
@@ -175,7 +259,6 @@ class ColdGuardDeviceMonitoringService : Service() {
       softApSsid = recoveredTicket.ssid,
       transport = "softap",
     )
-    options = recoveredOptions
     return fetchSoftApRuntimePoll(
       nextOptions = recoveredOptions,
       password = recoveredTicket.password,
@@ -190,14 +273,19 @@ class ColdGuardDeviceMonitoringService : Service() {
     runtimeBaseUrl: String,
     ssid: String,
   ): ResolvedRuntimePoll {
-    val session = wifiController?.connect(ssid, password, bindProcess = false)
-      ?: throw IllegalStateException("WIFI_CONTROLLER_UNAVAILABLE")
-    return fetchRuntimePoll(
-      network = session.network,
-      nextOptions = nextOptions,
-      runtimeBaseUrl = runtimeBaseUrl,
-      transport = "softap",
-    )
+    val controller = wifiController ?: throw IllegalStateException("WIFI_CONTROLLER_UNAVAILABLE")
+    val session = controller.connect(ssid, password, bindProcess = false)
+
+    return try {
+      fetchRuntimePoll(
+        network = session.network,
+        nextOptions = nextOptions,
+        runtimeBaseUrl = runtimeBaseUrl,
+        transport = "softap",
+      )
+    } finally {
+      controller.release(bindProcess = false)
+    }
   }
 
   private fun fetchRuntimePoll(
@@ -229,7 +317,6 @@ class ColdGuardDeviceMonitoringService : Service() {
 
       else -> nextOptions
     }
-    options = updatedOptions
 
     return ResolvedRuntimePoll(
       alerts = alerts,
@@ -274,14 +361,30 @@ class ColdGuardDeviceMonitoringService : Service() {
     return ((network?.openConnection(URL(url)) ?: URL(url).openConnection()) as HttpURLConnection)
   }
 
-  private fun notifyAlerts(deviceId: String, alerts: JSONArray) {
+  private fun notifyAlerts(
+    deviceId: String,
+    alerts: JSONArray,
+    activeAlertCursors: Set<String>,
+  ): MutableSet<String> {
+    val nextActiveCursors = mutableSetOf<String>()
+
     for (index in 0 until alerts.length()) {
       val alert = alerts.optJSONObject(index) ?: continue
       val cursor = alert.optString("cursor", "")
-      if (cursor.isBlank() || cursor == lastAlertCursor) {
+      if (cursor.isBlank()) {
         continue
       }
-      lastAlertCursor = cursor
+
+      val status = alert.optString("status", "open")
+      if (status == "resolved") {
+        continue
+      }
+
+      nextActiveCursors.add(cursor)
+      if (activeAlertCursors.contains(cursor)) {
+        continue
+      }
+
       val title = alert.optString("title", "ColdGuard alert")
       val body = alert.optString("body", "A monitored device needs attention.")
       val severity = alert.optString("severity", "warning")
@@ -296,6 +399,8 @@ class ColdGuardDeviceMonitoringService : Service() {
         .build()
       notifyIfPermitted((deviceId + cursor).hashCode(), notification)
     }
+
+    return nextActiveCursors
   }
 
   private fun notifyIfPermitted(notificationId: Int, notification: Notification) {
@@ -303,6 +408,25 @@ class ColdGuardDeviceMonitoringService : Service() {
       return
     }
     NotificationManagerCompat.from(this).notify(notificationId, notification)
+  }
+
+  private fun updateOngoingNotification() {
+    notifyIfPermitted(NOTIFICATION_ID, buildOngoingNotification(buildServiceStatusText()))
+  }
+
+  private fun buildServiceStatusText(): String {
+    val statuses = currentStatuses().values
+    if (statuses.isEmpty()) {
+      return "Starting monitor..."
+    }
+
+    val activeCount = statuses.count { it.isRunning }
+    val recoveringCount = statuses.count { !it.error.isNullOrBlank() }
+    return if (recoveringCount > 0) {
+      "Monitoring $activeCount devices, $recoveringCount recovering"
+    } else {
+      "Monitoring $activeCount devices"
+    }
   }
 
   private fun buildOngoingNotification(content: String): Notification {
@@ -337,19 +461,6 @@ class ColdGuardDeviceMonitoringService : Service() {
     }
   }
 
-  private fun stopMonitoring() {
-    stopPolling()
-    wifiController?.release(bindProcess = false)
-    updateStatus(MonitoringStatus(null, null, false, null))
-    stopForeground(STOP_FOREGROUND_REMOVE)
-    stopSelf()
-  }
-
-  private fun stopPolling() {
-    pollingJob?.cancel()
-    pollingJob = null
-  }
-
   companion object {
     private const val ACTION_START = "expo.modules.coldguardwifibridge.action.START_MONITORING"
     private const val ACTION_STOP = "expo.modules.coldguardwifibridge.action.STOP_MONITORING"
@@ -357,11 +468,16 @@ class ColdGuardDeviceMonitoringService : Service() {
     private const val CHANNEL_ID = "coldguard-monitor"
     private const val NOTIFICATION_ID = 4107
     private const val POLL_INTERVAL_MS = 30_000L
+    private val statusLock = Any()
 
     @Volatile
-    private var latestStatus = MonitoringStatus(null, null, false, null)
+    private var monitoringStatuses: MutableMap<String, MonitoringStatus> = linkedMapOf()
 
-    fun currentStatus(): MonitoringStatus = latestStatus
+    fun currentStatuses(): Map<String, MonitoringStatus> {
+      return synchronized(statusLock) {
+        monitoringStatuses.toMap()
+      }
+    }
 
     fun startIntent(context: Context, options: MonitoringOptions): Intent {
       return Intent(context, ColdGuardDeviceMonitoringService::class.java).apply {
@@ -377,9 +493,10 @@ class ColdGuardDeviceMonitoringService : Service() {
       }
     }
 
-    fun stopIntent(context: Context): Intent {
+    fun stopIntent(context: Context, deviceId: String): Intent {
       return Intent(context, ColdGuardDeviceMonitoringService::class.java).apply {
         action = ACTION_STOP
+        putExtra("deviceId", deviceId)
       }
     }
 
@@ -388,17 +505,51 @@ class ColdGuardDeviceMonitoringService : Service() {
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun markNotificationPermissionRequired(deviceId: String, transport: String): MonitoringStatus {
-      return MonitoringStatus(
-        deviceId = deviceId,
-        error = "POST_NOTIFICATIONS_PERMISSION_REQUIRED",
-        isRunning = false,
-        transport = transport,
-      ).also(::updateStatus)
+    fun markStarting(deviceId: String, transport: String): Map<String, MonitoringStatus> {
+      updateStatus(
+        MonitoringStatus(
+          deviceId = deviceId,
+          error = null,
+          isRunning = true,
+          transport = transport,
+        )
+      )
+      return currentStatuses()
+    }
+
+    fun markStopping(deviceId: String): Map<String, MonitoringStatus> {
+      clearDeviceStatus(deviceId)
+      return currentStatuses()
+    }
+
+    fun markNotificationPermissionRequired(deviceId: String, transport: String): Map<String, MonitoringStatus> {
+      updateStatus(
+        MonitoringStatus(
+          deviceId = deviceId,
+          error = "POST_NOTIFICATIONS_PERMISSION_REQUIRED",
+          isRunning = false,
+          transport = transport,
+        )
+      )
+      return currentStatuses()
     }
 
     private fun updateStatus(status: MonitoringStatus) {
-      latestStatus = status
+      synchronized(statusLock) {
+        monitoringStatuses[status.deviceId] = status
+      }
+    }
+
+    private fun clearDeviceStatus(deviceId: String) {
+      synchronized(statusLock) {
+        monitoringStatuses.remove(deviceId)
+      }
+    }
+
+    private fun clearAllStatuses() {
+      synchronized(statusLock) {
+        monitoringStatuses.clear()
+      }
     }
   }
 }
@@ -430,7 +581,7 @@ data class MonitoringOptions(
 }
 
 data class MonitoringStatus(
-  val deviceId: String?,
+  val deviceId: String,
   val error: String?,
   val isRunning: Boolean,
   val transport: String?,
@@ -443,4 +594,14 @@ data class ResolvedRuntimePoll(
   val runtimeBaseUrl: String,
   val statusJson: JSONObject,
   val transport: String,
+)
+
+private data class MonitoredDeviceState(
+  var options: MonitoringOptions,
+  val activeAlertCursors: MutableSet<String>,
+)
+
+private data class MonitoredPollResult(
+  val activeAlertCursors: MutableSet<String>,
+  val options: MonitoringOptions,
 )

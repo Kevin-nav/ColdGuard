@@ -2,10 +2,12 @@ import {
   MockColdGuardBleClient,
   decommissionColdGuardDevice,
   enrollColdGuardDevice,
+  getDeviceRuntimeSession,
   parseDeviceQrPayload,
   retryPendingDeviceConnectionAuditSync,
   runColdGuardConnectionTest,
   startDeviceMonitoring,
+  stopDeviceMonitoring,
 } from "./connection-service";
 import { resetMockHardwareRegistry } from "./mock-hardware-registry";
 
@@ -20,7 +22,7 @@ const mockSetSyncJobStatus = jest.fn();
 const mockUpdateDeviceConnectionSyncState = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
 const mockGetClinicHandshakeToken = jest.fn();
-const mockGetNativeMonitoringServiceStatus = jest.fn();
+const mockGetNativeMonitoringServiceStatuses = jest.fn();
 const mockEnsureDeviceActionTicket = jest.fn();
 const mockEnsureSupervisorActionTicket = jest.fn();
 const mockDeleteDeviceRuntimeConfig = jest.fn();
@@ -28,8 +30,8 @@ const mockGetDeviceRuntimeConfig = jest.fn();
 const mockRegisterEnrolledDevice = jest.fn();
 const mockDecommissionManagedDevice = jest.fn();
 const mockRecordDeviceConnectionTest = jest.fn();
-const mockStartNativeMonitoringService = jest.fn();
-const mockStopNativeMonitoringService = jest.fn();
+const mockStartNativeMonitoringDevice = jest.fn();
+const mockStopNativeMonitoringDevice = jest.fn();
 const mockFetch = jest.fn();
 const mockUpsertDeviceRuntimeConfig = jest.fn();
 const mockWifiBridgeRelease = jest.fn();
@@ -81,9 +83,9 @@ jest.mock("./wifi-bridge", () => ({
     connect: jest.fn(),
     release: (...args: unknown[]) => mockWifiBridgeRelease(...args),
   }),
-  getNativeMonitoringServiceStatus: (...args: unknown[]) => mockGetNativeMonitoringServiceStatus(...args),
-  startNativeMonitoringService: (...args: unknown[]) => mockStartNativeMonitoringService(...args),
-  stopNativeMonitoringService: (...args: unknown[]) => mockStopNativeMonitoringService(...args),
+  getNativeMonitoringServiceStatuses: (...args: unknown[]) => mockGetNativeMonitoringServiceStatuses(...args),
+  startNativeMonitoringDevice: (...args: unknown[]) => mockStartNativeMonitoringDevice(...args),
+  stopNativeMonitoringDevice: (...args: unknown[]) => mockStopNativeMonitoringDevice(...args),
 }));
 
 beforeEach(() => {
@@ -103,18 +105,18 @@ beforeEach(() => {
     ticketId: "admin-ticket",
     v: 1,
   });
-  mockEnsureDeviceActionTicket.mockResolvedValue({
-    action: "connect",
+  mockEnsureDeviceActionTicket.mockImplementation(async (deviceId: string, action: string) => ({
+    action,
     counter: 1,
-    deviceId: "CG-ESP32-A100",
+    deviceId,
     expiresAt: Date.now() + 60_000,
     institutionId: "institution-1",
     issuedAt: Date.now(),
     mac: "device-ticket-mac",
     operatorId: "firebase-u2",
-    ticketId: "device-ticket",
+    ticketId: `device-ticket-${deviceId}`,
     v: 1,
-  });
+  }));
   mockRegisterEnrolledDevice.mockResolvedValue({
     deviceId: "CG-ESP32-A100",
     nickname: "Cold Room Alpha",
@@ -133,24 +135,16 @@ beforeEach(() => {
   mockSetSyncJobStatus.mockResolvedValue(undefined);
   mockDeleteDeviceRuntimeConfig.mockResolvedValue(undefined);
   mockGetDeviceRuntimeConfig.mockResolvedValue(null);
-  mockGetNativeMonitoringServiceStatus.mockResolvedValue({
-    deviceId: null,
-    error: null,
-    isRunning: false,
-    transport: null,
+  mockGetNativeMonitoringServiceStatuses.mockResolvedValue({});
+  mockStartNativeMonitoringDevice.mockResolvedValue({
+    "CG-ESP32-A100": {
+      deviceId: "CG-ESP32-A100",
+      error: null,
+      isRunning: true,
+      transport: "softap",
+    },
   });
-  mockStartNativeMonitoringService.mockResolvedValue({
-    deviceId: "CG-ESP32-A100",
-    error: null,
-    isRunning: true,
-    transport: "softap",
-  });
-  mockStopNativeMonitoringService.mockResolvedValue({
-    deviceId: null,
-    error: null,
-    isRunning: false,
-    transport: null,
-  });
+  mockStopNativeMonitoringDevice.mockResolvedValue({});
   mockUpsertDeviceRuntimeConfig.mockImplementation(async (deviceId: string, patch: Record<string, unknown>) => ({
     activeRuntimeBaseUrl: patch.activeRuntimeBaseUrl ?? null,
     activeTransport: patch.activeTransport ?? null,
@@ -300,8 +294,8 @@ test("starts native monitoring with facility and softap recovery context", async
   await startDeviceMonitoring("CG-ESP32-A100");
 
   expect(mockEnsureDeviceActionTicket).toHaveBeenCalledWith("CG-ESP32-A100", "connect");
-  expect(mockStartNativeMonitoringService).toHaveBeenCalledWith({
-    connectActionTicketJson: expect.stringContaining("\"ticketId\":\"device-ticket\""),
+  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith({
+    connectActionTicketJson: expect.stringContaining("\"ticketId\":\"device-ticket-CG-ESP32-A100\""),
     deviceId: "CG-ESP32-A100",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     handshakeToken: "handshake-token",
@@ -310,6 +304,150 @@ test("starts native monitoring with facility and softap recovery context", async
     softApSsid: "ColdGuard_A100",
     transport: "softap",
   });
+});
+
+test("keeps multi-device monitoring state isolated per device", async () => {
+  mockUpsertDeviceRuntimeConfig
+    .mockResolvedValueOnce({
+      activeRuntimeBaseUrl: "http://10.0.0.22",
+      activeTransport: "facility_wifi",
+      deviceId: "CG-ESP32-A100",
+      facilityWifiPassword: "facility-pass",
+      facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+      facilityWifiSsid: "HospitalNet",
+      softApPassword: "A100-wifi",
+      softApRuntimeBaseUrl: "http://192.168.4.1",
+      softApSsid: "ColdGuard_A100",
+      lastMonitorAt: Date.now(),
+      lastMonitorError: null,
+      lastPingAt: null,
+      lastRecoverAt: null,
+      lastRuntimeError: null,
+      monitoringMode: "foreground_service",
+      sessionStatus: "connected",
+      updatedAt: Date.now(),
+    })
+    .mockResolvedValueOnce({
+      activeRuntimeBaseUrl: null,
+      activeTransport: null,
+      deviceId: "CG-ESP32-B200",
+      facilityWifiPassword: null,
+      facilityWifiRuntimeBaseUrl: null,
+      facilityWifiSsid: null,
+      softApPassword: null,
+      softApRuntimeBaseUrl: null,
+      softApSsid: null,
+      lastMonitorAt: Date.now(),
+      lastMonitorError: null,
+      lastPingAt: null,
+      lastRecoverAt: null,
+      lastRuntimeError: null,
+      monitoringMode: "foreground_service",
+      sessionStatus: "idle",
+      updatedAt: Date.now(),
+    });
+  mockStartNativeMonitoringDevice
+    .mockResolvedValueOnce({
+      "CG-ESP32-A100": {
+        deviceId: "CG-ESP32-A100",
+        error: null,
+        isRunning: true,
+        transport: "facility_wifi",
+      },
+    })
+    .mockResolvedValueOnce({
+      "CG-ESP32-A100": {
+        deviceId: "CG-ESP32-A100",
+        error: null,
+        isRunning: true,
+        transport: "facility_wifi",
+      },
+      "CG-ESP32-B200": {
+        deviceId: "CG-ESP32-B200",
+        error: null,
+        isRunning: true,
+        transport: "ble_fallback",
+      },
+    });
+
+  await startDeviceMonitoring("CG-ESP32-A100");
+  await startDeviceMonitoring("CG-ESP32-B200");
+
+  expect(mockStartNativeMonitoringDevice).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      deviceId: "CG-ESP32-B200",
+      facilityWifiRuntimeBaseUrl: null,
+      softApRuntimeBaseUrl: null,
+      transport: "ble_fallback",
+    }),
+  );
+});
+
+test("stops one monitored device without clearing the others", async () => {
+  mockStopNativeMonitoringDevice.mockResolvedValue({
+    "CG-ESP32-B200": {
+      deviceId: "CG-ESP32-B200",
+      error: null,
+      isRunning: true,
+      transport: "facility_wifi",
+    },
+  });
+
+  await stopDeviceMonitoring("CG-ESP32-A100");
+
+  expect(mockStopNativeMonitoringDevice).toHaveBeenCalledWith("CG-ESP32-A100");
+  expect(mockUpsertDeviceRuntimeConfig).toHaveBeenCalledWith(
+    "CG-ESP32-A100",
+    expect.objectContaining({
+      lastMonitorError: null,
+      monitoringMode: "off",
+    }),
+  );
+});
+
+test("merges per-device native monitoring status into the runtime session", async () => {
+  mockGetDeviceRuntimeConfig.mockResolvedValue({
+    activeRuntimeBaseUrl: "http://10.0.0.22",
+    activeTransport: "facility_wifi",
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: 1,
+    lastMonitorError: null,
+    lastPingAt: 1,
+    lastRecoverAt: 1,
+    lastRuntimeError: null,
+    monitoringMode: "foreground_service",
+    sessionStatus: "connected",
+    updatedAt: 1,
+  });
+  mockGetNativeMonitoringServiceStatuses.mockResolvedValue({
+    "CG-ESP32-A100": {
+      deviceId: "CG-ESP32-A100",
+      error: "RECOVERING_SOFTAP",
+      isRunning: true,
+      transport: "softap",
+    },
+    "CG-ESP32-B200": {
+      deviceId: "CG-ESP32-B200",
+      error: null,
+      isRunning: true,
+      transport: "facility_wifi",
+    },
+  });
+
+  await expect(getDeviceRuntimeSession("CG-ESP32-A100")).resolves.toEqual(
+    expect.objectContaining({
+      activeTransport: "softap",
+      lastMonitorError: "RECOVERING_SOFTAP",
+      monitoringMode: "foreground_service",
+    }),
+  );
 });
 
 test("runs a mock BLE-to-WiFi connection test and records success", async () => {
@@ -367,7 +505,7 @@ test("runs a mock BLE-to-WiFi connection test and records success", async () => 
       status: "synced",
     }),
   );
-  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(0);
+  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
 });
 
 test("keeps the local connection success and queues sync when backend audit logging fails", async () => {
@@ -401,6 +539,7 @@ test("keeps the local connection success and queues sync when backend audit logg
       transport: "softap",
     }),
   );
+  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
   expect(mockUpdateDeviceConnectionSyncState).toHaveBeenCalledWith(
     expect.objectContaining({
       deviceId: "CG-ESP32-A100",

@@ -195,14 +195,15 @@ export default function DeviceDetailsScreen() {
 
   useEffect(() => {
     let isMounted = true;
+    const deviceId = device?.id;
 
     async function loadRuntimeSession() {
-      if (!device) {
+      if (!deviceId) {
         if (isMounted) setRuntimeSession(null);
         return;
       }
 
-      const nextSession = await getDeviceRuntimeSession(device.id);
+      const nextSession = await getDeviceRuntimeSession(deviceId);
       if (!isMounted) return;
 
       setRuntimeSession(nextSession);
@@ -218,32 +219,6 @@ export default function DeviceDetailsScreen() {
 
     return () => {
       isMounted = false;
-    };
-  }, [device?.id]);
-
-  useEffect(() => {
-    let active = true;
-
-    async function autoConnectOnOpen() {
-      if (!device) return;
-
-      try {
-        const session = await connectOrRecoverDevice({ deviceId: device.id });
-        if (!active) return;
-        setRuntimeSession(await getDeviceRuntimeSession(device.id));
-        setActionMessage(`Connected over ${formatRuntimeTransportLabel(session.transport)}.`);
-        await refreshDevices();
-      } catch (error) {
-        if (!active) return;
-        setRuntimeSession(await getDeviceRuntimeSession(device.id));
-        setActionMessage(error instanceof Error ? error.message : "Automatic reconnect failed.");
-      }
-    }
-
-    void autoConnectOnOpen();
-
-    return () => {
-      active = false;
     };
   }, [device?.id]);
 

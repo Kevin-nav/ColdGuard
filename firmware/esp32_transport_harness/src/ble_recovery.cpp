@@ -462,7 +462,7 @@ String handleGrantVerify(
     return buildErrorResponse("grant.verify", requestId, "ACTION_TICKET_INVALID", "Action ticket verification failed.");
   }
 
-  if (nextGrantVersion <= state->grantVersion) {
+  if (nextGrantVersion < state->grantVersion) {
     return buildErrorResponse("grant.verify", requestId, "GRANT_VERSION_STALE", "Grant version is older than the enrolled version.");
   }
 
@@ -597,7 +597,7 @@ String handleDecommission(
     return buildErrorResponse("device.decommission", requestId, "ACTION_TICKET_INVALID", "Supervisor decommission action ticket verification failed.");
   }
 
-  if (nextGrantVersion <= state->grantVersion) {
+  if (nextGrantVersion < state->grantVersion) {
     debugBleRecovery("device.decommission rejected: stale grant");
     return buildErrorResponse("device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated.");
   }

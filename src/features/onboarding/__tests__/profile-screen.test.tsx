@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@testing-library/react-native";
+import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import OnboardingProfileScreen from "../../../../app/(onboarding)/profile";
 
 const mockReplace = jest.fn();
@@ -46,10 +46,10 @@ test("shows only the current user's profile details", () => {
   expect(ui.getByText(/Supervisor access will include nurse management/)).toBeTruthy();
 });
 
-test("continues to the dashboard from the profile screen", () => {
+test("continues to the dashboard from the profile screen", async () => {
   const ui = render(<OnboardingProfileScreen />);
 
   fireEvent.press(ui.getByText("Continue to Dashboard"));
 
-  expect(mockReplace).toHaveBeenCalledWith("/(tabs)/home");
+  await waitFor(() => expect(mockReplace).toHaveBeenCalledWith("/(tabs)/home"));
 });

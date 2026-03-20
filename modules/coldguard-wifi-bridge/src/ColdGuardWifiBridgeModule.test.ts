@@ -7,10 +7,10 @@ describe("getColdGuardWifiBridgeModule", () => {
   test("returns the native module when it loads successfully", () => {
     const nativeModule = {
       connectToAccessPointAsync: jest.fn(),
-      getMonitoringServiceStatusAsync: jest.fn(),
+      getMonitoringStatusesAsync: jest.fn(),
       releaseNetworkBindingAsync: jest.fn(),
-      startMonitoringServiceAsync: jest.fn(),
-      stopMonitoringServiceAsync: jest.fn(),
+      startMonitoringDeviceAsync: jest.fn(),
+      stopMonitoringDeviceAsync: jest.fn(),
     };
     jest.doMock("expo", () => ({
       requireNativeModule: jest.fn(() => nativeModule),
@@ -50,6 +50,22 @@ describe("getColdGuardWifiBridgeModule", () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { getColdGuardWifiBridgeModule } = require("./ColdGuardWifiBridgeModule");
       expect(() => getColdGuardWifiBridgeModule()).toThrow("Native module registration failed");
+    });
+  });
+});
+
+describe("ColdGuardWifiBridgeModule.web", () => {
+  test("stopMonitoringDeviceAsync returns a status map keyed by device id", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require("./ColdGuardWifiBridgeModule.web");
+
+    await expect(module.default().stopMonitoringDeviceAsync("device-123")).resolves.toEqual({
+      "device-123": {
+        deviceId: "device-123",
+        error: null,
+        isRunning: false,
+        transport: null,
+      },
     });
   });
 });

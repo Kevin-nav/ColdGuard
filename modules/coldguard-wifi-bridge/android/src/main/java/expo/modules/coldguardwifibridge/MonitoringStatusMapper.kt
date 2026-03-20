@@ -8,3 +8,9 @@ fun MonitoringStatus.toMap(): Map<String, Any?> {
     "transport" to transport,
   )
 }
+
+fun Map<String, MonitoringStatus>.toBridgeMap(): Map<String, Any?> {
+  return entries.associate { (deviceId, status) ->
+    deviceId to status.toMap()
+  }
+}

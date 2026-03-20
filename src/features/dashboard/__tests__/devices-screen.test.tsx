@@ -1,6 +1,11 @@
 import { render, waitFor } from "@testing-library/react-native";
 import DevicesScreen from "../../../../app/(tabs)/devices";
 
+jest.mock("expo-router", () => ({
+  router: { push: jest.fn() },
+}));
+
+
 const mockGetProfileSnapshot = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockSyncVisibleDevices = jest.fn();

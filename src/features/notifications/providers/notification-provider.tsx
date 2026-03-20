@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { listMonitoredDeviceRuntimeConfigs } from "../../../lib/storage/sqlite/device-runtime-repository";
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { useDashboardBootstrap } from "../../dashboard/providers/dashboard-bootstrap";
 import { ensureLocalProfileForUser } from "../../dashboard/services/profile-hydration";
-import { listMonitoredDeviceRuntimeConfigs } from "../../../lib/storage/sqlite/device-runtime-repository";
 import { pollMonitoredDeviceRuntime } from "../../devices/services/connection-service";
+import { getNativeMonitoringServiceStatuses } from "../../devices/services/wifi-bridge";
 import { useNetworkStatus } from "../../network/network-status";
 import {
   type NotificationIncidentRecord,
@@ -66,6 +67,27 @@ const NotificationContext = createContext<NotificationContextValue>({
   updatePreferences: async () => undefined,
 });
 
+type NotificationInstitutionContext = {
+  institutionId: string;
+  institutionName: string;
+};
+
+function createInstitutionContext(
+  institutionId: string | null | undefined,
+  institutionName: string | null | undefined,
+): NotificationInstitutionContext | null {
+  const normalizedInstitutionId = institutionId?.trim() ?? "";
+  const normalizedInstitutionName = institutionName?.trim() ?? "";
+  if (!normalizedInstitutionId || !normalizedInstitutionName) {
+    return null;
+  }
+
+  return {
+    institutionId: normalizedInstitutionId,
+    institutionName: normalizedInstitutionName,
+  };
+}
+
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuthSession();
   const { isReady } = useDashboardBootstrap();
@@ -75,7 +97,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermissionStatus>("undetermined");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [institutionName, setInstitutionName] = useState<string | null>(null);
+  const [institution, setInstitution] = useState<NotificationInstitutionContext | null>(null);
 
   useEffect(() => {
     configureLocalNotificationHandler();
@@ -88,13 +110,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     let active = true;
 
     async function loadNotifications() {
-      if (!isReady) return;
+      if (!isReady) {
+        return;
+      }
 
       if (!user?.uid) {
-        if (!active) return;
+        if (!active) {
+          return;
+        }
+
         setIncidents([]);
         setPreferences(null);
-        setInstitutionName(null);
+        setInstitution(null);
         setError(null);
         setIsLoading(false);
         return;
@@ -110,10 +137,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           email: user.email,
         });
 
-        if (!active) return;
+        if (!active) {
+          return;
+        }
 
-        if (!profile?.institutionName) {
-          setInstitutionName(null);
+        const institutionContext = createInstitutionContext(profile?.institutionId, profile?.institutionName);
+        if (!institutionContext) {
+          setInstitution(null);
           setIncidents([]);
           setPreferences(null);
           setError(null);
@@ -121,23 +151,30 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           return;
         }
 
-        setInstitutionName(profile.institutionName);
+        setInstitution(institutionContext);
+
         const [nextInbox, nextPreferences] = await Promise.all([
-          syncNotificationInbox(profile.institutionName, { isOnline }),
+          syncNotificationInbox(institutionContext, { isOnline }),
           syncNotificationPreferences({ isOnline }),
         ]);
 
-        if (!active) return;
+        if (!active) {
+          return;
+        }
 
         setIncidents(nextInbox.incidents);
         setPreferences(nextPreferences);
         setError(nextInbox.syncError);
         await mirrorNotificationsLocally(nextInbox.incidents, nextPreferences);
       } catch (nextError) {
-        if (!active) return;
+        if (!active) {
+          return;
+        }
         setError(nextError instanceof Error ? nextError.message : "Notification inbox unavailable.");
       } finally {
-        if (active) setIsLoading(false);
+        if (active) {
+          setIsLoading(false);
+        }
       }
     }
 
@@ -149,12 +186,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [isOnline, isReady, user?.displayName, user?.email, user?.uid]);
 
   useEffect(() => {
-    if (!institutionName || !isOnline) return;
-    void flushPendingNotificationSyncJobs({ institutionName, isOnline });
-  }, [institutionName, isOnline]);
+    if (!institution || !isOnline) {
+      return;
+    }
+
+    void flushPendingNotificationSyncJobs({ institution, isOnline });
+  }, [institution, isOnline]);
 
   useEffect(() => {
-    if (!institutionName || !isReady || !user?.uid) {
+    if (!institution || !isReady || !user?.uid) {
       return;
     }
 
@@ -162,17 +202,26 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
     async function pollMonitoredDevices() {
       try {
-        const monitored = await listMonitoredDeviceRuntimeConfigs();
+        const nativeStatuses = await getNativeMonitoringServiceStatuses().catch(() => ({}));
+        const nativelyMonitoredDeviceIds = Object.values(nativeStatuses)
+          .filter((status) => status.isRunning)
+          .map((status) => status.deviceId);
+        const monitored = await listMonitoredDeviceRuntimeConfigs({
+          excludeDeviceIds: nativelyMonitoredDeviceIds,
+        });
+
         for (const runtime of monitored) {
           await pollMonitoredDeviceRuntime({ deviceId: runtime.deviceId }).catch(() => undefined);
         }
 
         const [nextInbox, nextPreferences] = await Promise.all([
-          syncNotificationInbox(institutionName, { isOnline }),
+          syncNotificationInbox(institution, { isOnline }),
           syncNotificationPreferences({ isOnline }),
         ]);
 
-        if (!active) return;
+        if (!active) {
+          return;
+        }
 
         setIncidents(nextInbox.incidents);
         setPreferences(nextPreferences);
@@ -192,13 +241,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       active = false;
       clearInterval(interval);
     };
-  }, [institutionName, isOnline, isReady, user?.uid]);
+  }, [institution, isOnline, isReady, user?.uid]);
 
   async function refresh() {
-    if (!institutionName) return;
+    if (!institution) {
+      return;
+    }
+
     try {
       const [nextInbox, nextPreferences] = await Promise.all([
-        syncNotificationInbox(institutionName, { isOnline }),
+        syncNotificationInbox(institution, { isOnline }),
         syncNotificationPreferences({ isOnline }),
       ]);
       setIncidents(nextInbox.incidents);
@@ -211,10 +263,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   async function markRead(incidentId: string) {
-    if (!institutionName) return;
+    if (!institution) {
+      return;
+    }
+
     try {
       await markNotificationReadWithSync(incidentId, { isOnline });
-      const nextInbox = await syncNotificationInbox(institutionName, { isOnline });
+      const nextInbox = await syncNotificationInbox(institution, { isOnline });
       setIncidents(nextInbox.incidents);
       setError(nextInbox.syncError);
     } catch (nextError) {
@@ -223,10 +278,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   async function archiveIncident(incidentId: string) {
-    if (!institutionName) return;
+    if (!institution) {
+      return;
+    }
+
     try {
       await archiveNotificationWithSync(incidentId, { isOnline });
-      const nextInbox = await syncNotificationInbox(institutionName, { isOnline });
+      const nextInbox = await syncNotificationInbox(institution, { isOnline });
       setIncidents(nextInbox.incidents);
       setError(nextInbox.syncError);
     } catch (nextError) {
@@ -235,9 +293,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   async function acknowledgeIncident(incidentId: string) {
-    if (!institutionName) return;
+    if (!institution) {
+      return;
+    }
+
     try {
-      const nextInbox = await acknowledgeIncidentWithSync(incidentId, institutionName, { isOnline });
+      const nextInbox = await acknowledgeIncidentWithSync(incidentId, institution, { isOnline });
       setIncidents(nextInbox.incidents);
       setError(nextInbox.syncError);
     } catch (nextError) {
@@ -246,9 +307,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }
 
   async function resolveIncident(incidentId: string) {
-    if (!institutionName) return;
+    if (!institution) {
+      return;
+    }
+
     try {
-      const nextInbox = await resolveIncidentWithSync(incidentId, institutionName, { isOnline });
+      const nextInbox = await resolveIncidentWithSync(incidentId, institution, { isOnline });
       setIncidents(nextInbox.incidents);
       setError(nextInbox.syncError);
     } catch (nextError) {
@@ -278,11 +342,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     const localIncident = incidents.find((incident) => incident.id === incidentId) ?? null;
 
     try {
-      if (!institutionName) {
+      if (!institution) {
         return localIncident;
       }
 
-      return await getIncidentDetail(incidentId, institutionName, { isOnline });
+      return await getIncidentDetail(incidentId, institution, { isOnline });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Unable to load incident details.");
       return localIncident;

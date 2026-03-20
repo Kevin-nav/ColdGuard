@@ -16,16 +16,16 @@ class ColdGuardWifiBridgeModule : Module() {
       connectToAccessPoint(ssid, password)
     }
 
-    AsyncFunction("startMonitoringServiceAsync") { options: Map<String, Any?> ->
-      startMonitoringService(options)
+    AsyncFunction("startMonitoringDeviceAsync") { options: Map<String, Any?> ->
+      startMonitoringDevice(options)
     }
 
-    AsyncFunction("stopMonitoringServiceAsync") {
-      stopMonitoringService()
+    AsyncFunction("stopMonitoringDeviceAsync") { deviceId: String ->
+      stopMonitoringDevice(deviceId)
     }
 
-    AsyncFunction("getMonitoringServiceStatusAsync") {
-      ColdGuardDeviceMonitoringService.currentStatus().toMap()
+    AsyncFunction("getMonitoringStatusesAsync") {
+      ColdGuardDeviceMonitoringService.currentStatuses().toBridgeMap()
     }
 
     AsyncFunction("releaseNetworkBindingAsync") {
@@ -49,7 +49,7 @@ class ColdGuardWifiBridgeModule : Module() {
     wifiSessionController?.release(bindProcess = true)
   }
 
-  private fun startMonitoringService(options: Map<String, Any?>): Map<String, Any?> {
+  private fun startMonitoringDevice(options: Map<String, Any?>): Map<String, Any?> {
     val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
     val connectActionTicketJson = options["connectActionTicketJson"] as? String
     val deviceId = options["deviceId"] as? String ?: throw IllegalStateException("MONITOR_DEVICE_ID_REQUIRED")
@@ -59,6 +59,12 @@ class ColdGuardWifiBridgeModule : Module() {
     val softApSsid = options["softApSsid"] as? String
     val softApPassword = options["softApPassword"] as? String
     val softApRuntimeBaseUrl = options["softApRuntimeBaseUrl"] as? String
+
+    if (!ColdGuardDeviceMonitoringService.canPostNotifications(context)) {
+      return ColdGuardDeviceMonitoringService
+        .markNotificationPermissionRequired(deviceId, transport)
+        .toBridgeMap()
+    }
 
     val intent = ColdGuardDeviceMonitoringService.startIntent(
       context,
@@ -73,28 +79,13 @@ class ColdGuardWifiBridgeModule : Module() {
         transport = transport,
       )
     )
-    if (!ColdGuardDeviceMonitoringService.canPostNotifications(context)) {
-      return ColdGuardDeviceMonitoringService
-        .markNotificationPermissionRequired(deviceId, transport)
-        .toMap()
-    }
     ContextCompat.startForegroundService(context, intent)
-    return MonitoringStatus(
-      deviceId = deviceId,
-      error = null,
-      isRunning = true,
-      transport = transport,
-    ).toMap()
+    return ColdGuardDeviceMonitoringService.markStarting(deviceId, transport).toBridgeMap()
   }
 
-  private fun stopMonitoringService(): Map<String, Any?> {
+  private fun stopMonitoringDevice(deviceId: String): Map<String, Any?> {
     val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
-    context.startService(ColdGuardDeviceMonitoringService.stopIntent(context))
-    return MonitoringStatus(
-      deviceId = null,
-      error = null,
-      isRunning = false,
-      transport = null,
-    ).toMap()
+    context.startService(ColdGuardDeviceMonitoringService.stopIntent(context, deviceId))
+    return ColdGuardDeviceMonitoringService.markStopping(deviceId).toBridgeMap()
   }
 }

@@ -132,7 +132,13 @@ test("merges local-derived incidents with cached remote incidents without duplic
   mockListNotificationsForInstitution.mockResolvedValue([buildIncident({ id: "remote-incident-1" })]);
   mockGetDevicesForInstitution.mockResolvedValue([buildDevice()]);
 
-  const result = await syncNotificationInbox("Korle-Bu Teaching Hospital", { isOnline: true });
+  const result = await syncNotificationInbox(
+    {
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+    },
+    { isOnline: true },
+  );
 
   expect(result.syncError).toBeNull();
   expect(result.incidents).toHaveLength(1);
@@ -177,7 +183,13 @@ test("returns merged cached and local incidents with a sync error when remote re
     }),
   ]);
 
-  const result = await syncNotificationInbox("Korle-Bu Teaching Hospital", { isOnline: true });
+  const result = await syncNotificationInbox(
+    {
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+    },
+    { isOnline: true },
+  );
 
   expect(result.syncError).toBe("Convex unavailable");
   expect(result.incidents).toEqual(
@@ -203,7 +215,13 @@ test("applies local notification state to local-derived incidents without persis
     ]),
   );
 
-  const result = await syncNotificationInbox("Korle-Bu Teaching Hospital", { isOnline: false });
+  const result = await syncNotificationInbox(
+    {
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+    },
+    { isOnline: false },
+  );
 
   expect(result.syncError).toBeNull();
   expect(result.incidents).toEqual([
@@ -226,9 +244,16 @@ test("acknowledges a local-only incident by saving a synthetic cache row", async
   });
   mockListNotificationsForInstitution.mockImplementation(async () => cachedIncidents);
 
-  const result = await acknowledgeIncidentWithSync("device-1:temperature", "Korle-Bu Teaching Hospital", {
-    isOnline: false,
-  });
+  const result = await acknowledgeIncidentWithSync(
+    "device-1:temperature",
+    {
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+    },
+    {
+      isOnline: false,
+    },
+  );
 
   expect(mockSaveNotificationCache).toHaveBeenCalledWith([
     expect.objectContaining({
@@ -287,9 +312,16 @@ test("resolves a local-only incident by saving a synthetic cache row", async () 
   });
   mockListNotificationsForInstitution.mockImplementation(async () => cachedIncidents);
 
-  const result = await resolveIncidentWithSync("device-1:temperature", "Korle-Bu Teaching Hospital", {
-    isOnline: false,
-  });
+  const result = await resolveIncidentWithSync(
+    "device-1:temperature",
+    {
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+    },
+    {
+      isOnline: false,
+    },
+  );
 
   expect(mockSaveNotificationCache).toHaveBeenCalledWith([
     expect.objectContaining({

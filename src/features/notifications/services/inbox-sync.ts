@@ -121,22 +121,27 @@ export type NotificationInboxSyncResult = {
   syncError: string | null;
 };
 
+type NotificationInstitutionContext = {
+  institutionId: string;
+  institutionName: string;
+};
+
 export async function syncNotificationInbox(
-  institutionName: string,
+  institution: NotificationInstitutionContext,
   options: { isOnline: boolean },
 ): Promise<NotificationInboxSyncResult> {
   let syncError: string | null = null;
 
   if (options.isOnline) {
     try {
-      await refreshRemoteNotificationInboxCache(institutionName);
+      await refreshRemoteNotificationInboxCache(institution.institutionName);
     } catch (error) {
       syncError = normalizeSyncErrorMessage(error);
     }
   }
 
   return {
-    incidents: await loadMergedNotificationInbox(institutionName),
+    incidents: await loadMergedNotificationInbox(institution),
     syncError,
   };
 }
@@ -219,10 +224,10 @@ export async function archiveNotificationWithSync(incidentId: string, options: {
 
 export async function acknowledgeIncidentWithSync(
   incidentId: string,
-  institutionName: string,
+  institution: NotificationInstitutionContext,
   options: { isOnline: boolean },
 ) {
-  await saveLocalIncidentSnapshot(incidentId, institutionName, (incident, now) => ({
+  await saveLocalIncidentSnapshot(incidentId, institution, (incident, now) => ({
     ...incident,
     acknowledgedAt: now,
     resolvedAt: null,
@@ -230,48 +235,52 @@ export async function acknowledgeIncidentWithSync(
   }));
 
   if (!isConvexId(incidentId)) {
-    return await syncNotificationInbox(institutionName, options);
+    return await syncNotificationInbox(institution, options);
   }
 
   if (!options.isOnline) {
     await enqueueSyncJob("acknowledge_incident", { incidentId });
-    return await syncNotificationInbox(institutionName, options);
+    return await syncNotificationInbox(institution, options);
   }
 
   const convex = getConvexClient();
   await convex.mutation((api as any).notifications.acknowledgeIncident, { incidentId });
-  return await syncNotificationInbox(institutionName, options);
+  return await syncNotificationInbox(institution, options);
 }
 
 export async function resolveIncidentWithSync(
   incidentId: string,
-  institutionName: string,
+  institution: NotificationInstitutionContext,
   options: { isOnline: boolean },
 ) {
-  await saveLocalIncidentSnapshot(incidentId, institutionName, (incident, now) => ({
+  await saveLocalIncidentSnapshot(incidentId, institution, (incident, now) => ({
     ...incident,
     resolvedAt: now,
     status: "resolved",
   }));
 
   if (!isConvexId(incidentId)) {
-    return await syncNotificationInbox(institutionName, options);
+    return await syncNotificationInbox(institution, options);
   }
 
   if (!options.isOnline) {
     await enqueueSyncJob("resolve_incident", { incidentId });
-    return await syncNotificationInbox(institutionName, options);
+    return await syncNotificationInbox(institution, options);
   }
 
   const convex = getConvexClient();
   await convex.mutation((api as any).notifications.resolveIncident, { incidentId });
-  return await syncNotificationInbox(institutionName, options);
+  return await syncNotificationInbox(institution, options);
 }
 
-export async function getIncidentDetail(incidentId: string, institutionName: string, options: { isOnline: boolean }) {
+export async function getIncidentDetail(
+  incidentId: string,
+  institution: NotificationInstitutionContext,
+  options: { isOnline: boolean },
+) {
   const local =
     (await getNotificationById(incidentId)) ??
-    (await loadLocalDerivedNotifications(institutionName)).find((incident) => incident.id === incidentId) ??
+    (await loadLocalDerivedNotifications(institution)).find((incident) => incident.id === incidentId) ??
     null;
 
   if (!options.isOnline || !isConvexId(incidentId)) {
@@ -288,7 +297,7 @@ export async function getIncidentDetail(incidentId: string, institutionName: str
       return local;
     }
 
-    const mapped = mapRemoteInboxItem(remote, institutionName, remote.events);
+    const mapped = mapRemoteInboxItem(remote, institution.institutionName, remote.events);
     await saveNotificationCache([mapped]);
     return mapped;
   } catch {
@@ -297,7 +306,7 @@ export async function getIncidentDetail(incidentId: string, institutionName: str
 }
 
 export async function flushPendingNotificationSyncJobs(options: {
-  institutionName: string;
+  institution: NotificationInstitutionContext;
   isOnline: boolean;
 }) {
   if (!options.isOnline) return;
@@ -315,7 +324,7 @@ export async function flushPendingNotificationSyncJobs(options: {
     await processSyncJob(job);
   }
 
-  await syncNotificationInbox(options.institutionName, options);
+  await syncNotificationInbox(options.institution, options);
 }
 
 async function processSyncJob(job: SyncJobRecord) {
@@ -400,18 +409,18 @@ async function runUpdateNotificationPreferencesMutation(
   }
 }
 
-async function loadMergedNotificationInbox(institutionName: string) {
+async function loadMergedNotificationInbox(institution: NotificationInstitutionContext) {
   const [remoteCached, localDerived] = await Promise.all([
-    listNotificationsForInstitution(institutionName),
-    loadLocalDerivedNotifications(institutionName),
+    listNotificationsForInstitution(institution.institutionName),
+    loadLocalDerivedNotifications(institution),
   ]);
 
   return mergeNotificationIncidents(remoteCached, localDerived);
 }
 
-async function loadLocalDerivedNotifications(institutionName: string) {
-  const devices = await getDevicesForInstitution(institutionName);
-  const derived = buildNotificationIncidentsFromDevices(institutionName, devices);
+async function loadLocalDerivedNotifications(institution: NotificationInstitutionContext) {
+  const devices = await getDevicesForInstitution(institution.institutionId);
+  const derived = buildNotificationIncidentsFromDevices(institution.institutionName, devices);
   const stateByIncidentId = await listNotificationStateForIncidentIds(derived.map((incident) => incident.id));
 
   return derived
@@ -543,7 +552,7 @@ function mapRemoteEvents(events: RemoteIncidentDetail["events"], item: RemoteInb
 
 async function saveLocalIncidentSnapshot(
   incidentId: string,
-  institutionName: string,
+  institution: NotificationInstitutionContext,
   buildNextIncident: (
     incident: NotificationIncidentRecord,
     now: number,
@@ -551,7 +560,7 @@ async function saveLocalIncidentSnapshot(
 ) {
   const existing =
     (await getNotificationById(incidentId)) ??
-    (await loadLocalDerivedNotifications(institutionName)).find((incident) => incident.id === incidentId) ??
+    (await loadLocalDerivedNotifications(institution)).find((incident) => incident.id === incidentId) ??
     null;
 
   if (!existing) return;

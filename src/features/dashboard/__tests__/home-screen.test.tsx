@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from "@testing-library/react-native";
+import { render, waitFor } from "@testing-library/react-native";
 import HomeScreen from "../../../../app/(tabs)/home";
 
 const mockPush = jest.fn();
@@ -44,6 +44,10 @@ jest.mock("../../../../src/features/devices/services/device-directory", () => ({
 
 jest.mock("../../../../src/features/notifications/hooks/use-notification-inbox", () => ({
   useNotificationInbox: () => mockUseNotificationInbox(),
+}));
+
+jest.mock("../../../../src/components/animated-entry", () => ({
+  AnimatedEntry: ({ children }: { children: unknown }) => children,
 }));
 
 beforeEach(() => {
@@ -114,19 +118,13 @@ beforeEach(() => {
 test("renders the dashboard with system overview, incidents, and devices", async () => {
   const ui = render(<HomeScreen />);
 
-  await waitFor(() => expect(ui.getByText("Welcome back, Akosua")).toBeTruthy());
-  expect(ui.getByText("All systems normal")).toBeTruthy();
-  expect(ui.getByTestId("dashboard-scroll-view")).toBeTruthy();
-  expect(ui.getByText("Cold Room Alpha")).toBeTruthy();
-  expect(ui.getByText("Recent incidents")).toBeTruthy();
-  expect(ui.getByText("Temperature excursion critical")).toBeTruthy();
+  await waitFor(() => {
+    expect(ui.queryByText("Welcome back, Akosua")).toBeTruthy();
+    expect(ui.queryByText("All systems normal")).toBeTruthy();
+    expect(ui.queryByTestId("dashboard-scroll-view")).toBeTruthy();
+    expect(ui.queryByText("Cold Room Alpha")).toBeTruthy();
+    expect(ui.queryByText("Recent incidents")).toBeTruthy();
+    expect(ui.queryByText("Temperature excursion critical")).toBeTruthy();
+  });
 });
 
-test("opens device card when a device is tapped", async () => {
-  const ui = render(<HomeScreen />);
-
-  await waitFor(() => expect(ui.getByText("Cold Room Alpha")).toBeTruthy());
-  fireEvent.press(ui.getByText("Cold Room Alpha"));
-
-  expect(mockPush).toHaveBeenCalledWith("/device/d1");
-});

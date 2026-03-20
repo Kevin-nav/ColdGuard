@@ -40,9 +40,9 @@ import {
 } from "./mock-hardware-registry";
 import {
   createColdGuardWifiBridge,
-  getNativeMonitoringServiceStatus,
-  startNativeMonitoringService,
-  stopNativeMonitoringService,
+  getNativeMonitoringServiceStatuses,
+  startNativeMonitoringDevice,
+  stopNativeMonitoringDevice,
 } from "./wifi-bridge";
 import {
   assignDeviceUsers,
@@ -73,6 +73,21 @@ type RemoteConnectionPayload = Omit<ColdGuardConnectionPayload, "lastSeenAt"> & 
 };
 
 const DEVICE_CONNECTION_SYNC_JOB_TYPE = "device_connection_test_reconciliation";
+
+function getMonitoringStatusForDevice(
+  statuses: Record<
+    string,
+    {
+      deviceId: string;
+      error: string | null;
+      isRunning: boolean;
+      transport: RuntimeTransportMode | null;
+    }
+  >,
+  deviceId: string,
+) {
+  return statuses[deviceId] ?? null;
+}
 
 export interface ColdGuardBleClient {
   discoverDevice(args: { deviceId: string; expectedState: "blank" | "enrolled" }): Promise<ColdGuardDiscoveredDevice>;
@@ -375,26 +390,31 @@ async function connectViaSoftAp(args: {
     handshakeToken,
   });
   const network = await args.wifiBridge.connect(ticket);
-  const snapshot = await fetchAndBuildRuntimeSnapshot({
-    localIp: network.localIp,
-    runtimeBaseUrl: normalizeRuntimeBaseUrl(ticket.testUrl),
-    ssid: ticket.ssid,
-    transport: "softap",
-  });
 
-  await upsertDeviceRuntimeConfig(args.deviceId, {
-    activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
-    activeTransport: "softap",
-    lastPingAt: snapshot.receivedAt,
-    lastRecoverAt: snapshot.receivedAt,
-    lastRuntimeError: null,
-    sessionStatus: "connected",
-    softApPassword: ticket.password,
-    softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
-    softApSsid: ticket.ssid,
-  });
+  try {
+    const snapshot = await fetchAndBuildRuntimeSnapshot({
+      localIp: network.localIp,
+      runtimeBaseUrl: normalizeRuntimeBaseUrl(ticket.testUrl),
+      ssid: ticket.ssid,
+      transport: "softap",
+    });
 
-  return snapshot;
+    await upsertDeviceRuntimeConfig(args.deviceId, {
+      activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+      activeTransport: "softap",
+      lastPingAt: snapshot.receivedAt,
+      lastRecoverAt: snapshot.receivedAt,
+      lastRuntimeError: null,
+      sessionStatus: "connected",
+      softApPassword: ticket.password,
+      softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+      softApSsid: ticket.ssid,
+    });
+
+    return snapshot;
+  } finally {
+    await args.wifiBridge.release().catch(() => undefined);
+  }
 }
 
 export async function enrollColdGuardDevice(args: {
@@ -559,11 +579,7 @@ export async function startDeviceMonitoring(deviceId: string) {
     config.activeTransport ??
     (facilityWifiRuntimeBaseUrl ? "facility_wifi" : softApRuntimeBaseUrl ? "softap" : "ble_fallback");
 
-  if (!facilityWifiRuntimeBaseUrl && !softApRuntimeBaseUrl) {
-    throw new Error("RUNTIME_MONITORING_REQUIRES_RUNTIME_TARGET");
-  }
-
-  await startNativeMonitoringService({
+  const serviceStatuses = await startNativeMonitoringDevice({
     connectActionTicketJson: JSON.stringify(connectActionTicket),
     deviceId,
     facilityWifiRuntimeBaseUrl,
@@ -573,32 +589,52 @@ export async function startDeviceMonitoring(deviceId: string) {
     softApSsid: config.softApSsid,
     transport: monitoringTransport,
   });
+  const serviceStatus = getMonitoringStatusForDevice(serviceStatuses, deviceId);
 
-  return config;
+  return await upsertDeviceRuntimeConfig(deviceId, {
+    activeTransport: serviceStatus?.transport ?? config.activeTransport,
+    lastMonitorAt: Date.now(),
+    lastMonitorError: serviceStatus?.error ?? null,
+    monitoringMode: serviceStatus?.isRunning ? "foreground_service" : "off",
+  });
 }
 
 export async function stopDeviceMonitoring(deviceId: string) {
-  await stopNativeMonitoringService();
+  const serviceStatuses = await stopNativeMonitoringDevice(deviceId);
+  const serviceStatus = getMonitoringStatusForDevice(serviceStatuses, deviceId);
+
   return await upsertDeviceRuntimeConfig(deviceId, {
+    lastMonitorAt: Date.now(),
+    lastMonitorError: serviceStatus?.error ?? null,
     monitoringMode: "off",
   });
 }
 
 export async function getDeviceRuntimeSession(deviceId: string) {
-  const [config, serviceStatus] = await Promise.all([
+  const [config, serviceStatuses] = await Promise.all([
     getDeviceRuntimeConfig(deviceId),
-    getNativeMonitoringServiceStatus(),
+    getNativeMonitoringServiceStatuses(),
   ]);
   if (!config) {
     return null;
   }
 
-  if (serviceStatus.deviceId === deviceId && serviceStatus.isRunning) {
+  const serviceStatus = getMonitoringStatusForDevice(serviceStatuses, deviceId);
+
+  if (serviceStatus?.isRunning) {
     return {
       ...config,
       activeTransport: serviceStatus.transport ?? config.activeTransport,
       lastMonitorError: serviceStatus.error ?? config.lastMonitorError,
       monitoringMode: "foreground_service",
+    };
+  }
+
+  if (config.monitoringMode === "foreground_service") {
+    return {
+      ...config,
+      lastMonitorError: serviceStatus?.error ?? config.lastMonitorError,
+      monitoringMode: "off",
     };
   }
 

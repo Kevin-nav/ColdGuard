@@ -9,6 +9,8 @@ namespace coldguard {
 
 namespace {
 
+constexpr unsigned long kMaxActionTicketLifetimeMs = 15UL * 60UL * 1000UL;
+
 void debugActionTicket(const String& message) {
   Serial.println("[ACTION_TICKET] " + message);
 }
@@ -255,12 +257,23 @@ bool verifyActionTicket(
     return false;
   }
 
-  const uint64_t trustedNowMs = currentDeviceTimeMs();
-  if (static_cast<uint64_t>(expiresAt) <= trustedNowMs) {
+  const long long ticketLifetimeMs = expiresAt - issuedAt;
+  if (ticketLifetimeMs > static_cast<long long>(kMaxActionTicketLifetimeMs)) {
     debugActionTicket(
-      "ticket expired"
+      "ticket lifetime invalid"
+      " ticketLifetimeMs=" + String(ticketLifetimeMs));
+    return false;
+  }
+
+  const long long now = static_cast<long long>(currentDeviceTimeMs());
+  if (issuedAt > now || now > expiresAt) {
+    debugActionTicket(
+      "ticket time window invalid"
+      " issuedAt=" + String(issuedAt) +
+      " now=" + String(now) +
       " expiresAt=" + String(expiresAt) +
-      " nowMs=" + uint64ToString(trustedNowMs));
+      " ticketLifetimeMs=" + String(ticketLifetimeMs) +
+      " maxLifetimeMs=" + String(kMaxActionTicketLifetimeMs));
     return false;
   }
 

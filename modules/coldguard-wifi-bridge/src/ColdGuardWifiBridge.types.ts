@@ -3,6 +3,8 @@ export type ColdGuardWifiConnectionResult = {
   ssid: string;
 };
 
+export type ColdGuardMonitoringTransport = "ble_fallback" | "facility_wifi" | "softap";
+
 export type ColdGuardMonitoringServiceOptions = {
   connectActionTicketJson?: string | null;
   deviceId: string;
@@ -11,22 +13,24 @@ export type ColdGuardMonitoringServiceOptions = {
   softApPassword?: string | null;
   softApRuntimeBaseUrl?: string | null;
   softApSsid?: string | null;
-  transport: "ble_fallback" | "facility_wifi" | "softap";
+  transport: ColdGuardMonitoringTransport;
 };
 
-export type ColdGuardMonitoringServiceStatus = {
-  deviceId: string | null;
+export type ColdGuardMonitoringDeviceStatus = {
+  deviceId: string;
   error: string | null;
   isRunning: boolean;
-  transport: "ble_fallback" | "facility_wifi" | "softap" | null;
+  transport: ColdGuardMonitoringTransport | null;
 };
+
+export type ColdGuardMonitoringStatusMap = Record<string, ColdGuardMonitoringDeviceStatus>;
 
 export type ColdGuardWifiBridgeModuleContract = {
   connectToAccessPointAsync(ssid: string, password: string): Promise<ColdGuardWifiConnectionResult>;
-  getMonitoringServiceStatusAsync(): Promise<ColdGuardMonitoringServiceStatus>;
+  getMonitoringStatusesAsync(): Promise<ColdGuardMonitoringStatusMap>;
   releaseNetworkBindingAsync(): Promise<void>;
-  startMonitoringServiceAsync(options: ColdGuardMonitoringServiceOptions): Promise<ColdGuardMonitoringServiceStatus>;
-  stopMonitoringServiceAsync(): Promise<ColdGuardMonitoringServiceStatus>;
+  startMonitoringDeviceAsync(options: ColdGuardMonitoringServiceOptions): Promise<ColdGuardMonitoringStatusMap>;
+  stopMonitoringDeviceAsync(deviceId: string): Promise<ColdGuardMonitoringStatusMap>;
 };
 
 export type ColdGuardWifiBridgeViewProps = {

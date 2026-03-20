@@ -39,17 +39,14 @@ String buildRuntimeBaseUrl(DeviceState* state) {
   return "http://" + WiFi.softAPIP().toString();
 }
 
-String buildAlertsJson() {
-  const float temp = currentMockTemperature();
-  const int batteryLevel = currentMockBatteryLevel();
-  const bool doorOpen = currentMockDoorOpen();
+String buildAlertsJson(float temp, int batteryLevel, bool doorOpen) {
   const unsigned long nowMs = millis();
   String alerts = "[";
   bool first = true;
 
   if (temp >= 4.5f) {
     alerts += "{"
-              "\"cursor\":\"temperature-" + String(nowMs) + "\","
+              "\"cursor\":\"temperature-warning\","
               "\"incidentType\":\"temperature\","
               "\"severity\":\"warning\","
               "\"status\":\"open\","
@@ -65,7 +62,7 @@ String buildAlertsJson() {
       alerts += ",";
     }
     alerts += "{"
-              "\"cursor\":\"door-" + String(nowMs) + "\","
+              "\"cursor\":\"door-open\","
               "\"incidentType\":\"door_open\","
               "\"severity\":\"warning\","
               "\"status\":\"open\","
@@ -81,7 +78,7 @@ String buildAlertsJson() {
       alerts += ",";
     }
     alerts += "{"
-              "\"cursor\":\"battery-" + String(nowMs) + "\","
+              "\"cursor\":\"battery-low\","
               "\"incidentType\":\"battery_low\","
               "\"severity\":\"warning\","
               "\"status\":\"open\","
@@ -100,6 +97,8 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
   const float temp = currentMockTemperature();
   const int batteryLevel = currentMockBatteryLevel();
   const bool doorOpen = currentMockDoorOpen();
+  const bool hasWarning = temp >= 4.5f || doorOpen || batteryLevel < 90;
+  const String alerts = buildAlertsJson(temp, batteryLevel, doorOpen);
 
   return "{"
          "\"deviceId\":\"" + escapeJson(state->deviceId) + "\","
@@ -108,13 +107,13 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
          "\"currentTempC\":" + String(temp, 2) + ","
          "\"batteryLevel\":" + String(batteryLevel) + ","
          "\"doorOpen\":" + String(doorOpen ? "true" : "false") + ","
-         "\"mktStatus\":\"safe\","
+         "\"mktStatus\":\"" + String(hasWarning ? "warning" : "safe") + "\","
          "\"statusText\":\"Runtime status available.\","
          "\"lastSeenAgeMs\":0,"
          "\"nickname\":\"" + escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname) + "\","
          "\"institutionId\":\"" + escapeJson(state->institutionId) + "\","
          "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
-         "\"alerts\":" + buildAlertsJson() + ","
+         "\"alerts\":" + alerts + ","
          "\"receivedAtMs\":" + String(nowMs) +
          "}";
 }
@@ -157,13 +156,16 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
       return;
     }
 
+    const float temp = currentMockTemperature();
+    const int batteryLevel = currentMockBatteryLevel();
+    const bool doorOpen = currentMockDoorOpen();
     webServer.send(
       200,
       "application/json",
       "{"
       "\"ok\":true,"
       "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
-      "\"alerts\":" + buildAlertsJson() +
+      "\"alerts\":" + buildAlertsJson(temp, batteryLevel, doorOpen) +
       "}");
   });
 
@@ -267,16 +269,26 @@ bool provisionFacilityWifi(
   const char* firmwareVersion,
   const String& ssid,
   const String& password) {
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() != ssid) {
+    WiFi.disconnect(false, false);
+    state->stationConnected = false;
+    state->lastStationConnectAttemptMs = 0;
+  }
   state->facilityWifiSsid = ssid;
   state->facilityWifiPassword = password;
   state->lastStationConnectAttemptMs = 0;
   maybeEnsureStationConnected(state);
+  const unsigned long startedAtMs = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAtMs < 15000UL) {
+    delay(250);
+  }
+  state->stationConnected = WiFi.status() == WL_CONNECTED;
 
   if (state->stationConnected && !state->runtimeServerStarted) {
     ensureRuntimeRoutesRegistered(webServer, state, firmwareVersion);
   }
 
-  return !state->facilityWifiSsid.isEmpty();
+  return state->stationConnected;
 }
 
 String currentRuntimeBaseUrl(DeviceState* state) {

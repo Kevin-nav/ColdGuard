@@ -139,7 +139,7 @@ SQLite remains the local source of truth for per-device monitoring configuration
 
 The bridge API should expose:
 
-- `startMonitoringDevicesAsync(devices[])`
+- `startMonitoringDeviceAsync(options)`
 - `stopMonitoringDeviceAsync(deviceId)`
 - `getMonitoringStatusesAsync()`
 - `getMonitoringStatusAsync(deviceId)` for convenience if desired

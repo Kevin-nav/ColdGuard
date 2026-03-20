@@ -12,6 +12,7 @@ export type ColdGuardBleCommand =
   | "enroll.commit"
   | "grant.verify"
   | "hello"
+  | "wifi.provision"
   | "wifi.ticket.request";
 
 export async function createHandshakeProof(args: {

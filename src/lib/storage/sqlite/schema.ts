@@ -83,6 +83,27 @@ export const SQLITE_TABLE_DEFINITIONS = {
       PRIMARY KEY (scope_type, scope_id, action)
     );
   `,
+  deviceRuntimeConfig: `
+    CREATE TABLE IF NOT EXISTS device_runtime_config (
+      device_id TEXT PRIMARY KEY NOT NULL,
+      active_transport TEXT,
+      session_status TEXT NOT NULL DEFAULT 'idle',
+      monitoring_mode TEXT NOT NULL DEFAULT 'off',
+      active_runtime_base_url TEXT,
+      facility_wifi_ssid TEXT,
+      facility_wifi_password TEXT,
+      facility_wifi_runtime_base_url TEXT,
+      softap_ssid TEXT,
+      softap_password TEXT,
+      softap_runtime_base_url TEXT,
+      last_ping_at INTEGER,
+      last_recover_at INTEGER,
+      last_monitor_at INTEGER,
+      last_runtime_error TEXT,
+      last_monitor_error TEXT,
+      updated_at INTEGER NOT NULL
+    );
+  `,
   notificationCache: `
     CREATE TABLE IF NOT EXISTS notification_cache (
       incident_id TEXT PRIMARY KEY NOT NULL,
@@ -170,6 +191,7 @@ export const SQLITE_SCHEMA_STATEMENTS = [
   SQLITE_TABLE_DEFINITIONS.syncJobs,
   SQLITE_TABLE_DEFINITIONS.connectionGrants,
   SQLITE_TABLE_DEFINITIONS.deviceActionTickets,
+  SQLITE_TABLE_DEFINITIONS.deviceRuntimeConfig,
   SQLITE_TABLE_DEFINITIONS.notificationCache,
   SQLITE_TABLE_DEFINITIONS.notificationStateCache,
   SQLITE_TABLE_DEFINITIONS.notificationPreferencesCache,

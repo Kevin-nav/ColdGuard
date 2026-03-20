@@ -9,6 +9,7 @@
 
 #include "src/ble_recovery.h"
 #include "src/device_state.h"
+#include "src/wifi_runtime.h"
 
 namespace {
 
@@ -42,6 +43,10 @@ constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
   kVerifiedSessionWindowMs,
   kProtocolVersion,
 };
+
+String buildEnrollmentLink(const coldguard::DeviceState& state) {
+  return "https://coldguard.org/device/" + state.deviceId + "?claim=" + state.bootstrapToken + "&v=1";
+}
 
 void logSecretValue(const String& label, const String& value) {
   if (kVerboseSecretLogging) {
@@ -140,20 +145,20 @@ void initializeBle() {
 void setup() {
   Serial.begin(115200);
   coldguard::loadDeviceState(preferences, kPreferencesNamespace, &deviceState);
+  coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
   initializeBle();
 
   Serial.println("ColdGuard ESP32 transport harness ready");
   Serial.println("Device ID: " + deviceState.deviceId);
   logSecretValue("Bootstrap Token: ", deviceState.bootstrapToken);
-  Serial.println(
-    "Enrollment Link: https://coldguard.org/device/" + deviceState.deviceId +
-    "?claim=" + deviceState.bootstrapToken + "&v=1");
+  Serial.println("Enrollment Link: " + coldguard::buildEnrollmentLink(deviceState));
   Serial.println("BLE Name: " + deviceState.bleName);
   Serial.println("MAC: " + deviceState.macAddress);
 }
 
 void loop() {
-  if (deviceState.accessPointStarted) {
+  coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
+  if (deviceState.accessPointStarted || deviceState.stationConnected) {
     webServer.handleClient();
   }
 }

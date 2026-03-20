@@ -1,6 +1,11 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleError, BleManager, type Device, type ScanMode, Subscription } from "react-native-ble-plx";
-import type { CachedDeviceActionTicket, ColdGuardDiscoveredDevice, ColdGuardWifiTicket } from "../types";
+import type {
+  CachedDeviceActionTicket,
+  ColdGuardDiscoveredDevice,
+  ColdGuardWifiTicket,
+  FacilityWifiProvisioning,
+} from "../types";
 import {
   COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID,
   COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID,
@@ -124,6 +129,19 @@ function parseWifiTicketResponse(response: GenericBleResponse): ColdGuardWifiTic
     password: requireWifiTicketStringField(response, "password"),
     ssid: requireWifiTicketStringField(response, "ssid"),
     testUrl: requireWifiTicketStringField(response, "testUrl"),
+  };
+}
+
+function parseWifiProvisionResponse(response: GenericBleResponse): FacilityWifiProvisioning {
+  const runtimeBaseUrl = response.runtimeBaseUrl;
+  if (typeof runtimeBaseUrl !== "string" || runtimeBaseUrl.length === 0) {
+    throw new Error("BLE_WIFI_PROVISION_RUNTIME_BASE_URL_INVALID");
+  }
+
+  return {
+    password: requireWifiTicketStringField(response, "password"),
+    runtimeBaseUrl,
+    ssid: requireWifiTicketStringField(response, "ssid"),
   };
 }
 
@@ -259,6 +277,38 @@ export class RealColdGuardBleClient {
 
       const response = await sendCommand("wifi.ticket.request", {});
       return parseWifiTicketResponse(response);
+    } finally {
+      close();
+      await device.cancelConnection().catch(() => undefined);
+    }
+  }
+
+  async provisionWifi(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+    password: string;
+    ssid: string;
+  }): Promise<FacilityWifiProvisioning> {
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
+
+    try {
+      const proofTimestamp = createProofTimestamp(hello);
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
+      const response = await sendCommand("wifi.provision", {
+        actionTicket: args.actionTicket,
+        handshakeProof,
+        password: args.password,
+        proofTimestamp,
+        ssid: args.ssid,
+      });
+      return parseWifiProvisionResponse(response);
     } finally {
       close();
       await device.cancelConnection().catch(() => undefined);
@@ -516,7 +566,7 @@ function openCommandSession(device: Device): BleCommandSession {
         });
       }
 
-      if (getUtf8ByteLength(rawPayload) <= MAX_BLE_WRITE_BYTES) {
+      if (getUtf8ByteLength(payload) <= MAX_BLE_WRITE_BYTES) {
         return (await writePayload(rawPayload, requestId, command)) as GenericBleResponse;
       }
 
@@ -547,5 +597,6 @@ export const __testing = {
   getBleManager,
   splitTransportPayload,
   parseHelloResponse,
+  parseWifiProvisionResponse,
   parseWifiTicketResponse,
 };

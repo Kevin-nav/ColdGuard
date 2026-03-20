@@ -134,7 +134,7 @@ response plus local elapsed time.
   "requestId": "req-2",
   "command": "enroll.begin",
   "deviceId": "CG-ESP32-A1B2C3",
-  "bootstrapToken": "<token printed on the ESP32 serial console>",
+  "bootstrapToken": "<token embedded in the Enrollment Link printed on the ESP32 serial console>",
   "institutionId": "institution-1",
   "nickname": "Cold Room Alpha",
   "handshakeToken": "clinic-secret-token",
@@ -265,8 +265,8 @@ Sample JSON shape:
 5. Flash the sketch.
 6. Open Serial Monitor at `115200`.
 7. Note the generated `deviceId`.
-8. Note the generated `Bootstrap Token` from Serial Monitor.
-9. Create the QR URL:
+8. Copy the printed `Enrollment Link` from Serial Monitor.
+9. If you need to rebuild it manually, use:
 
 ```text
 https://coldguard.org/device/<deviceId>?claim=<bootstrapToken>&v=1

@@ -255,6 +255,15 @@ bool verifyActionTicket(
     return false;
   }
 
+  const uint64_t trustedNowMs = currentDeviceTimeMs();
+  if (static_cast<uint64_t>(expiresAt) <= trustedNowMs) {
+    debugActionTicket(
+      "ticket expired"
+      " expiresAt=" + String(expiresAt) +
+      " nowMs=" + uint64ToString(trustedNowMs));
+    return false;
+  }
+
   uint8_t derivedKey[32];
   if (!deriveActionTicketKey(ticketDeviceId, actionTicketMasterKey, derivedKey)) {
     debugActionTicket("failed to derive device action key");
@@ -275,7 +284,6 @@ bool verifyActionTicket(
     debugActionTicket(
       "mac mismatch"
       " canonical=" + canonical +
-      " expectedMac=" + expectedMac +
       " providedMac=" + providedMac);
     return false;
   }

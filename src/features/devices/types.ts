@@ -65,6 +65,57 @@ export type ColdGuardWifiTicket = {
   testUrl: string;
 };
 
+export type RuntimeTransportMode = "facility_wifi" | "softap" | "ble_fallback";
+
+export type RuntimeSessionStatus = "idle" | "connecting" | "connected" | "recovering" | "failed";
+
+export type MonitoringMode = "off" | "foreground_service";
+
+export type FacilityWifiProvisioning = {
+  password: string;
+  runtimeBaseUrl: string;
+  ssid: string;
+};
+
+export type RuntimeAlertRecord = {
+  body: string;
+  cursor: string;
+  incidentType: "battery_low" | "device_offline" | "door_open" | "temperature";
+  severity: "critical" | "warning";
+  status: "open" | "resolved";
+  title: string;
+  triggeredAt: number;
+};
+
+export type DeviceRuntimeSnapshot = ColdGuardConnectionPayload & {
+  alerts: RuntimeAlertRecord[];
+  localIp: string | null;
+  receivedAt: number;
+  runtimeBaseUrl: string;
+  ssid: string | null;
+  transport: RuntimeTransportMode;
+};
+
+export type DeviceRuntimeConfig = {
+  activeRuntimeBaseUrl: string | null;
+  activeTransport: RuntimeTransportMode | null;
+  deviceId: string;
+  facilityWifiPassword: string | null;
+  facilityWifiRuntimeBaseUrl: string | null;
+  facilityWifiSsid: string | null;
+  softApPassword: string | null;
+  softApRuntimeBaseUrl: string | null;
+  softApSsid: string | null;
+  lastMonitorAt: number | null;
+  lastMonitorError: string | null;
+  lastPingAt: number | null;
+  lastRecoverAt: number | null;
+  lastRuntimeError: string | null;
+  monitoringMode: MonitoringMode;
+  sessionStatus: RuntimeSessionStatus;
+  updatedAt: number;
+};
+
 export type ColdGuardConnectionPayload = {
   batteryLevel: number;
   currentTempC: number;

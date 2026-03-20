@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as Linking from "expo-linking";
 import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
 import { MetricRow } from "../../src/features/dashboard/components/metric-row";
@@ -16,11 +16,16 @@ import type { DeviceRecord } from "../../src/lib/storage/sqlite/device-repositor
 import { listAssignableNurses } from "../../src/features/devices/services/device-directory";
 import {
   assignColdGuardDevice,
+  connectOrRecoverDevice,
   decommissionColdGuardDevice,
+  getDeviceRuntimeSession,
   runColdGuardConnectionTest,
+  provisionFacilityWifi,
+  startDeviceMonitoring,
+  stopDeviceMonitoring,
 } from "../../src/features/devices/services/connection-service";
 import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
-import type { DeviceAssignmentCandidate } from "../../src/features/devices/types";
+import type { DeviceAssignmentCandidate, DeviceRuntimeConfig } from "../../src/features/devices/types";
 
 function getStatusColor(status: DeviceRecord["mktStatus"], colors: ReturnType<typeof useTheme>["colors"]) {
   switch (status) {
@@ -90,6 +95,34 @@ function formatConnectionStatus(status: DeviceRecord["lastConnectionTestStatus"]
   return status === "success" ? "Success" : "Failed";
 }
 
+function formatRuntimeTransportLabel(transport: DeviceRuntimeConfig["activeTransport"]) {
+  switch (transport) {
+    case "facility_wifi":
+      return "Facility Wi-Fi";
+    case "softap":
+      return "Local SoftAP";
+    case "ble_fallback":
+      return "BLE recovery";
+    default:
+      return "Not connected";
+  }
+}
+
+function formatRuntimeSessionLabel(status: DeviceRuntimeConfig["sessionStatus"] | undefined) {
+  switch (status) {
+    case "connecting":
+      return "Connecting";
+    case "connected":
+      return "Connected";
+    case "recovering":
+      return "Recovering";
+    case "failed":
+      return "Failed";
+    default:
+      return "Idle";
+  }
+}
+
 export default function DeviceDetailsScreen() {
   const { claim, id, v } = useLocalSearchParams<{ claim?: string; id: string; v?: string }>();
   const { colors } = useTheme();
@@ -99,8 +132,14 @@ export default function DeviceDetailsScreen() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [isSavingAssignments, setIsSavingAssignments] = useState(false);
   const [isRunningConnectionTest, setIsRunningConnectionTest] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isProvisioningWifi, setIsProvisioningWifi] = useState(false);
+  const [isTogglingMonitoring, setIsTogglingMonitoring] = useState(false);
   const [isRemovingDevice, setIsRemovingDevice] = useState(false);
   const [primaryStaffId, setPrimaryStaffId] = useState<string | null>(null);
+  const [runtimeSession, setRuntimeSession] = useState<DeviceRuntimeConfig | null>(null);
+  const [facilityWifiPassword, setFacilityWifiPassword] = useState("");
+  const [facilityWifiSsid, setFacilityWifiSsid] = useState("");
   const [viewerStaffIds, setViewerStaffIds] = useState<string[]>([]);
 
   const device = devices.find((entry) => entry.id === id);
@@ -153,6 +192,60 @@ export default function DeviceDetailsScreen() {
       isMounted = false;
     };
   }, [device, profile?.role]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadRuntimeSession() {
+      if (!device) {
+        if (isMounted) setRuntimeSession(null);
+        return;
+      }
+
+      const nextSession = await getDeviceRuntimeSession(device.id);
+      if (!isMounted) return;
+
+      setRuntimeSession(nextSession);
+      if (nextSession?.facilityWifiSsid) {
+        setFacilityWifiSsid(nextSession.facilityWifiSsid);
+      }
+      if (nextSession?.facilityWifiPassword) {
+        setFacilityWifiPassword(nextSession.facilityWifiPassword);
+      }
+    }
+
+    void loadRuntimeSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [device?.id]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function autoConnectOnOpen() {
+      if (!device) return;
+
+      try {
+        const session = await connectOrRecoverDevice({ deviceId: device.id });
+        if (!active) return;
+        setRuntimeSession(await getDeviceRuntimeSession(device.id));
+        setActionMessage(`Connected over ${formatRuntimeTransportLabel(session.transport)}.`);
+        await refreshDevices();
+      } catch (error) {
+        if (!active) return;
+        setRuntimeSession(await getDeviceRuntimeSession(device.id));
+        setActionMessage(error instanceof Error ? error.message : "Automatic reconnect failed.");
+      }
+    }
+
+    void autoConnectOnOpen();
+
+    return () => {
+      active = false;
+    };
+  }, [device?.id]);
 
   if (enrollmentLink) {
     if (Platform.OS === "web") {
@@ -257,12 +350,90 @@ export default function DeviceDetailsScreen() {
     try {
       const result = await runColdGuardConnectionTest({ deviceId: activeDevice.id });
       await refreshDevices();
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
       setActionMessage(result.statusText || "Connection test completed.");
     } catch (nextError) {
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
       setActionMessage(nextError instanceof Error ? nextError.message : "Connection test failed.");
     } finally {
       setIsRunningConnectionTest(false);
     }
+  }
+
+  async function handleReconnect() {
+    setIsReconnecting(true);
+    setActionMessage(null);
+
+    try {
+      const result = await connectOrRecoverDevice({ deviceId: activeDevice.id });
+      await refreshDevices();
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
+      setActionMessage(`Connected over ${formatRuntimeTransportLabel(result.transport)}.`);
+    } catch (nextError) {
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
+      setActionMessage(nextError instanceof Error ? nextError.message : "Reconnect failed.");
+    } finally {
+      setIsReconnecting(false);
+    }
+  }
+
+  async function handleProvisionFacilityWifi() {
+    if (!facilityWifiSsid.trim() || !facilityWifiPassword.trim()) {
+      setActionMessage("Enter both the facility Wi-Fi name and password.");
+      return;
+    }
+
+    setIsProvisioningWifi(true);
+    setActionMessage(null);
+
+    try {
+      const result = await provisionFacilityWifi({
+        deviceId: activeDevice.id,
+        password: facilityWifiPassword.trim(),
+        ssid: facilityWifiSsid.trim(),
+      });
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
+      setActionMessage(`Saved facility Wi-Fi. Runtime URL: ${result.runtimeBaseUrl}`);
+    } catch (nextError) {
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
+      setActionMessage(nextError instanceof Error ? nextError.message : "Facility Wi-Fi setup failed.");
+    } finally {
+      setIsProvisioningWifi(false);
+    }
+  }
+
+  async function handleToggleMonitoring() {
+    setIsTogglingMonitoring(true);
+    setActionMessage(null);
+
+    try {
+      const nextSession =
+        runtimeSession?.monitoringMode === "foreground_service"
+          ? await stopDeviceMonitoring(activeDevice.id)
+          : await startDeviceMonitoring(activeDevice.id);
+      setRuntimeSession(nextSession);
+      setActionMessage(
+        nextSession.monitoringMode === "foreground_service"
+          ? "Background monitoring armed."
+          : "Background monitoring paused.",
+      );
+    } catch (nextError) {
+      setActionMessage(nextError instanceof Error ? nextError.message : "Monitoring could not be updated.");
+    } finally {
+      setIsTogglingMonitoring(false);
+    }
+  }
+
+  async function handleDiagnostics() {
+    const latestSession = await getDeviceRuntimeSession(activeDevice.id);
+    setRuntimeSession(latestSession);
+    if (!latestSession) {
+      setActionMessage("No runtime session has been established yet.");
+      return;
+    }
+    setActionMessage(
+      `Transport: ${formatRuntimeTransportLabel(latestSession.activeTransport)} | Session: ${formatRuntimeSessionLabel(latestSession.sessionStatus)}${latestSession.lastRuntimeError ? ` | Last error: ${latestSession.lastRuntimeError}` : ""}`,
+    );
   }
 
   async function handleRemoveDevice() {
@@ -331,17 +502,88 @@ export default function DeviceDetailsScreen() {
               label="Test status"
               value={formatConnectionStatus(activeDevice.lastConnectionTestStatus)}
             />
+            <MetricRow
+              iconName="swap-horizontal-outline"
+              label="Runtime transport"
+              value={formatRuntimeTransportLabel(runtimeSession?.activeTransport ?? null)}
+            />
+            <MetricRow
+              iconName="pulse-outline"
+              label="Session"
+              value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
+            />
           </View>
+          <View style={localStyles.actionButtons}>
+            <Pressable
+              disabled={isRunningConnectionTest}
+              onPress={() => void handleRunConnectionTest()}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                (pressed || isRunningConnectionTest) && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={styles.primaryButtonText}>
+                {isRunningConnectionTest ? "Running connection test..." : "Run connection test"}
+              </Text>
+            </Pressable>
+            <Pressable
+              disabled={isReconnecting}
+              onPress={() => void handleReconnect()}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                (pressed || isReconnecting) && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={styles.secondaryButtonText}>{isReconnecting ? "Reconnecting..." : "Reconnect"}</Text>
+            </Pressable>
+            <Pressable onPress={() => void handleDiagnostics()} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Diagnostics</Text>
+            </Pressable>
+            <Pressable
+              disabled={isTogglingMonitoring}
+              onPress={() => void handleToggleMonitoring()}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                (pressed || isTogglingMonitoring) && styles.buttonDisabled,
+              ]}
+            >
+              <Text style={styles.secondaryButtonText}>
+                {isTogglingMonitoring
+                  ? "Updating monitoring..."
+                  : runtimeSession?.monitoringMode === "foreground_service"
+                    ? "Disable monitoring"
+                    : "Enable monitoring"}
+              </Text>
+            </Pressable>
+          </View>
+          <View style={localStyles.divider} />
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={setFacilityWifiSsid}
+            placeholder="Facility Wi-Fi SSID"
+            placeholderTextColor={colors.textSecondary}
+            style={styles.input}
+            value={facilityWifiSsid}
+          />
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={setFacilityWifiPassword}
+            placeholder="Facility Wi-Fi password"
+            placeholderTextColor={colors.textSecondary}
+            secureTextEntry
+            style={styles.input}
+            value={facilityWifiPassword}
+          />
           <Pressable
-            disabled={isRunningConnectionTest}
-            onPress={() => void handleRunConnectionTest()}
+            disabled={isProvisioningWifi}
+            onPress={() => void handleProvisionFacilityWifi()}
             style={({ pressed }) => [
-              styles.primaryButton,
-              (pressed || isRunningConnectionTest) && styles.buttonDisabled,
+              styles.secondaryButton,
+              (pressed || isProvisioningWifi) && styles.buttonDisabled,
             ]}
           >
-            <Text style={styles.primaryButtonText}>
-              {isRunningConnectionTest ? "Running connection test..." : "Run connection test"}
+            <Text style={styles.secondaryButtonText}>
+              {isProvisioningWifi ? "Saving Wi-Fi..." : "Save facility Wi-Fi"}
             </Text>
           </Pressable>
           {actionMessage ? <Text style={styles.helperText}>{actionMessage}</Text> : null}
@@ -551,6 +793,9 @@ const localStyles = StyleSheet.create({
   assignmentButtons: {
     flexDirection: "row",
     flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  actionButtons: {
     gap: spacing.sm,
   },
   assignmentChip: {

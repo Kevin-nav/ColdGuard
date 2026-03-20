@@ -39,10 +39,7 @@ String buildRuntimeBaseUrl(DeviceState* state) {
   return "http://" + WiFi.softAPIP().toString();
 }
 
-String buildAlertsJson() {
-  const float temp = currentMockTemperature();
-  const int batteryLevel = currentMockBatteryLevel();
-  const bool doorOpen = currentMockDoorOpen();
+String buildAlertsJson(float temp, int batteryLevel, bool doorOpen) {
   const unsigned long nowMs = millis();
   String alerts = "[";
   bool first = true;
@@ -101,6 +98,7 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
   const int batteryLevel = currentMockBatteryLevel();
   const bool doorOpen = currentMockDoorOpen();
   const bool hasWarning = temp >= 4.5f || doorOpen || batteryLevel < 90;
+  const String alerts = buildAlertsJson(temp, batteryLevel, doorOpen);
 
   return "{"
          "\"deviceId\":\"" + escapeJson(state->deviceId) + "\","
@@ -115,7 +113,7 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
          "\"nickname\":\"" + escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname) + "\","
          "\"institutionId\":\"" + escapeJson(state->institutionId) + "\","
          "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
-         "\"alerts\":" + buildAlertsJson() + ","
+         "\"alerts\":" + alerts + ","
          "\"receivedAtMs\":" + String(nowMs) +
          "}";
 }
@@ -158,13 +156,16 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
       return;
     }
 
+    const float temp = currentMockTemperature();
+    const int batteryLevel = currentMockBatteryLevel();
+    const bool doorOpen = currentMockDoorOpen();
     webServer.send(
       200,
       "application/json",
       "{"
       "\"ok\":true,"
       "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
-      "\"alerts\":" + buildAlertsJson() +
+      "\"alerts\":" + buildAlertsJson(temp, batteryLevel, doorOpen) +
       "}");
   });
 
@@ -268,6 +269,11 @@ bool provisionFacilityWifi(
   const char* firmwareVersion,
   const String& ssid,
   const String& password) {
+  if (WiFi.status() == WL_CONNECTED && WiFi.SSID() != ssid) {
+    WiFi.disconnect(false, false);
+    state->stationConnected = false;
+    state->lastStationConnectAttemptMs = 0;
+  }
   state->facilityWifiSsid = ssid;
   state->facilityWifiPassword = password;
   state->lastStationConnectAttemptMs = 0;

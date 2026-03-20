@@ -166,3 +166,22 @@ test("skips JS polling for devices already owned by the native monitoring servic
     { isOnline: true },
   );
 });
+
+test("does not sync notifications when the hydrated profile is missing institution id", async () => {
+  mockEnsureLocalProfileForUser.mockResolvedValue({
+    firebaseUid: "firebase-u1",
+    institutionId: "   ",
+    institutionName: "Korle-Bu Teaching Hospital",
+  });
+
+  const ui = render(
+    <NotificationProvider>
+      <Consumer />
+    </NotificationProvider>,
+  );
+
+  await waitFor(() => expect(ui.getByText("ready")).toBeTruthy());
+
+  expect(mockSyncNotificationInbox).not.toHaveBeenCalled();
+  expect(mockListMonitoredDeviceRuntimeConfigs).not.toHaveBeenCalled();
+});

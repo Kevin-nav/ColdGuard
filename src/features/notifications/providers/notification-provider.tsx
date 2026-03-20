@@ -72,6 +72,22 @@ type NotificationInstitutionContext = {
   institutionName: string;
 };
 
+function createInstitutionContext(
+  institutionId: string | null | undefined,
+  institutionName: string | null | undefined,
+): NotificationInstitutionContext | null {
+  const normalizedInstitutionId = institutionId?.trim() ?? "";
+  const normalizedInstitutionName = institutionName?.trim() ?? "";
+  if (!normalizedInstitutionId || !normalizedInstitutionName) {
+    return null;
+  }
+
+  return {
+    institutionId: normalizedInstitutionId,
+    institutionName: normalizedInstitutionName,
+  };
+}
+
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuthSession();
   const { isReady } = useDashboardBootstrap();
@@ -125,7 +141,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           return;
         }
 
-        if (!profile?.institutionName) {
+        const institutionContext = createInstitutionContext(profile?.institutionId, profile?.institutionName);
+        if (!institutionContext) {
           setInstitution(null);
           setIncidents([]);
           setPreferences(null);
@@ -134,10 +151,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           return;
         }
 
-        const institutionContext = {
-          institutionId: profile.institutionId,
-          institutionName: profile.institutionName,
-        };
         setInstitution(institutionContext);
 
         const [nextInbox, nextPreferences] = await Promise.all([

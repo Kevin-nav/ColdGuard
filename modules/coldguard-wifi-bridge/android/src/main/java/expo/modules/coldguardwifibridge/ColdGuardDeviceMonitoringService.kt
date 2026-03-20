@@ -75,7 +75,7 @@ class ColdGuardDeviceMonitoringService : Service() {
     synchronized(registryLock) {
       monitoredDevices.clear()
     }
-    clearAllStatuses()
+    clearAllStatuses(preservePermissionRequired = true)
     scope.cancel()
     super.onDestroy()
   }
@@ -610,9 +610,16 @@ class ColdGuardDeviceMonitoringService : Service() {
       }
     }
 
-    private fun clearAllStatuses() {
+    private fun clearAllStatuses(preservePermissionRequired: Boolean = false) {
       synchronized(statusLock) {
-        monitoringStatuses.clear()
+        if (!preservePermissionRequired) {
+          monitoringStatuses.clear()
+          return
+        }
+
+        monitoringStatuses = monitoringStatuses
+          .filterValues { it.error == "POST_NOTIFICATIONS_PERMISSION_REQUIRED" }
+          .toMutableMap()
       }
     }
   }

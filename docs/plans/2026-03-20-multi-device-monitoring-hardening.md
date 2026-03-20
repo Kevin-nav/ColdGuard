@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Fix the notification identity model
+## Task 1: Fix the notification identity model
 
 **Files:**
 - Modify: `src/features/notifications/providers/notification-provider.tsx`
@@ -44,7 +44,7 @@ Run: `npm test -- src/features/notifications/services/inbox-sync.test.ts`
 
 Expected: PASS.
 
-### Task 2: Stop device detail auto-connect and keep device actions explicit
+## Task 2: Stop device detail auto-connect and keep device actions explicit
 
 **Files:**
 - Modify: `app/device/[id].tsx`
@@ -76,7 +76,7 @@ Run: `npm test -- src/features/dashboard/__tests__/device-details-screen.test.ts
 
 Expected: PASS.
 
-### Task 3: Guarantee SoftAP release in JS connection flows
+## Task 3: Guarantee SoftAP release in JS connection flows
 
 **Files:**
 - Modify: `src/features/devices/services/connection-service.ts`
@@ -106,7 +106,7 @@ Run: `npm test -- src/features/devices/services/connection-service.test.ts`
 
 Expected: PASS.
 
-### Task 4: Align action-ticket version semantics between backend and firmware-facing app flows
+## Task 4: Align action-ticket version semantics between backend and firmware-facing app flows
 
 **Files:**
 - Modify: `convex/devices.ts`
@@ -142,7 +142,7 @@ Run: `npm test -- convex/devices.test.ts src/features/devices/services/device-di
 
 Expected: PASS.
 
-### Task 5: Fix action-ticket time semantics in firmware
+## Task 5: Fix action-ticket time semantics in firmware
 
 **Files:**
 - Modify: `firmware/esp32_transport_harness/src/action_ticket.cpp`
@@ -170,7 +170,7 @@ Expected:
 - valid tickets are accepted
 - no epoch-vs-uptime false positives
 
-### Task 6: Make firmware Wi-Fi provisioning truthful
+## Task 6: Make firmware Wi-Fi provisioning truthful
 
 **Files:**
 - Modify: `firmware/esp32_transport_harness/src/wifi_runtime.cpp`
@@ -198,7 +198,7 @@ Expected:
 - false success is eliminated
 - the app only persists confirmed facility runtime endpoints
 
-### Task 7: Make firmware runtime payloads internally consistent
+## Task 7: Make firmware runtime payloads internally consistent
 
 **Files:**
 - Modify: `firmware/esp32_transport_harness/src/wifi_runtime.cpp`
@@ -221,7 +221,7 @@ Run: `npm test -- src/features/devices/services/connection-service.test.ts`
 
 Expected: PASS for app-side parsing expectations.
 
-### Task 8: Replace singleton monitoring service APIs with multi-device APIs
+## Task 8: Replace singleton monitoring service APIs with multi-device APIs
 
 **Files:**
 - Modify: `modules/coldguard-wifi-bridge/android/src/main/java/expo/modules/coldguardwifibridge/ColdGuardWifiBridgeModule.kt`
@@ -253,7 +253,7 @@ Run: `npm test -- modules/coldguard-wifi-bridge/src/ColdGuardWifiBridgeModule.te
 
 Expected: PASS.
 
-### Task 9: Rework the Android foreground service into a per-device registry
+## Task 9: Rework the Android foreground service into a per-device registry
 
 **Files:**
 - Modify: `modules/coldguard-wifi-bridge/android/src/main/java/expo/modules/coldguardwifibridge/ColdGuardDeviceMonitoringService.kt`
@@ -286,7 +286,7 @@ Expected:
 - per-device status is accurate
 - stopping one device leaves others running
 
-### Task 10: Stop duplicate JS polling when native monitoring is active
+## Task 10: Stop duplicate JS polling when native monitoring is active
 
 **Files:**
 - Modify: `src/features/notifications/providers/notification-provider.tsx`
@@ -316,7 +316,7 @@ Run: `npm test -- src/features/notifications/__tests__/notifications-screen.test
 
 Expected: PASS.
 
-### Task 11: Update app-side monitoring commands for multi-device use
+## Task 11: Update app-side monitoring commands for multi-device use
 
 **Files:**
 - Modify: `src/features/devices/services/connection-service.ts`
@@ -347,7 +347,7 @@ Run: `npm test -- src/features/devices/services/connection-service.test.ts src/f
 
 Expected: PASS.
 
-### Task 12: Replace network-status polling with event-driven updates
+## Task 12: Replace network-status polling with event-driven updates
 
 **Files:**
 - Modify: `src/features/network/network-status.ts`
@@ -375,7 +375,7 @@ Run: `npm test -- src/features/network/network-status.test.ts`
 
 Expected: PASS.
 
-### Task 13: Repair the existing onboarding regression and noisy tests
+## Task 13: Repair the existing onboarding regression and noisy tests
 
 **Files:**
 - Modify: `app/(onboarding)/profile.tsx`
@@ -400,7 +400,7 @@ Run: `npm test -- src/features/onboarding/__tests__/profile-screen.test.tsx src/
 
 Expected: PASS with warnings removed or reduced to known unavoidable cases.
 
-### Task 14: Run the targeted regression suite
+## Task 14: Run the targeted regression suite
 
 **Files:**
 - No code changes required

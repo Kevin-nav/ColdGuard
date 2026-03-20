@@ -1,5 +1,6 @@
 import type {
   ColdGuardMonitoringDeviceStatus,
+  ColdGuardMonitoringServiceOptions,
   ColdGuardMonitoringStatusMap,
   ColdGuardWifiBridgeModuleContract,
 } from "./ColdGuardWifiBridge.types";
@@ -15,7 +16,9 @@ function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract
     async releaseNetworkBindingAsync() {
       return;
     },
-    async startMonitoringDeviceAsync() {
+    async startMonitoringDeviceAsync(
+      _options: ColdGuardMonitoringServiceOptions,
+    ): Promise<ColdGuardMonitoringStatusMap> {
       throw new Error("WIFI_BRIDGE_UNAVAILABLE");
     },
     async stopMonitoringDeviceAsync(deviceId: string) {

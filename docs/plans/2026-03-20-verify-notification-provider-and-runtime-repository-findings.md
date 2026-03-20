@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Verify the live issues
+## Task 1: Verify the live issues
 
 **Files:**
 - Modify: `src/features/notifications/providers/notification-provider.tsx`
@@ -24,7 +24,7 @@ Confirm the code still imports or calls `listMonitoredDeviceRuntimeConfigsForJsP
 
 Confirm the repository only filters by `deviceId.trim().length > 0` without actually trimming the IDs before SQL placeholder generation and binding.
 
-### Task 2: Apply the minimal fixes
+## Task 2: Apply the minimal fixes
 
 **Files:**
 - Modify: `src/features/notifications/providers/notification-provider.tsx`
@@ -48,7 +48,7 @@ Map and trim each excluded ID, drop empty results, and use the normalized array 
 
 Add a focused test proving IDs like `" device-1 "` are trimmed before binding.
 
-### Task 3: Verify the changes
+## Task 3: Verify the changes
 
 **Files:**
 - Test: `src/features/notifications/providers/notification-provider.test.tsx`

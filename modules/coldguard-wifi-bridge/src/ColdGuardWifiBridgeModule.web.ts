@@ -10,6 +10,9 @@ function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract
     async connectToAccessPointAsync() {
       throw new Error("WIFI_BRIDGE_UNAVAILABLE");
     },
+    async fetchRuntimeSnapshotAsync() {
+      throw new Error("WIFI_BRIDGE_UNAVAILABLE");
+    },
     async getMonitoringStatusesAsync() {
       return {};
     },

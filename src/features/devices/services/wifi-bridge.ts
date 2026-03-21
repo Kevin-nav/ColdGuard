@@ -3,11 +3,13 @@ import getColdGuardWifiBridgeModule from "../../../../modules/coldguard-wifi-bri
 import type {
   ColdGuardMonitoringServiceOptions,
   ColdGuardMonitoringStatusMap,
+  ColdGuardRuntimeFetchResult,
 } from "../../../../modules/coldguard-wifi-bridge";
 import type { ColdGuardWifiTicket } from "../types";
 
 export type ColdGuardWifiBridge = {
   connect(ticket: ColdGuardWifiTicket): Promise<{ localIp: string; ssid: string }>;
+  fetchRuntimeSnapshot?(runtimeBaseUrl: string): Promise<ColdGuardRuntimeFetchResult>;
   release(): Promise<void>;
 };
 
@@ -17,6 +19,7 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
   if (Platform.OS === "android" && wifiBridgeModule?.connectToAccessPointAsync) {
     return {
       connect: (ticket) => wifiBridgeModule.connectToAccessPointAsync(ticket.ssid, ticket.password),
+      fetchRuntimeSnapshot: (runtimeBaseUrl) => wifiBridgeModule.fetchRuntimeSnapshotAsync(runtimeBaseUrl),
       release: async () => {
         if (wifiBridgeModule.releaseNetworkBindingAsync) {
           await wifiBridgeModule.releaseNetworkBindingAsync();

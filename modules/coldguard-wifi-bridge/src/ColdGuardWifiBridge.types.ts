@@ -3,6 +3,12 @@ export type ColdGuardWifiConnectionResult = {
   ssid: string;
 };
 
+export type ColdGuardRuntimeFetchResult = {
+  alertsJson: string;
+  runtimeBaseUrl: string;
+  statusJson: string;
+};
+
 export type ColdGuardMonitoringTransport = "ble_fallback" | "facility_wifi" | "softap";
 
 export type ColdGuardMonitoringServiceOptions = {
@@ -27,6 +33,7 @@ export type ColdGuardMonitoringStatusMap = Record<string, ColdGuardMonitoringDev
 
 export type ColdGuardWifiBridgeModuleContract = {
   connectToAccessPointAsync(ssid: string, password: string): Promise<ColdGuardWifiConnectionResult>;
+  fetchRuntimeSnapshotAsync(runtimeBaseUrl: string): Promise<ColdGuardRuntimeFetchResult>;
   getMonitoringStatusesAsync(): Promise<ColdGuardMonitoringStatusMap>;
   releaseNetworkBindingAsync(): Promise<void>;
   startMonitoringDeviceAsync(options: ColdGuardMonitoringServiceOptions): Promise<ColdGuardMonitoringStatusMap>;

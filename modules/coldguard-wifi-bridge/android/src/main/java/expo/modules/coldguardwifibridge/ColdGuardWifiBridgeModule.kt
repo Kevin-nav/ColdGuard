@@ -5,6 +5,8 @@ import androidx.core.content.ContextCompat
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.net.HttpURLConnection
+import java.net.URL
 
 class ColdGuardWifiBridgeModule : Module() {
   private var wifiSessionController: ColdGuardWifiSessionController? = null
@@ -14,6 +16,10 @@ class ColdGuardWifiBridgeModule : Module() {
 
     AsyncFunction("connectToAccessPointAsync") Coroutine { ssid: String, password: String ->
       connectToAccessPoint(ssid, password)
+    }
+
+    AsyncFunction("fetchRuntimeSnapshotAsync") Coroutine { runtimeBaseUrl: String ->
+      fetchRuntimeSnapshot(runtimeBaseUrl)
     }
 
     AsyncFunction("startMonitoringDeviceAsync") { options: Map<String, Any?> ->
@@ -42,6 +48,18 @@ class ColdGuardWifiBridgeModule : Module() {
     return mapOf(
       "localIp" to session.localIp,
       "ssid" to session.ssid
+    )
+  }
+
+  private fun fetchRuntimeSnapshot(runtimeBaseUrl: String): Map<String, String> {
+    val controller = wifiSessionController ?: throw IllegalStateException("WIFI_BRIDGE_SESSION_UNAVAILABLE")
+    val network = controller.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
+    val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
+
+    return mapOf(
+      "alertsJson" to fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network),
+      "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
+      "statusJson" to fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network),
     )
   }
 
@@ -87,5 +105,32 @@ class ColdGuardWifiBridgeModule : Module() {
     val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
     context.startService(ColdGuardDeviceMonitoringService.stopIntent(context, deviceId))
     return ColdGuardDeviceMonitoringService.markStopping(deviceId).toBridgeMap()
+  }
+
+  private fun normalizeRuntimeBaseUrl(value: String): String {
+    return try {
+      val url = URL(value)
+      "${url.protocol}://${url.host}${if (url.port >= 0) ":${url.port}" else ""}"
+    } catch (_: Exception) {
+      value.trimEnd('/')
+    }
+  }
+
+  private fun fetchJson(url: String, network: android.net.Network): String {
+    val connection = openConnection(url, network).apply {
+      requestMethod = "GET"
+      connectTimeout = 10_000
+      readTimeout = 10_000
+    }
+
+    return try {
+      connection.inputStream.bufferedReader().use { it.readText() }
+    } finally {
+      connection.disconnect()
+    }
+  }
+
+  private fun openConnection(url: String, network: android.net.Network): HttpURLConnection {
+    return (network.openConnection(URL(url)) as HttpURLConnection)
   }
 }

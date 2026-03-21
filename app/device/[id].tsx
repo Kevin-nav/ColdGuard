@@ -278,12 +278,13 @@ export default function DeviceDetailsScreen() {
               {error || "The requested device could not be found or you do not have permission to view it."}
             </Text>
             <Pressable
+              testID="device-back-button"
               style={({ pressed }) => [
                 localStyles.backButton,
                 { backgroundColor: colors.surfaceMuted },
                 pressed && styles.buttonDisabled,
               ]}
-              onPress={() => router.back()}
+              onPress={handleBackNavigation}
             >
               <Ionicons name="arrow-back" size={20} color={colors.textPrimary} />
               <Text style={[styles.bodyText, { color: colors.textPrimary }]}>Go Back</Text>
@@ -298,6 +299,15 @@ export default function DeviceDetailsScreen() {
   const activeProfile = profile;
   const statusColor = getStatusColor(activeDevice.mktStatus, colors);
   const statusIcon = getStatusIcon(activeDevice.mktStatus);
+
+  function handleBackNavigation() {
+    if (typeof router.canGoBack === "function" && router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    router.replace("/(tabs)/devices");
+  }
 
   async function handleSaveAssignments() {
     setIsSavingAssignments(true);
@@ -432,7 +442,7 @@ export default function DeviceDetailsScreen() {
   return (
     <DashboardPage scroll>
       <View style={localStyles.headerRow}>
-        <Pressable style={localStyles.iconButton} onPress={() => router.back()}>
+        <Pressable testID="device-back-button" style={localStyles.iconButton} onPress={handleBackNavigation}>
           <Ionicons name="chevron-back" size={28} color={colors.textPrimary} />
         </Pressable>
         <Text style={[styles.heading, { flex: 1 }]} numberOfLines={1}>

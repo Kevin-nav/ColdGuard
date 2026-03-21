@@ -1,6 +1,7 @@
 import type { ColdGuardMonitoringStatusMap } from "../../../../modules/coldguard-wifi-bridge";
 
 const mockConnectToAccessPointAsync = jest.fn();
+const mockFetchRuntimeSnapshotAsync = jest.fn();
 const mockGetMonitoringStatusesAsync = jest.fn();
 const mockReleaseNetworkBindingAsync = jest.fn();
 const mockStartMonitoringDeviceAsync = jest.fn();
@@ -10,6 +11,7 @@ jest.mock("../../../../modules/coldguard-wifi-bridge", () => ({
   __esModule: true,
   default: () => ({
     connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
+    fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
     getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
     releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
     startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
@@ -67,6 +69,31 @@ describe("wifi bridge helpers", () => {
 
     await expect(bridge.release()).resolves.toBeUndefined();
     expect(mockReleaseNetworkBindingAsync).toHaveBeenCalledTimes(1);
+  });
+
+  test("fetches runtime snapshots through the native module on android", async () => {
+    jest.doMock("react-native", () => ({
+      Platform: { OS: "android" },
+    }));
+    mockFetchRuntimeSnapshotAsync.mockResolvedValue({
+      alertsJson: "{\"alerts\":[]}",
+      runtimeBaseUrl: "http://192.168.4.1",
+      statusJson: "{\"deviceId\":\"device-1\"}",
+    });
+
+    let createColdGuardWifiBridge: typeof import("./wifi-bridge").createColdGuardWifiBridge;
+    jest.isolateModules(() => {
+      ({ createColdGuardWifiBridge } = jest.requireActual("./wifi-bridge"));
+    });
+    const bridge = createColdGuardWifiBridge!();
+
+    await expect(bridge.fetchRuntimeSnapshot?.("http://192.168.4.1/api/v1/connection-test")).resolves.toEqual({
+      alertsJson: "{\"alerts\":[]}",
+      runtimeBaseUrl: "http://192.168.4.1",
+      statusJson: "{\"deviceId\":\"device-1\"}",
+    });
+
+    expect(mockFetchRuntimeSnapshotAsync).toHaveBeenCalledWith("http://192.168.4.1/api/v1/connection-test");
   });
 
   test("proxies multi-device monitoring commands on android", async () => {

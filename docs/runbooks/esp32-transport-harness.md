@@ -89,6 +89,8 @@ Current harness behavior:
   - `expiresAt`
   - `counter`
   - `mac`
+- enforces ticket ordering and maximum lifetime, but does not compare `issuedAt` or `expiresAt`
+  against the ESP32 uptime clock because the harness does not have a trusted Unix wall clock
 - recomputes the ticket MAC locally and rejects mismatched or replayed control state
 - still requires the existing handshake proof tied to `deviceNonce`, `deviceId`, and `proofTimestamp`
 

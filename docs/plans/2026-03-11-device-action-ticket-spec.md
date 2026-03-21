@@ -58,13 +58,16 @@ Each action ticket payload must contain:
 - `deviceId`: target device identifier
 - `institutionId`: institution scope when applicable
 - `action`: one of the allowed actions
-- `issuedAt`: Unix epoch milliseconds
-- `expiresAt`: Unix epoch milliseconds
+- `issuedAt`: backend-issued Unix epoch milliseconds
+- `expiresAt`: backend-issued Unix epoch milliseconds
 - `counter`: monotonically increasing device control counter
 - `operatorId`: optional backend identity for audit correlation
 - `mac`: MAC over the canonical payload
 
 The ESP32 must reject tickets missing any required field other than `operatorId`.
+On the current harness, these timestamps are signed metadata used for ordering and bounded-lifetime
+validation. The device does not compare them against its own uptime clock because it does not keep a
+trusted Unix wall clock.
 
 ## Canonical MAC Input
 

@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import {
   deleteConnectionGrant,
   deleteDeviceActionTicket,
@@ -44,6 +45,7 @@ import {
   startNativeMonitoringDevice,
   stopNativeMonitoringDevice,
 } from "./wifi-bridge";
+import { getLocalNotificationPermissionStatus, requestLocalNotificationPermission } from "../../notifications/services/local-notifications";
 import {
   assignDeviceUsers,
   decommissionManagedDevice,
@@ -73,6 +75,8 @@ type RemoteConnectionPayload = Omit<ColdGuardConnectionPayload, "lastSeenAt"> & 
 };
 
 const DEVICE_CONNECTION_SYNC_JOB_TYPE = "device_connection_test_reconciliation";
+const MONITORING_NOTIFICATION_PERMISSION_ERROR =
+  "Allow notifications to start ColdGuard background monitoring on this device.";
 
 function getMonitoringStatusForDevice(
   statuses: Record<
@@ -120,6 +124,11 @@ export interface ColdGuardBleClient {
 
 export interface ColdGuardWifiBridge {
   connect(ticket: ColdGuardWifiTicket): Promise<{ localIp: string; ssid: string }>;
+  fetchRuntimeSnapshot?(runtimeBaseUrl: string): Promise<{
+    alertsJson: string;
+    runtimeBaseUrl: string;
+    statusJson: string;
+  }>;
   release(): Promise<void>;
 }
 
@@ -347,6 +356,41 @@ async function fetchAndBuildRuntimeSnapshot(args: {
   });
 }
 
+async function fetchAndBuildRuntimeSnapshotFromBridge(args: {
+  alertsJson: string;
+  localIp: string | null;
+  runtimeBaseUrl: string;
+  ssid: string | null;
+  statusJson: string;
+  transport: RuntimeTransportMode;
+}) {
+  try {
+    const response = JSON.parse(args.statusJson) as RemoteConnectionPayload;
+    const alertsPayload = JSON.parse(args.alertsJson) as { alerts?: unknown };
+    const alerts = response.alerts
+      ? normalizeRuntimeAlerts(response.alerts)
+      : normalizeRuntimeAlerts(alertsPayload.alerts);
+    const receivedAt = Date.now();
+
+    return buildRuntimeSnapshot({
+      alerts,
+      localIp: args.localIp,
+      receivedAt,
+      response,
+      runtimeBaseUrl: response.runtimeBaseUrl ?? args.runtimeBaseUrl,
+      ssid: args.ssid,
+      transport: args.transport,
+    });
+  } catch (error) {
+    console.warn("Failed to parse native runtime snapshot payload; falling back to HTTP runtime fetch.", {
+      alertsJson: args.alertsJson,
+      runtimeBaseUrl: args.runtimeBaseUrl,
+      statusJson: args.statusJson,
+    });
+    return null;
+  }
+}
+
 async function connectViaFacilityWifi(deviceId: string) {
   const config = await getDeviceRuntimeConfig(deviceId);
   const runtimeBaseUrl = config?.facilityWifiRuntimeBaseUrl;
@@ -390,14 +434,30 @@ async function connectViaSoftAp(args: {
     handshakeToken,
   });
   const network = await args.wifiBridge.connect(ticket);
+  const runtimeBaseUrl = normalizeRuntimeBaseUrl(ticket.testUrl);
 
   try {
-    const snapshot = await fetchAndBuildRuntimeSnapshot({
-      localIp: network.localIp,
-      runtimeBaseUrl: normalizeRuntimeBaseUrl(ticket.testUrl),
-      ssid: ticket.ssid,
-      transport: "softap",
-    });
+    const runtimeSnapshot = args.wifiBridge.fetchRuntimeSnapshot
+      ? await args.wifiBridge.fetchRuntimeSnapshot(runtimeBaseUrl)
+      : null;
+    const snapshotFromBridge = runtimeSnapshot
+      ? await fetchAndBuildRuntimeSnapshotFromBridge({
+          alertsJson: runtimeSnapshot.alertsJson,
+          localIp: network.localIp,
+          runtimeBaseUrl: runtimeSnapshot.runtimeBaseUrl,
+          ssid: ticket.ssid,
+          statusJson: runtimeSnapshot.statusJson,
+          transport: "softap",
+        })
+      : null;
+    const snapshot = snapshotFromBridge
+      ? snapshotFromBridge
+      : await fetchAndBuildRuntimeSnapshot({
+          localIp: network.localIp,
+          runtimeBaseUrl,
+          ssid: ticket.ssid,
+          transport: "softap",
+        });
 
     await upsertDeviceRuntimeConfig(args.deviceId, {
       activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
@@ -562,6 +622,15 @@ export async function provisionFacilityWifi(args: {
 }
 
 export async function startDeviceMonitoring(deviceId: string) {
+  if (Platform.OS !== "web") {
+    const permissionStatus = await getLocalNotificationPermissionStatus();
+    const nextPermissionStatus =
+      permissionStatus === "undetermined" ? await requestLocalNotificationPermission() : permissionStatus;
+    if (nextPermissionStatus !== "granted") {
+      throw new Error(MONITORING_NOTIFICATION_PERMISSION_ERROR);
+    }
+  }
+
   const [handshakeToken, connectActionTicket, config] = await Promise.all([
     getRequiredClinicHandshakeToken(),
     ensureDeviceActionTicket(deviceId, "connect"),
@@ -590,6 +659,9 @@ export async function startDeviceMonitoring(deviceId: string) {
     transport: monitoringTransport,
   });
   const serviceStatus = getMonitoringStatusForDevice(serviceStatuses, deviceId);
+  if (!serviceStatus?.isRunning && serviceStatus?.error) {
+    throw new Error(mapMonitoringStartupError(serviceStatus.error));
+  }
 
   return await upsertDeviceRuntimeConfig(deviceId, {
     activeTransport: serviceStatus?.transport ?? config.activeTransport,
@@ -888,4 +960,12 @@ async function getRequiredClinicHandshakeToken() {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mapMonitoringStartupError(error: string) {
+  if (error === "POST_NOTIFICATIONS_PERMISSION_REQUIRED") {
+    return MONITORING_NOTIFICATION_PERMISSION_ERROR;
+  }
+
+  return error;
 }

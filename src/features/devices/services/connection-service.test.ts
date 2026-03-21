@@ -33,6 +33,8 @@ const mockRecordDeviceConnectionTest = jest.fn();
 const mockStartNativeMonitoringDevice = jest.fn();
 const mockStopNativeMonitoringDevice = jest.fn();
 const mockFetch = jest.fn();
+const mockGetLocalNotificationPermissionStatus = jest.fn();
+const mockRequestLocalNotificationPermission = jest.fn();
 const mockUpsertDeviceRuntimeConfig = jest.fn();
 const mockWifiBridgeRelease = jest.fn();
 
@@ -70,6 +72,11 @@ jest.mock("../../../lib/storage/secure-store", () => ({
   getClinicHandshakeToken: () => mockGetClinicHandshakeToken(),
 }));
 
+jest.mock("../../notifications/services/local-notifications", () => ({
+  getLocalNotificationPermissionStatus: () => mockGetLocalNotificationPermissionStatus(),
+  requestLocalNotificationPermission: () => mockRequestLocalNotificationPermission(),
+}));
+
 jest.mock("./device-directory", () => ({
   ensureDeviceActionTicket: (...args: unknown[]) => mockEnsureDeviceActionTicket(...args),
   ensureSupervisorActionTicket: (...args: unknown[]) => mockEnsureSupervisorActionTicket(...args),
@@ -93,6 +100,8 @@ beforeEach(() => {
   jest.restoreAllMocks();
   resetMockHardwareRegistry();
   mockGetClinicHandshakeToken.mockResolvedValue("handshake-token");
+  mockGetLocalNotificationPermissionStatus.mockResolvedValue("granted");
+  mockRequestLocalNotificationPermission.mockResolvedValue("granted");
   mockEnsureSupervisorActionTicket.mockResolvedValue({
     action: "decommission",
     counter: 1,
@@ -293,6 +302,8 @@ test("starts native monitoring with facility and softap recovery context", async
 
   await startDeviceMonitoring("CG-ESP32-A100");
 
+  expect(mockGetLocalNotificationPermissionStatus).toHaveBeenCalled();
+  expect(mockRequestLocalNotificationPermission).not.toHaveBeenCalled();
   expect(mockEnsureDeviceActionTicket).toHaveBeenCalledWith("CG-ESP32-A100", "connect");
   expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith({
     connectActionTicketJson: expect.stringContaining("\"ticketId\":\"device-ticket-CG-ESP32-A100\""),
@@ -304,6 +315,39 @@ test("starts native monitoring with facility and softap recovery context", async
     softApSsid: "ColdGuard_A100",
     transport: "softap",
   });
+});
+
+test("requests notification permission before starting background monitoring", async () => {
+  mockGetLocalNotificationPermissionStatus.mockResolvedValueOnce("undetermined");
+
+  await startDeviceMonitoring("CG-ESP32-A100");
+
+  expect(mockRequestLocalNotificationPermission).toHaveBeenCalled();
+});
+
+test("surfaces a clear error when notification permission is denied", async () => {
+  mockGetLocalNotificationPermissionStatus.mockResolvedValueOnce("denied");
+
+  await expect(startDeviceMonitoring("CG-ESP32-A100")).rejects.toThrow(
+    "Allow notifications to start ColdGuard background monitoring on this device.",
+  );
+
+  expect(mockStartNativeMonitoringDevice).not.toHaveBeenCalled();
+});
+
+test("fails startup when the native monitoring service reports a permission block", async () => {
+  mockStartNativeMonitoringDevice.mockResolvedValueOnce({
+    "CG-ESP32-A100": {
+      deviceId: "CG-ESP32-A100",
+      error: "POST_NOTIFICATIONS_PERMISSION_REQUIRED",
+      isRunning: false,
+      transport: "softap",
+    },
+  });
+
+  await expect(startDeviceMonitoring("CG-ESP32-A100")).rejects.toThrow(
+    "Allow notifications to start ColdGuard background monitoring on this device.",
+  );
 });
 
 test("keeps multi-device monitoring state isolated per device", async () => {
@@ -506,6 +550,74 @@ test("runs a mock BLE-to-WiFi connection test and records success", async () => 
     }),
   );
   expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
+});
+
+test("uses the native runtime snapshot bridge when available for softap recovery", async () => {
+  mockFetch.mockClear();
+
+  const payload = await runColdGuardConnectionTest({
+    deviceId: "CG-ESP32-A100",
+    bleClient: new MockColdGuardBleClient(),
+    wifiBridge: {
+      connect: async (ticket) => ({
+        localIp: "192.168.4.2",
+        ssid: ticket.ssid,
+      }),
+      fetchRuntimeSnapshot: async () => ({
+        alertsJson: "{\"alerts\":[]}",
+        runtimeBaseUrl: "http://192.168.4.1",
+        statusJson:
+          "{\"batteryLevel\":89,\"currentTempC\":4.7,\"doorOpen\":false,\"firmwareVersion\":\"fw-1.0.0\",\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Mock BLE-to-WiFi handover completed.\"}",
+      }),
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(payload).toEqual(
+    expect.objectContaining({
+      localIp: "192.168.4.2",
+      runtimeBaseUrl: "http://192.168.4.1",
+      transport: "softap",
+    }),
+  );
+  expect(mockFetch).not.toHaveBeenCalled();
+  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
+});
+
+test("falls back to HTTP runtime fetch when the native snapshot payload is malformed", async () => {
+  const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  const payload = await runColdGuardConnectionTest({
+    deviceId: "CG-ESP32-A100",
+    bleClient: new MockColdGuardBleClient(),
+    wifiBridge: {
+      connect: async (ticket) => ({
+        localIp: "192.168.4.2",
+        ssid: ticket.ssid,
+      }),
+      fetchRuntimeSnapshot: async () => ({
+        alertsJson: "{\"alerts\":[]}",
+        runtimeBaseUrl: "http://192.168.4.1",
+        statusJson: "{not-json",
+      }),
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(payload).toEqual(
+    expect.objectContaining({
+      runtimeBaseUrl: "http://192.168.4.1",
+      transport: "softap",
+    }),
+  );
+  expect(mockFetch).toHaveBeenCalled();
+  expect(warnSpy).toHaveBeenCalledWith(
+    "Failed to parse native runtime snapshot payload; falling back to HTTP runtime fetch.",
+    expect.objectContaining({
+      runtimeBaseUrl: "http://192.168.4.1",
+      statusJson: "{not-json",
+    }),
+  );
 });
 
 test("keeps the local connection success and queues sync when backend audit logging fails", async () => {

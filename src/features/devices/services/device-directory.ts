@@ -1,12 +1,14 @@
 import { api } from "../../../../convex/_generated/api";
 import { getConvexClient } from "../../../lib/convex/client";
 import {
+  deleteDeviceActionTicket,
   getConnectionGrant,
   getDeviceActionTicket,
   saveConnectionGrant,
   saveDeviceActionTicket,
 } from "../../../lib/storage/sqlite/connection-grant-repository";
 import {
+  getDeviceById,
   getDevicesForInstitution,
   replaceCachedDevicesForInstitution,
   type DeviceRecord,
@@ -73,6 +75,26 @@ function parseCachedGrant(payloadJson: string): CachedConnectionGrant {
 
 function parseCachedActionTicket(payloadJson: string): CachedDeviceActionTicket {
   return JSON.parse(payloadJson) as CachedDeviceActionTicket;
+}
+
+async function getReusableActionTicket(args: {
+  action: DeviceAction;
+  scopeId: string;
+  scopeType: "admin" | "device";
+}) {
+  const cached = await getDeviceActionTicket(args.scopeType, args.scopeId, args.action);
+  if (!cached || !isGrantFresh(cached.expiresAt)) {
+    return null;
+  }
+
+  const ticket = parseCachedActionTicket(cached.payloadJson);
+  const device = await getDeviceById(args.scopeId);
+  if (device && ticket.counter === device.grantVersion) {
+    return ticket;
+  }
+
+  await deleteDeviceActionTicket(args.scopeType, args.scopeId, args.action);
+  return null;
 }
 
 async function cacheGrant(scopeType: "admin" | "device", scopeId: string, grant: CachedConnectionGrant) {
@@ -197,9 +219,13 @@ export async function ensureSupervisorActionTicket(
     throw new Error("SUPERVISOR_REQUIRED");
   }
 
-  const cached = await getDeviceActionTicket("admin", deviceId, action);
-  if (cached && isGrantFresh(cached.expiresAt)) {
-    return parseCachedActionTicket(cached.payloadJson);
+  const cached = await getReusableActionTicket({
+    action,
+    scopeId: deviceId,
+    scopeType: "admin",
+  });
+  if (cached) {
+    return cached;
   }
 
   const convex = getConvexClient();
@@ -212,9 +238,13 @@ export async function ensureSupervisorActionTicket(
 }
 
 export async function ensureDeviceActionTicket(deviceId: string, action: Extract<DeviceAction, "connect" | "wifi_provision">) {
-  const cached = await getDeviceActionTicket("device", deviceId, action);
-  if (cached && isGrantFresh(cached.expiresAt)) {
-    return parseCachedActionTicket(cached.payloadJson);
+  const cached = await getReusableActionTicket({
+    action,
+    scopeId: deviceId,
+    scopeType: "device",
+  });
+  if (cached) {
+    return cached;
   }
 
   const convex = getConvexClient();

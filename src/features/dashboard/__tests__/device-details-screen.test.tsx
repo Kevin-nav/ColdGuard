@@ -2,6 +2,7 @@ import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import DeviceDetailsScreen from "../../../../app/device/[id]";
 
 const mockBack = jest.fn();
+const mockCanGoBack = jest.fn();
 const mockReplace = jest.fn();
 const mockRefreshDevices = jest.fn();
 const mockListAssignableNurses = jest.fn();
@@ -17,6 +18,7 @@ const mockDecommissionColdGuardDevice = jest.fn();
 jest.mock("expo-router", () => ({
   router: {
     back: () => mockBack(),
+    canGoBack: () => mockCanGoBack(),
     replace: (path: string) => mockReplace(path),
   },
   useLocalSearchParams: () => ({ id: "device-1" }),
@@ -82,6 +84,7 @@ jest.mock("../../../../src/features/devices/services/connection-service", () => 
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockCanGoBack.mockReturnValue(true);
   mockRefreshDevices.mockResolvedValue(undefined);
   mockListAssignableNurses.mockResolvedValue([
     {
@@ -149,6 +152,17 @@ test("runs the connection test from device detail", async () => {
   await waitFor(() => expect(mockRunColdGuardConnectionTest).toHaveBeenCalledWith({ deviceId: "device-1" }));
 });
 
+test("falls back to the devices tab when no back stack is available", async () => {
+  mockCanGoBack.mockReturnValue(false);
+  const ui = render(<DeviceDetailsScreen />);
+
+  await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
+  fireEvent.press(ui.getByTestId("device-back-button"));
+
+  expect(mockBack).not.toHaveBeenCalled();
+  expect(mockReplace).toHaveBeenCalledWith("/(tabs)/devices");
+});
+
 test("shows pending for an idle connection status", async () => {
   const ui = render(<DeviceDetailsScreen />);
 
@@ -159,4 +173,20 @@ test("shows pending for an idle connection status", async () => {
   expect(ui.getByText("Diagnostics")).toBeTruthy();
   expect(ui.getByText("Enable monitoring")).toBeTruthy();
   expect(ui.getByText("Save facility Wi-Fi")).toBeTruthy();
+});
+
+test("shows a monitoring permission error instead of pretending monitoring was enabled", async () => {
+  mockStartDeviceMonitoring.mockRejectedValueOnce(
+    new Error("Allow notifications to start ColdGuard background monitoring on this device."),
+  );
+  const ui = render(<DeviceDetailsScreen />);
+
+  await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
+  fireEvent.press(ui.getByText("Enable monitoring"));
+
+  await waitFor(() =>
+    expect(
+      ui.getByText("Allow notifications to start ColdGuard background monitoring on this device."),
+    ).toBeTruthy(),
+  );
 });

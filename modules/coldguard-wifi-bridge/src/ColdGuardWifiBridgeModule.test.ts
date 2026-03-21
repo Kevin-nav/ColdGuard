@@ -7,6 +7,7 @@ describe("getColdGuardWifiBridgeModule", () => {
   test("returns the native module when it loads successfully", () => {
     const nativeModule = {
       connectToAccessPointAsync: jest.fn(),
+      fetchRuntimeSnapshotAsync: jest.fn(),
       getMonitoringStatusesAsync: jest.fn(),
       releaseNetworkBindingAsync: jest.fn(),
       startMonitoringDeviceAsync: jest.fn(),

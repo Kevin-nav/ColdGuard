@@ -5,6 +5,9 @@ import androidx.core.content.ContextCompat
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -51,15 +54,34 @@ class ColdGuardWifiBridgeModule : Module() {
     )
   }
 
-  private fun fetchRuntimeSnapshot(runtimeBaseUrl: String): Map<String, String> {
+  private suspend fun fetchRuntimeSnapshot(runtimeBaseUrl: String): Map<String, String> {
     val controller = wifiSessionController ?: throw IllegalStateException("WIFI_BRIDGE_SESSION_UNAVAILABLE")
     val network = controller.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
     val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
+    val failures = mutableListOf<String>()
+    var alertsJson: String? = null
+    var statusJson: String? = null
+
+    try {
+      alertsJson = fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network)
+    } catch (error: IOException) {
+      failures += "/api/v1/runtime/alerts: ${error.message ?: "request failed"}"
+    }
+
+    try {
+      statusJson = fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network)
+    } catch (error: IOException) {
+      failures += "/api/v1/runtime/status: ${error.message ?: "request failed"}"
+    }
+
+    if (failures.isNotEmpty()) {
+      throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
+    }
 
     return mapOf(
-      "alertsJson" to fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network),
+      "alertsJson" to (alertsJson ?: throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")),
       "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
-      "statusJson" to fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network),
+      "statusJson" to (statusJson ?: throw IOException("WIFI_BRIDGE_STATUS_RESPONSE_MISSING")),
     )
   }
 
@@ -116,18 +138,34 @@ class ColdGuardWifiBridgeModule : Module() {
     }
   }
 
-  private fun fetchJson(url: String, network: android.net.Network): String {
+  private suspend fun fetchJson(url: String, network: android.net.Network): String = withContext(Dispatchers.IO) {
     val connection = openConnection(url, network).apply {
       requestMethod = "GET"
       connectTimeout = 10_000
       readTimeout = 10_000
     }
 
-    return try {
-      connection.inputStream.bufferedReader().use { it.readText() }
+    try {
+      val responseCode = connection.responseCode
+      val body = readResponseBody(connection, responseCode)
+      if (responseCode in 200..299) {
+        return@withContext body
+      }
+
+      throw IOException("HTTP $responseCode ${body.ifBlank { "<empty body>" }}")
     } finally {
       connection.disconnect()
     }
+  }
+
+  private fun readResponseBody(connection: HttpURLConnection, responseCode: Int): String {
+    val stream = if (responseCode in 200..299) {
+      connection.inputStream
+    } else {
+      connection.errorStream ?: connection.inputStream
+    }
+
+    return stream?.bufferedReader()?.use { it.readText() } ?: ""
   }
 
   private fun openConnection(url: String, network: android.net.Network): HttpURLConnection {

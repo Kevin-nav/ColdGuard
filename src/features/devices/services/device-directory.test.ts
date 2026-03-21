@@ -442,3 +442,44 @@ test("refreshes a cached device action ticket when the local grant version rotat
   expect(mockDeleteDeviceActionTicket).toHaveBeenCalledWith("device", "device-1", "connect");
   expect(mockMutation).toHaveBeenCalled();
 });
+
+test("drops a cached action ticket when the device record is missing", async () => {
+  mockGetDeviceById.mockResolvedValueOnce(null);
+  mockGetDeviceActionTicket.mockResolvedValue({
+    action: "connect",
+    payloadJson: JSON.stringify({
+      action: "connect",
+      counter: 2,
+      deviceId: "device-1",
+      expiresAt: Date.now() + 60_000,
+      institutionId: "institution-1",
+      issuedAt: Date.now(),
+      mac: "abc123",
+      operatorId: "firebase-u1",
+      ticketId: "ticket-stale",
+      v: 1,
+    }),
+    expiresAt: Date.now() + 60_000,
+  });
+  mockMutation.mockResolvedValue({
+    action: "connect",
+    counter: 2,
+    deviceId: "device-1",
+    expiresAt: Date.now() + 60_000,
+    institutionId: "institution-1",
+    issuedAt: Date.now(),
+    mac: "abc456",
+    operatorId: "firebase-u1",
+    ticketId: "ticket-fresh",
+    v: 1,
+  });
+
+  await expect(ensureDeviceActionTicket("device-1", "connect")).resolves.toEqual(
+    expect.objectContaining({
+      ticketId: "ticket-fresh",
+    }),
+  );
+
+  expect(mockDeleteDeviceActionTicket).toHaveBeenCalledWith("device", "device-1", "connect");
+  expect(mockMutation).toHaveBeenCalled();
+});

@@ -584,6 +584,42 @@ test("uses the native runtime snapshot bridge when available for softap recovery
   expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
 });
 
+test("falls back to HTTP runtime fetch when the native snapshot payload is malformed", async () => {
+  const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  const payload = await runColdGuardConnectionTest({
+    deviceId: "CG-ESP32-A100",
+    bleClient: new MockColdGuardBleClient(),
+    wifiBridge: {
+      connect: async (ticket) => ({
+        localIp: "192.168.4.2",
+        ssid: ticket.ssid,
+      }),
+      fetchRuntimeSnapshot: async () => ({
+        alertsJson: "{\"alerts\":[]}",
+        runtimeBaseUrl: "http://192.168.4.1",
+        statusJson: "{not-json",
+      }),
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(payload).toEqual(
+    expect.objectContaining({
+      runtimeBaseUrl: "http://192.168.4.1",
+      transport: "softap",
+    }),
+  );
+  expect(mockFetch).toHaveBeenCalled();
+  expect(warnSpy).toHaveBeenCalledWith(
+    "Failed to parse native runtime snapshot payload; falling back to HTTP runtime fetch.",
+    expect.objectContaining({
+      runtimeBaseUrl: "http://192.168.4.1",
+      statusJson: "{not-json",
+    }),
+  );
+});
+
 test("keeps the local connection success and queues sync when backend audit logging fails", async () => {
   mockRecordDeviceConnectionTest.mockRejectedValueOnce(new Error("convex unavailable"));
 

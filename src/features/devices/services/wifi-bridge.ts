@@ -17,15 +17,18 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
   const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
 
   if (Platform.OS === "android" && wifiBridgeModule?.connectToAccessPointAsync) {
-    return {
+    const bridge: ColdGuardWifiBridge = {
       connect: (ticket) => wifiBridgeModule.connectToAccessPointAsync(ticket.ssid, ticket.password),
-      fetchRuntimeSnapshot: (runtimeBaseUrl) => wifiBridgeModule.fetchRuntimeSnapshotAsync(runtimeBaseUrl),
       release: async () => {
-        if (wifiBridgeModule.releaseNetworkBindingAsync) {
-          await wifiBridgeModule.releaseNetworkBindingAsync();
-        }
+        await wifiBridgeModule.releaseNetworkBindingAsync?.();
       },
     };
+
+    if (wifiBridgeModule.fetchRuntimeSnapshotAsync) {
+      bridge.fetchRuntimeSnapshot = (runtimeBaseUrl) => wifiBridgeModule.fetchRuntimeSnapshotAsync(runtimeBaseUrl);
+    }
+
+    return bridge;
   }
 
   return {

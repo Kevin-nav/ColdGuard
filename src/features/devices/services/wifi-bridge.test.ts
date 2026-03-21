@@ -96,6 +96,32 @@ describe("wifi bridge helpers", () => {
     expect(mockFetchRuntimeSnapshotAsync).toHaveBeenCalledWith("http://192.168.4.1/api/v1/connection-test");
   });
 
+  test("omits runtime snapshot helpers when the native method is unavailable", async () => {
+    jest.doMock("react-native", () => ({
+      Platform: { OS: "android" },
+    }));
+    jest.doMock("../../../../modules/coldguard-wifi-bridge", () => ({
+      __esModule: true,
+      default: () => ({
+        connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
+        getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+        releaseNetworkBindingAsync: undefined,
+        startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
+        stopMonitoringDeviceAsync: (...args: unknown[]) => mockStopMonitoringDeviceAsync(...args),
+      }),
+    }));
+
+    let createColdGuardWifiBridge: typeof import("./wifi-bridge").createColdGuardWifiBridge;
+    jest.isolateModules(() => {
+      ({ createColdGuardWifiBridge } = jest.requireActual("./wifi-bridge"));
+    });
+    const bridge = createColdGuardWifiBridge!();
+
+    expect(bridge.fetchRuntimeSnapshot).toBeUndefined();
+    await expect(bridge.release()).resolves.toBeUndefined();
+    expect(mockReleaseNetworkBindingAsync).not.toHaveBeenCalled();
+  });
+
   test("proxies multi-device monitoring commands on android", async () => {
     jest.doMock("react-native", () => ({
       Platform: { OS: "android" },

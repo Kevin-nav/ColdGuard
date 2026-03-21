@@ -89,7 +89,7 @@ async function getReusableActionTicket(args: {
 
   const ticket = parseCachedActionTicket(cached.payloadJson);
   const device = await getDeviceById(args.scopeId);
-  if (!device || ticket.counter === device.grantVersion) {
+  if (device && ticket.counter === device.grantVersion) {
     return ticket;
   }
 

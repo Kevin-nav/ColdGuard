@@ -124,6 +124,11 @@ export interface ColdGuardBleClient {
 
 export interface ColdGuardWifiBridge {
   connect(ticket: ColdGuardWifiTicket): Promise<{ localIp: string; ssid: string }>;
+  fetchRuntimeSnapshot?(runtimeBaseUrl: string): Promise<{
+    alertsJson: string;
+    runtimeBaseUrl: string;
+    statusJson: string;
+  }>;
   release(): Promise<void>;
 }
 
@@ -359,22 +364,31 @@ async function fetchAndBuildRuntimeSnapshotFromBridge(args: {
   statusJson: string;
   transport: RuntimeTransportMode;
 }) {
-  const response = JSON.parse(args.statusJson) as RemoteConnectionPayload;
-  const alertsPayload = JSON.parse(args.alertsJson) as { alerts?: unknown };
-  const alerts = response.alerts
-    ? normalizeRuntimeAlerts(response.alerts)
-    : normalizeRuntimeAlerts(alertsPayload.alerts);
-  const receivedAt = Date.now();
+  try {
+    const response = JSON.parse(args.statusJson) as RemoteConnectionPayload;
+    const alertsPayload = JSON.parse(args.alertsJson) as { alerts?: unknown };
+    const alerts = response.alerts
+      ? normalizeRuntimeAlerts(response.alerts)
+      : normalizeRuntimeAlerts(alertsPayload.alerts);
+    const receivedAt = Date.now();
 
-  return buildRuntimeSnapshot({
-    alerts,
-    localIp: args.localIp,
-    receivedAt,
-    response,
-    runtimeBaseUrl: response.runtimeBaseUrl ?? args.runtimeBaseUrl,
-    ssid: args.ssid,
-    transport: args.transport,
-  });
+    return buildRuntimeSnapshot({
+      alerts,
+      localIp: args.localIp,
+      receivedAt,
+      response,
+      runtimeBaseUrl: response.runtimeBaseUrl ?? args.runtimeBaseUrl,
+      ssid: args.ssid,
+      transport: args.transport,
+    });
+  } catch (error) {
+    console.warn("Failed to parse native runtime snapshot payload; falling back to HTTP runtime fetch.", {
+      alertsJson: args.alertsJson,
+      runtimeBaseUrl: args.runtimeBaseUrl,
+      statusJson: args.statusJson,
+    });
+    return null;
+  }
 }
 
 async function connectViaFacilityWifi(deviceId: string) {
@@ -426,7 +440,7 @@ async function connectViaSoftAp(args: {
     const runtimeSnapshot = args.wifiBridge.fetchRuntimeSnapshot
       ? await args.wifiBridge.fetchRuntimeSnapshot(runtimeBaseUrl)
       : null;
-    const snapshot = runtimeSnapshot
+    const snapshotFromBridge = runtimeSnapshot
       ? await fetchAndBuildRuntimeSnapshotFromBridge({
           alertsJson: runtimeSnapshot.alertsJson,
           localIp: network.localIp,
@@ -435,6 +449,9 @@ async function connectViaSoftAp(args: {
           statusJson: runtimeSnapshot.statusJson,
           transport: "softap",
         })
+      : null;
+    const snapshot = snapshotFromBridge
+      ? snapshotFromBridge
       : await fetchAndBuildRuntimeSnapshot({
           localIp: network.localIp,
           runtimeBaseUrl,

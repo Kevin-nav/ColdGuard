@@ -1,4 +1,4 @@
-import { Platform } from "react-native";
+import { PermissionsAndroid, Platform } from "react-native";
 import {
   deleteConnectionGrant,
   deleteDeviceActionTicket,
@@ -421,6 +421,7 @@ async function connectViaSoftAp(args: {
   deviceId: string;
   wifiBridge: ColdGuardWifiBridge;
 }) {
+  await ensureWifiBridgePermissions();
   const handshakeToken = await getRequiredClinicHandshakeToken();
   const actionTicket = await ensureDeviceActionTicket(args.deviceId, "connect");
 
@@ -477,6 +478,67 @@ async function connectViaSoftAp(args: {
   }
 }
 
+async function connectViaStoredSoftAp(args: {
+  deviceId: string;
+  wifiBridge: ColdGuardWifiBridge;
+}) {
+  await ensureWifiBridgePermissions();
+  const config = await getDeviceRuntimeConfig(args.deviceId);
+  const runtimeBaseUrl = config?.softApRuntimeBaseUrl;
+  const ssid = config?.softApSsid;
+  const password = config?.softApPassword;
+  if (!runtimeBaseUrl || !ssid || !password) {
+    throw new Error("SOFTAP_CREDENTIALS_UNAVAILABLE");
+  }
+
+  const network = await args.wifiBridge.connect({
+    expiresAt: Date.now() + 60_000,
+    password,
+    ssid,
+    testUrl: `${normalizeRuntimeBaseUrl(runtimeBaseUrl)}/api/v1/connection-test`,
+  });
+
+  try {
+    const runtimeSnapshot = args.wifiBridge.fetchRuntimeSnapshot
+      ? await args.wifiBridge.fetchRuntimeSnapshot(runtimeBaseUrl)
+      : null;
+    const snapshotFromBridge = runtimeSnapshot
+      ? await fetchAndBuildRuntimeSnapshotFromBridge({
+          alertsJson: runtimeSnapshot.alertsJson,
+          localIp: network.localIp,
+          runtimeBaseUrl: runtimeSnapshot.runtimeBaseUrl,
+          ssid,
+          statusJson: runtimeSnapshot.statusJson,
+          transport: "softap",
+        })
+      : null;
+    const snapshot = snapshotFromBridge
+      ? snapshotFromBridge
+      : await fetchAndBuildRuntimeSnapshot({
+          localIp: network.localIp,
+          runtimeBaseUrl,
+          ssid,
+          transport: "softap",
+        });
+
+    await upsertDeviceRuntimeConfig(args.deviceId, {
+      activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+      activeTransport: "softap",
+      lastPingAt: snapshot.receivedAt,
+      lastRecoverAt: snapshot.receivedAt,
+      lastRuntimeError: null,
+      sessionStatus: "connected",
+      softApPassword: password,
+      softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+      softApSsid: ssid,
+    });
+
+    return snapshot;
+  } finally {
+    await args.wifiBridge.release().catch(() => undefined);
+  }
+}
+
 export async function enrollColdGuardDevice(args: {
   nickname: string;
   profile: ProfileSnapshot;
@@ -525,30 +587,45 @@ export async function connectOrRecoverDevice(args: {
     sessionStatus: "connecting",
   });
 
-  try {
-    return await connectViaFacilityWifi(args.deviceId);
-  } catch (facilityError) {
-    const bleClient = args.bleClient ?? realBleClient;
-    const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
+  // Priority: WiFi Direct (SoftAP) first → facility WiFi → BLE-renegotiated SoftAP.
+  const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
 
+  try {
+    return await connectViaStoredSoftAp({
+      deviceId: args.deviceId,
+      wifiBridge,
+    });
+  } catch (softApDirectError) {
     try {
       await upsertDeviceRuntimeConfig(args.deviceId, {
-        lastRuntimeError: facilityError instanceof Error ? facilityError.message : "Facility Wi-Fi unavailable.",
+        lastRuntimeError:
+          softApDirectError instanceof Error
+            ? softApDirectError.message
+            : "Stored SoftAP unavailable.",
         sessionStatus: "recovering",
       });
-      return await connectViaSoftAp({
-        bleClient,
-        deviceId: args.deviceId,
-        wifiBridge,
-      });
-    } catch (softApError) {
-      await upsertDeviceRuntimeConfig(args.deviceId, {
-        activeRuntimeBaseUrl: null,
-        activeTransport: "ble_fallback",
-        lastRuntimeError: softApError instanceof Error ? softApError.message : "Runtime recovery failed.",
-        sessionStatus: "failed",
-      });
-      throw softApError;
+      return await connectViaFacilityWifi(args.deviceId);
+    } catch (facilityError) {
+      const bleClient = args.bleClient ?? realBleClient;
+      try {
+        await upsertDeviceRuntimeConfig(args.deviceId, {
+          lastRuntimeError: facilityError instanceof Error ? facilityError.message : "Facility Wi-Fi unavailable.",
+          sessionStatus: "recovering",
+        });
+        return await connectViaSoftAp({
+          bleClient,
+          deviceId: args.deviceId,
+          wifiBridge,
+        });
+      } catch (softApRecoveryError) {
+        await upsertDeviceRuntimeConfig(args.deviceId, {
+          activeRuntimeBaseUrl: null,
+          activeTransport: "ble_fallback",
+          lastRuntimeError: softApRecoveryError instanceof Error ? softApRecoveryError.message : "Runtime recovery failed.",
+          sessionStatus: "failed",
+        });
+        throw softApRecoveryError;
+      }
     }
   }
 }
@@ -559,15 +636,19 @@ export async function pingOrRecoverDevice(args: {
   wifiBridge?: ColdGuardWifiBridge;
 }) {
   const config = await getDeviceRuntimeConfig(args.deviceId);
-  const runtimeBaseUrl = config?.activeRuntimeBaseUrl ?? config?.facilityWifiRuntimeBaseUrl ?? null;
+  // Prefer SoftAP base URL when active transport is softap; fall back to facility WiFi.
+  const runtimeBaseUrl =
+    config?.activeTransport === "softap"
+      ? (config?.softApRuntimeBaseUrl ?? config?.activeRuntimeBaseUrl ?? null)
+      : (config?.activeRuntimeBaseUrl ?? config?.facilityWifiRuntimeBaseUrl ?? null);
   const transport = config?.activeTransport ?? (config?.facilityWifiRuntimeBaseUrl ? "facility_wifi" : null);
 
-  if (runtimeBaseUrl && transport) {
+  if (runtimeBaseUrl && transport && transport !== "ble_fallback") {
     try {
       const snapshot = await fetchAndBuildRuntimeSnapshot({
         localIp: null,
         runtimeBaseUrl,
-        ssid: config?.facilityWifiSsid ?? null,
+        ssid: transport === "softap" ? (config?.softApSsid ?? null) : (config?.facilityWifiSsid ?? null),
         transport,
       });
       await upsertDeviceRuntimeConfig(args.deviceId, {
@@ -932,15 +1013,26 @@ export async function decommissionColdGuardDevice(args: {
     throw new Error("DEVICE_MANAGEMENT_FORBIDDEN");
   }
 
-  const bleClient = args.bleClient ?? realBleClient;
-  const handshakeToken = await getRequiredClinicHandshakeToken();
-  const actionTicket = await ensureSupervisorActionTicket(args.profile, args.deviceId, "decommission");
+  // Best-effort BLE wipe: if the device is unreachable, in blank state after a
+  // re-flash, or out of range, we still want the backend and local records
+  // cleaned up so the supervisor is not permanently stuck. Log the failure.
+  try {
+    const bleClient = args.bleClient ?? realBleClient;
+    const handshakeToken = await getRequiredClinicHandshakeToken();
+    const actionTicket = await ensureSupervisorActionTicket(args.profile, args.deviceId, "decommission");
+    await bleClient.decommissionDevice({
+      actionTicket,
+      deviceId: args.deviceId,
+      handshakeToken,
+    });
+  } catch (bleError) {
+    console.warn(
+      "[decommissionColdGuardDevice] BLE wipe skipped — device may be unreachable or in blank state.",
+      { deviceId: args.deviceId, error: bleError instanceof Error ? bleError.message : String(bleError) },
+    );
+  }
 
-  await bleClient.decommissionDevice({
-    actionTicket,
-    deviceId: args.deviceId,
-    handshakeToken,
-  });
+  // Backend and local cleanup always run regardless of BLE outcome.
   await decommissionManagedDevice(args.deviceId);
   await deleteDeviceActionTicket("admin", args.deviceId, "decommission");
   await deleteDeviceActionTicket("device", args.deviceId, "connect");
@@ -956,6 +1048,31 @@ async function getRequiredClinicHandshakeToken() {
     throw new Error("CLINIC_HANDSHAKE_TOKEN_MISSING");
   }
   return handshakeToken;
+}
+
+async function ensureWifiBridgePermissions() {
+  if (Platform.OS !== "android") {
+    return;
+  }
+
+  if (!PermissionsAndroid?.requestMultiple || !PermissionsAndroid?.PERMISSIONS) {
+    return;
+  }
+
+  const permissions = [
+    PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES ?? "android.permission.NEARBY_WIFI_DEVICES",
+    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION ?? "android.permission.ACCESS_FINE_LOCATION",
+  ].filter(Boolean);
+
+  if (permissions.length === 0) {
+    return;
+  }
+
+  const statuses = await PermissionsAndroid.requestMultiple(permissions);
+  const denied = Object.values(statuses).some((status) => status !== PermissionsAndroid.RESULTS.GRANTED);
+  if (denied) {
+    throw new Error("WIFI_PERMISSION_REQUIRED");
+  }
 }
 
 function delay(ms: number) {

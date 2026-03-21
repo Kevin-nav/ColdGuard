@@ -24,6 +24,7 @@ jest.mock("react-native-ble-plx", () => ({
   Subscription: jest.fn(),
 }));
 
+import { encode as encodeBase64 } from "base-64";
 import { __testing } from "./ble-client";
 
 test("rejects malformed hello responses before reading deviceId", () => {
@@ -137,6 +138,22 @@ test("matches scan results by BLE name suffix even without a service filter", ()
         id: "AA:BB:CC:DD:EE:FF",
         localName: null,
         name: "ColdGuard_7BCC",
+      } as any,
+      "CG-ESP32-5C7BCC",
+    ),
+  ).toBe(true);
+});
+
+test("matches scan results by advertised service data device id", () => {
+  expect(
+    __testing.doesDeviceMatchExpectedId(
+      {
+        id: "AA:BB:CC:DD:EE:FF",
+        localName: null,
+        name: null,
+        serviceData: {
+          "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110": encodeBase64("id=CG-ESP32-5C7BCC;state=enrolled;pv=1"),
+        },
       } as any,
       "CG-ESP32-5C7BCC",
     ),

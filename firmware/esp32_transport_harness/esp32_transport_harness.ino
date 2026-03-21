@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr char kFirmwareVersion[] = "cg-transport-0.1.0";
+constexpr char kFirmwareVersion[] = "cg-transport-0.1.1";
 constexpr uint8_t kProtocolVersion = 1;
 constexpr unsigned long kProofWindowMs = 5UL * 60UL * 1000UL;
 constexpr unsigned long kVerifiedSessionWindowMs = 60UL * 1000UL;
@@ -119,34 +119,69 @@ class ServerCallbacks : public BLEServerCallbacks {
 };
 
 void initializeBle() {
+  Serial.println("[BOOT] BLE: BLEDevice::init begin");
   BLEDevice::init(deviceState.bleName.c_str());
+  Serial.println("[BOOT] BLE: createServer");
   bleServer = BLEDevice::createServer();
+  if (bleServer == nullptr) {
+    Serial.println("[BOOT][FATAL] BLE createServer returned null");
+    return;
+  }
   bleServer->setCallbacks(new ServerCallbacks());
+  Serial.println("[BOOT] BLE: createService");
   BLEService* service = bleServer->createService(kServiceUuid);
+  if (service == nullptr) {
+    Serial.println("[BOOT][FATAL] BLE createService returned null");
+    return;
+  }
 
+  Serial.println("[BOOT] BLE: create command characteristic");
   commandCharacteristic = service->createCharacteristic(
     kCommandCharacteristicUuid,
     BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  if (commandCharacteristic == nullptr) {
+    Serial.println("[BOOT][FATAL] command characteristic is null");
+    return;
+  }
   commandCharacteristic->setCallbacks(new CommandCallbacks());
 
+  Serial.println("[BOOT] BLE: create response characteristic");
   responseCharacteristic = service->createCharacteristic(
     kResponseCharacteristicUuid,
     BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
+  if (responseCharacteristic == nullptr) {
+    Serial.println("[BOOT][FATAL] response characteristic is null");
+    return;
+  }
   responseCharacteristic->addDescriptor(new BLE2902());
 
+  Serial.println("[BOOT] BLE: service start");
   service->start();
+  Serial.println("[BOOT] BLE: get advertising");
   advertising = BLEDevice::getAdvertising();
+  if (advertising == nullptr) {
+    Serial.println("[BOOT][FATAL] BLE advertising instance is null");
+    return;
+  }
+  Serial.println("[BOOT] BLE: add service UUID");
   advertising->addServiceUUID(kServiceUuid);
+  Serial.println("[BOOT] BLE: restart advertising");
   coldguard::restartAdvertising(advertising, deviceState, kServiceUuid, kProtocolVersion);
+  Serial.println("[BOOT] BLE: init complete");
 }
 
 }  // namespace
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("[BOOT] setup: serial ready");
+  Serial.println("[BOOT] setup: loading device state");
   coldguard::loadDeviceState(preferences, kPreferencesNamespace, &deviceState);
+  Serial.println("[BOOT] setup: starting wifi runtime tick");
   coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
+  Serial.println("[BOOT] setup: initializing BLE");
   initializeBle();
+  Serial.println("[BOOT] setup: init complete");
 
   Serial.println("ColdGuard ESP32 transport harness ready");
   Serial.println("Device ID: " + deviceState.deviceId);

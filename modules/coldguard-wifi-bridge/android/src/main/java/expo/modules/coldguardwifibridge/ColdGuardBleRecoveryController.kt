@@ -111,7 +111,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
         val callback = object : ScanCallback() {
           override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device ?: return
-            if (!doesDeviceMatchExpectedId(device, expectedDeviceId)) {
+            if (!doesDeviceMatchExpectedId(result, device, expectedDeviceId)) {
               return
             }
 
@@ -172,10 +172,46 @@ class ColdGuardBleRecoveryController(private val context: Context) {
     }
   }
 
-  private fun doesDeviceMatchExpectedId(device: BluetoothDevice, expectedDeviceId: String): Boolean {
+  private fun doesDeviceMatchExpectedId(result: ScanResult, device: BluetoothDevice, expectedDeviceId: String): Boolean {
+    val advertisedDeviceId = parseDeviceIdFromServiceData(result)
+    if (advertisedDeviceId == expectedDeviceId) {
+      return true
+    }
+
     val expectedSuffix = expectedDeviceId.takeLast(4).uppercase(Locale.US)
     val deviceName = device.name?.uppercase(Locale.US)
     return deviceName?.contains(expectedSuffix) == true || device.address == expectedDeviceId
+  }
+
+  private fun parseDeviceIdFromServiceData(result: ScanResult): String? {
+    val scanRecord = result.scanRecord ?: return null
+    val serviceData = scanRecord.serviceData ?: return null
+
+    for (entry in serviceData.entries) {
+      val rawBytes = entry.value ?: continue
+      val payload = try {
+        String(rawBytes, StandardCharsets.UTF_8)
+      } catch (_: Exception) {
+        continue
+      }
+
+      for (pair in payload.split(";")) {
+        val index = pair.indexOf("=")
+        if (index <= 0) {
+          continue
+        }
+        val key = pair.substring(0, index).trim()
+        if (!key.equals("id", ignoreCase = true)) {
+          continue
+        }
+        val value = pair.substring(index + 1).trim()
+        if (value.isNotBlank()) {
+          return value
+        }
+      }
+    }
+
+    return null
   }
 
   private fun ensureBlePermissions() {

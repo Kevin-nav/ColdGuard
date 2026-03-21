@@ -1,5 +1,6 @@
 import { PermissionsAndroid, Platform } from "react-native";
 import { BleError, BleManager, type Device, type ScanMode, Subscription } from "react-native-ble-plx";
+import { decode as decodeBase64 } from "base-64";
 import type {
   CachedDeviceActionTicket,
   ColdGuardDiscoveredDevice,
@@ -43,6 +44,8 @@ type GenericBleResponse = {
 };
 
 const SCAN_TIMEOUT_MS = 12_000;
+const SCAN_RETRY_DELAY_MS = 1_500;
+const SCAN_RETRY_MAX_ATTEMPTS = 3;
 const MAX_BLE_WRITE_BYTES = 180;
 const BLE_TRANSPORT_CHUNK_BYTES = 120;
 let bleManager: BleManager | null = null;
@@ -169,10 +172,59 @@ function getBleManager() {
   return bleManager;
 }
 
+function parseAdvertisementField(
+  encodedField: string | null | undefined,
+  fieldName: string,
+) {
+  if (!encodedField) {
+    return null;
+  }
+
+  let decodedField = "";
+  try {
+    decodedField = decodeBase64(encodedField);
+  } catch {
+    return null;
+  }
+
+  const entries = decodedField.split(";");
+  for (const entry of entries) {
+    const [rawKey, ...valueParts] = entry.split("=");
+    if (rawKey?.trim().toLowerCase() !== fieldName.toLowerCase()) {
+      continue;
+    }
+
+    const value = valueParts.join("=").trim();
+    return value.length > 0 ? value : null;
+  }
+
+  return null;
+}
+
+function getDeviceIdFromAdvertisement(device: Pick<Device, "serviceData">) {
+  if (!device.serviceData || typeof device.serviceData !== "object") {
+    return null;
+  }
+
+  for (const encodedValue of Object.values(device.serviceData)) {
+    const advertisedDeviceId = parseAdvertisementField(encodedValue, "id");
+    if (advertisedDeviceId) {
+      return advertisedDeviceId;
+    }
+  }
+
+  return null;
+}
+
 function doesDeviceMatchExpectedId(
-  device: Pick<Device, "id" | "localName" | "name">,
+  device: Pick<Device, "id" | "localName" | "name" | "serviceData">,
   expectedDeviceId: string,
 ) {
+  const advertisedDeviceId = getDeviceIdFromAdvertisement(device);
+  if (advertisedDeviceId === expectedDeviceId) {
+    return true;
+  }
+
   const expectedSuffix = expectedDeviceId.slice(-4).toUpperCase();
   return (
     device.name?.toUpperCase().includes(expectedSuffix) ||
@@ -368,45 +420,73 @@ async function ensureBlePermissions() {
 async function connectAndHello(expectedDeviceId: string) {
   await ensureBlePermissions();
 
-  const device = await scanForColdGuardDevice(expectedDeviceId);
-  const connectedDevice = await device.connect({ requestMTU: 512 });
-  await connectedDevice.discoverAllServicesAndCharacteristics();
-  const session = openCommandSession(connectedDevice);
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= SCAN_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    const device = await scanForColdGuardDevice(expectedDeviceId);
+    const connectedDevice = await device.connect({ requestMTU: 512, refreshGatt: "OnConnected" });
+    await connectedDevice.discoverAllServicesAndCharacteristics();
+    const session = openCommandSession(connectedDevice);
 
-  const helloResponse = await session.sendCommand("hello", {});
-  const helloReceivedAtMs = Date.now();
-  let hello: HelloResponse;
-  try {
-    hello = parseHelloResponse(helloResponse);
-  } catch (error) {
-    await connectedDevice.cancelConnection().catch(() => undefined);
-    throw error;
+    try {
+      const helloResponse = await session.sendCommand("hello", {});
+      const helloReceivedAtMs = Date.now();
+      const hello = parseHelloResponse(helloResponse);
+      if (hello.deviceId !== expectedDeviceId) {
+        throw new Error("BLE_DEVICE_ID_MISMATCH");
+      }
+
+      return {
+        close: session.close,
+        device: connectedDevice,
+        hello: {
+          ...hello,
+          receivedAtMs: helloReceivedAtMs,
+        } satisfies HelloSession,
+        sendCommand: session.sendCommand,
+      };
+    } catch (error) {
+      session.close();
+      await connectedDevice.cancelConnection().catch(() => undefined);
+      lastError = error instanceof Error ? error : new Error("BLE_CONNECTION_FAILED");
+      if (attempt < SCAN_RETRY_MAX_ATTEMPTS && lastError.message === "BLE_DEVICE_ID_MISMATCH") {
+        await delay(SCAN_RETRY_DELAY_MS);
+        continue;
+      }
+      throw lastError;
+    }
   }
 
-  if (hello.deviceId !== expectedDeviceId) {
-    session.close();
-    await connectedDevice.cancelConnection().catch(() => undefined);
-    throw new Error("BLE_DEVICE_ID_MISMATCH");
-  }
-
-  return {
-    close: session.close,
-    device: connectedDevice,
-    hello: {
-      ...hello,
-      receivedAtMs: helloReceivedAtMs,
-    } satisfies HelloSession,
-    sendCommand: session.sendCommand,
-  };
+  throw lastError ?? new Error("BLE_DEVICE_NOT_FOUND");
 }
 
 async function scanForColdGuardDevice(expectedDeviceId: string) {
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= SCAN_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await scanForColdGuardDeviceOnce(expectedDeviceId);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("BLE_DEVICE_NOT_FOUND");
+      if (attempt < SCAN_RETRY_MAX_ATTEMPTS) {
+        await delay(SCAN_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  throw lastError ?? new Error("BLE_DEVICE_NOT_FOUND");
+}
+
+async function scanForColdGuardDeviceOnce(expectedDeviceId: string) {
   return await new Promise<Device>((resolve, reject) => {
     let settled = false;
+    let fallbackCandidate: Device | null = null;
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
         getBleManager().stopDeviceScan();
+        if (fallbackCandidate) {
+          resolve(fallbackCandidate);
+          return;
+        }
         reject(new Error("BLE_DEVICE_NOT_FOUND"));
       }
     }, SCAN_TIMEOUT_MS);
@@ -431,6 +511,10 @@ async function scanForColdGuardDevice(expectedDeviceId: string) {
           return;
         }
 
+        if (!fallbackCandidate) {
+          fallbackCandidate = device;
+        }
+
         if (!doesDeviceMatchExpectedId(device, expectedDeviceId)) {
           return;
         }
@@ -442,6 +526,10 @@ async function scanForColdGuardDevice(expectedDeviceId: string) {
       },
     );
   });
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function openCommandSession(device: Device): BleCommandSession {

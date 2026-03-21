@@ -695,11 +695,17 @@ String sanitizePayloadForLogging(const String& payload) {
 }
 
 void restartAdvertising(BLEAdvertising* advertising, const DeviceState& state, const char* serviceUuid, uint8_t protocolVersion) {
+  if (advertising == nullptr) {
+    Serial.println("[BLE_DEBUG] restartAdvertising skipped: advertising is null");
+    return;
+  }
+
   BLEAdvertisementData advertisingData;
   const String serviceData = buildAdvertisementPayload(state, protocolVersion);
   advertisingData.setName(state.bleName.c_str());
   advertisingData.setServiceData(BLEUUID(serviceUuid), serviceData);
 
+  Serial.println("[BLE_DEBUG] restartAdvertising name=" + state.bleName + " serviceData=" + serviceData);
   advertising->stop();
   advertising->setAdvertisementData(advertisingData);
   advertising->start();

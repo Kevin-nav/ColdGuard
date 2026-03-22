@@ -3,7 +3,7 @@ import { listMonitoredDeviceRuntimeConfigs } from "../../../lib/storage/sqlite/d
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { useDashboardBootstrap } from "../../dashboard/providers/dashboard-bootstrap";
 import { ensureLocalProfileForUser } from "../../dashboard/services/profile-hydration";
-import { pollMonitoredDeviceRuntime } from "../../devices/services/connection-service";
+import { pollMonitoredDeviceRuntime, startDeviceMonitoring } from "../../devices/services/connection-service";
 import { getNativeMonitoringServiceStatuses } from "../../devices/services/wifi-bridge";
 import { useNetworkStatus } from "../../network/network-status";
 import {
@@ -203,11 +203,24 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     async function pollMonitoredDevices() {
       try {
         const nativeStatuses = await getNativeMonitoringServiceStatuses().catch(() => ({}));
+        const persistedMonitored = await listMonitoredDeviceRuntimeConfigs();
         const nativelyMonitoredDeviceIds = Object.values(nativeStatuses)
           .filter((status) => status.isRunning)
           .map((status) => status.deviceId);
+
+        for (const runtime of persistedMonitored) {
+          if (nativelyMonitoredDeviceIds.includes(runtime.deviceId)) {
+            continue;
+          }
+          await startDeviceMonitoring(runtime.deviceId).catch(() => undefined);
+        }
+
+        const refreshedStatuses = await getNativeMonitoringServiceStatuses().catch(() => nativeStatuses);
+        const refreshedNativeDeviceIds = Object.values(refreshedStatuses)
+          .filter((status) => status.isRunning)
+          .map((status) => status.deviceId);
         const monitored = await listMonitoredDeviceRuntimeConfigs({
-          excludeDeviceIds: nativelyMonitoredDeviceIds,
+          excludeDeviceIds: refreshedNativeDeviceIds,
         });
 
         for (const runtime of monitored) {

@@ -1,4 +1,5 @@
 import {
+  bootstrapDefaultDeviceMonitoring,
   MockColdGuardBleClient,
   connectOrRecoverDevice,
   decommissionColdGuardDevice,
@@ -232,6 +233,12 @@ test("enrolls a blank mock device and registers it", async () => {
       nickname: "Cold Room Alpha",
     }),
   );
+  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      transport: "ble_fallback",
+    }),
+  );
 });
 
 test("enrollment uses a single BLE session instead of scanning twice", async () => {
@@ -316,6 +323,24 @@ test("starts native monitoring with facility and softap recovery context", async
     softApSsid: "ColdGuard_A100",
     transport: "softap",
   });
+});
+
+test("bootstrapDefaultDeviceMonitoring marks the session active before starting native monitoring", async () => {
+  await bootstrapDefaultDeviceMonitoring("CG-ESP32-A100");
+
+  expect(mockUpsertDeviceRuntimeConfig).toHaveBeenCalledWith(
+    "CG-ESP32-A100",
+    expect.objectContaining({
+      monitoringMode: "foreground_service",
+      sessionStatus: "connecting",
+    }),
+  );
+  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      transport: "ble_fallback",
+    }),
+  );
 });
 
 test("starts monitoring on softap first when facility wifi is configured but not yet proven", async () => {
@@ -726,6 +751,41 @@ test("falls back to HTTP runtime fetch when the native snapshot payload is malfo
     expect.objectContaining({
       runtimeBaseUrl: "http://192.168.4.1",
       statusJson: "{not-json",
+    }),
+  );
+});
+
+test("falls back to HTTP runtime fetch when the native runtime snapshot request fails", async () => {
+  const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  const payload = await runColdGuardConnectionTest({
+    deviceId: "CG-ESP32-A100",
+    bleClient: new MockColdGuardBleClient(),
+    wifiBridge: {
+      connect: async (ticket) => ({
+        localIp: "192.168.4.2",
+        ssid: ticket.ssid,
+      }),
+      fetchRuntimeSnapshot: async () => {
+        throw new Error("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED /api/v1/runtime/alerts: timeout");
+      },
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(payload).toEqual(
+    expect.objectContaining({
+      runtimeBaseUrl: "http://192.168.4.1",
+      transport: "softap",
+    }),
+  );
+  expect(mockFetch).toHaveBeenCalled();
+  expect(warnSpy).toHaveBeenCalledWith(
+    "Native runtime snapshot fetch failed; falling back to HTTP runtime fetch.",
+    expect.objectContaining({
+      error: "WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED /api/v1/runtime/alerts: timeout",
+      runtimeBaseUrl: "http://192.168.4.1",
+      transport: "softap",
     }),
   );
 });

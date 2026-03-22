@@ -181,6 +181,15 @@ function getBleManager() {
   return bleManager;
 }
 
+function resetBleManager() {
+  try {
+    bleManager?.destroy();
+  } catch {
+    // Ignore teardown errors from a stale native BLE session.
+  }
+  bleManager = null;
+}
+
 function parseAdvertisementField(
   encodedField: string | null | undefined,
   fieldName: string,
@@ -444,7 +453,7 @@ async function connectAndHello(expectedDeviceId: string) {
 
     try {
       const device = await scanForColdGuardDevice(expectedDeviceId);
-      connectedDevice = await device.connect({ requestMTU: 512, refreshGatt: "OnConnected" });
+      connectedDevice = await device.connect();
       await connectedDevice.discoverAllServicesAndCharacteristics();
       session = openCommandSession(connectedDevice);
       const helloResponse = await session.sendCommand("hello", {});
@@ -468,6 +477,7 @@ async function connectAndHello(expectedDeviceId: string) {
       await connectedDevice?.cancelConnection().catch(() => undefined);
       lastError = error instanceof Error ? error : new Error("BLE_CONNECTION_FAILED");
       if (attempt < SCAN_RETRY_MAX_ATTEMPTS && isTransientBleConnectionError(lastError)) {
+        resetBleManager();
         await delay(SCAN_RETRY_DELAY_MS);
         continue;
       }
@@ -555,6 +565,8 @@ function isTransientBleConnectionError(error: Error) {
   const normalized = error.message.trim().toLowerCase();
   return (
     normalized === "ble_device_id_mismatch" ||
+    normalized.includes("cancelled") ||
+    normalized.includes("canceled") ||
     normalized.includes("not found") ||
     normalized.includes("discover") ||
     normalized.includes("gatt") ||

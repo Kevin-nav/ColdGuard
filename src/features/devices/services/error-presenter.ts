@@ -18,6 +18,7 @@ const USER_MESSAGE_BY_CODE: Record<string, string> = {
   FACILITY_WIFI_NOT_PROVISIONED: "Facility Wi-Fi has not been set up for this device yet.",
   HANDSHAKE_PROOF_INVALID: "Secure pairing verification failed. Try pairing again from the device.",
   INVALID_DEVICE_QR_PAYLOAD: "This device code could not be read. Scan the device again.",
+  "Operation was cancelled": "Bluetooth recovery was interrupted. ColdGuard will retry the recovery path automatically.",
   SOFTAP_CREDENTIALS_UNAVAILABLE: "The device does not have a saved local Wi-Fi session yet. Try recovery again.",
   WIFI_PERMISSION_REQUIRED: "Allow Wi-Fi and location access to connect to the device.",
 };

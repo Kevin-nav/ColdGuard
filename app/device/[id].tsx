@@ -16,6 +16,7 @@ import { spacing } from "../../src/theme/tokens";
 import type { DeviceRecord } from "../../src/lib/storage/sqlite/device-repository";
 import { listAssignableNurses } from "../../src/features/devices/services/device-directory";
 import {
+  bootstrapDefaultDeviceMonitoring,
   assignColdGuardDevice,
   connectOrRecoverDevice,
   decommissionColdGuardDevice,
@@ -144,6 +145,7 @@ export default function DeviceDetailsScreen() {
   const [facilityWifiPassword, setFacilityWifiPassword] = useState("");
   const [facilityWifiSsid, setFacilityWifiSsid] = useState("");
   const [viewerStaffIds, setViewerStaffIds] = useState<string[]>([]);
+  const [hasBootstrappedMonitoring, setHasBootstrappedMonitoring] = useState<string | null>(null);
 
   const device = devices.find((entry) => entry.id === id);
   let enrollmentLink = null;
@@ -224,6 +226,87 @@ export default function DeviceDetailsScreen() {
       isMounted = false;
     };
   }, [device?.id]);
+
+  useEffect(() => {
+    const deviceId = device?.id;
+    if (!deviceId) {
+      setHasBootstrappedMonitoring(null);
+      return;
+    }
+
+    let isActive = true;
+
+    async function bootstrapMonitoringIfNeeded() {
+      const latestSession = await getDeviceRuntimeSession(deviceId);
+      if (!isActive) {
+        return;
+      }
+
+      setRuntimeSession(latestSession);
+      if (
+        hasBootstrappedMonitoring === deviceId ||
+        latestSession?.monitoringMode === "foreground_service"
+      ) {
+        return;
+      }
+
+      setHasBootstrappedMonitoring(deviceId);
+
+      try {
+        const nextSession = await bootstrapDefaultDeviceMonitoring(deviceId);
+        if (!isActive) {
+          return;
+        }
+        setRuntimeSession(nextSession);
+        await refreshDevices();
+      } catch (nextError) {
+        if (!isActive) {
+          return;
+        }
+        setRuntimeSession(await getDeviceRuntimeSession(deviceId));
+        setActionFeedback((current) =>
+          current ?? presentDeviceError(nextError, "Background monitoring could not be started."),
+        );
+      }
+    }
+
+    void bootstrapMonitoringIfNeeded();
+
+    return () => {
+      isActive = false;
+    };
+  }, [device?.id, hasBootstrappedMonitoring, refreshDevices]);
+
+  useEffect(() => {
+    const deviceId = device?.id;
+    if (!deviceId) {
+      return;
+    }
+
+    let isActive = true;
+
+    async function refreshRuntimeSession() {
+      const nextSession = await getDeviceRuntimeSession(deviceId);
+      if (!isActive) {
+        return;
+      }
+      setRuntimeSession(nextSession);
+    }
+
+    void refreshRuntimeSession();
+    const runtimeInterval = setInterval(() => {
+      void refreshRuntimeSession();
+    }, 5_000);
+    const deviceInterval = setInterval(() => {
+      void refreshDevices();
+    }, 30_000);
+
+    return () => {
+      isActive = false;
+      clearInterval(runtimeInterval);
+      clearInterval(deviceInterval);
+    };
+  }, [device?.id, refreshDevices]);
 
   if (enrollmentLink) {
     if (Platform.OS === "web") {

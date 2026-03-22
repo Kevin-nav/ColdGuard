@@ -197,5 +197,6 @@ test("splits oversized BLE transport payloads into multiple chunks", () => {
 test("treats service-discovery style failures as transient BLE connection errors", () => {
   expect(__testing.isTransientBleConnectionError(new Error("Service 6B8F... not found"))).toBe(true);
   expect(__testing.isTransientBleConnectionError(new Error("BLE_GATT_DISCONNECTED"))).toBe(true);
+  expect(__testing.isTransientBleConnectionError(new Error("Operation was cancelled"))).toBe(true);
   expect(__testing.isTransientBleConnectionError(new Error("BLE_PERMISSION_REQUIRED"))).toBe(false);
 });

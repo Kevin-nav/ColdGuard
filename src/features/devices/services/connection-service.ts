@@ -392,6 +392,37 @@ async function fetchAndBuildRuntimeSnapshotFromBridge(args: {
   }
 }
 
+async function tryFetchRuntimeSnapshotFromBridge(args: {
+  localIp: string | null;
+  runtimeBaseUrl: string;
+  ssid: string | null;
+  transport: RuntimeTransportMode;
+  wifiBridge: ColdGuardWifiBridge;
+}) {
+  if (!args.wifiBridge.fetchRuntimeSnapshot) {
+    return null;
+  }
+
+  try {
+    const runtimeSnapshot = await args.wifiBridge.fetchRuntimeSnapshot(args.runtimeBaseUrl);
+    return await fetchAndBuildRuntimeSnapshotFromBridge({
+      alertsJson: runtimeSnapshot.alertsJson,
+      localIp: args.localIp,
+      runtimeBaseUrl: runtimeSnapshot.runtimeBaseUrl,
+      ssid: args.ssid,
+      statusJson: runtimeSnapshot.statusJson,
+      transport: args.transport,
+    });
+  } catch (error) {
+    console.warn("Native runtime snapshot fetch failed; falling back to HTTP runtime fetch.", {
+      error: error instanceof Error ? error.message : String(error),
+      runtimeBaseUrl: args.runtimeBaseUrl,
+      transport: args.transport,
+    });
+    return null;
+  }
+}
+
 async function connectViaFacilityWifi(deviceId: string) {
   const config = await getDeviceRuntimeConfig(deviceId);
   const runtimeBaseUrl = config?.facilityWifiRuntimeBaseUrl;
@@ -455,19 +486,13 @@ async function connectViaSoftAp(args: {
   const runtimeBaseUrl = normalizeRuntimeBaseUrl(ticket.testUrl);
 
   try {
-    const runtimeSnapshot = args.wifiBridge.fetchRuntimeSnapshot
-      ? await args.wifiBridge.fetchRuntimeSnapshot(runtimeBaseUrl)
-      : null;
-    const snapshotFromBridge = runtimeSnapshot
-      ? await fetchAndBuildRuntimeSnapshotFromBridge({
-          alertsJson: runtimeSnapshot.alertsJson,
-          localIp: network.localIp,
-          runtimeBaseUrl: runtimeSnapshot.runtimeBaseUrl,
-          ssid: ticket.ssid,
-          statusJson: runtimeSnapshot.statusJson,
-          transport: "softap",
-        })
-      : null;
+    const snapshotFromBridge = await tryFetchRuntimeSnapshotFromBridge({
+      localIp: network.localIp,
+      runtimeBaseUrl,
+      ssid: ticket.ssid,
+      transport: "softap",
+      wifiBridge: args.wifiBridge,
+    });
     const snapshot = snapshotFromBridge
       ? snapshotFromBridge
       : await fetchAndBuildRuntimeSnapshot({
@@ -516,19 +541,13 @@ async function connectViaStoredSoftAp(args: {
   });
 
   try {
-    const runtimeSnapshot = args.wifiBridge.fetchRuntimeSnapshot
-      ? await args.wifiBridge.fetchRuntimeSnapshot(runtimeBaseUrl)
-      : null;
-    const snapshotFromBridge = runtimeSnapshot
-      ? await fetchAndBuildRuntimeSnapshotFromBridge({
-          alertsJson: runtimeSnapshot.alertsJson,
-          localIp: network.localIp,
-          runtimeBaseUrl: runtimeSnapshot.runtimeBaseUrl,
-          ssid,
-          statusJson: runtimeSnapshot.statusJson,
-          transport: "softap",
-        })
-      : null;
+    const snapshotFromBridge = await tryFetchRuntimeSnapshotFromBridge({
+      localIp: network.localIp,
+      runtimeBaseUrl,
+      ssid,
+      transport: "softap",
+      wifiBridge: args.wifiBridge,
+    });
     const snapshot = snapshotFromBridge
       ? snapshotFromBridge
       : await fetchAndBuildRuntimeSnapshot({
@@ -579,7 +598,7 @@ export async function enrollColdGuardDevice(args: {
     nickname: args.nickname.trim(),
   });
 
-  return await registerEnrolledDevice({
+  const registeredDevice = await registerEnrolledDevice({
     bleName: enrolledDevice.bleName,
     deviceId: enrolledDevice.deviceId,
     firmwareVersion: enrolledDevice.firmwareVersion,
@@ -587,6 +606,10 @@ export async function enrollColdGuardDevice(args: {
     nickname: args.nickname.trim() || `ColdGuard ${enrolledDevice.deviceId.slice(-4).toUpperCase()}`,
     protocolVersion: enrolledDevice.protocolVersion,
   });
+
+  await bootstrapDefaultDeviceMonitoring(enrolledDevice.deviceId);
+
+  return registeredDevice;
 }
 
 export async function connectOrRecoverDevice(args: {
@@ -756,6 +779,8 @@ export async function startDeviceMonitoring(deviceId: string) {
       throw new Error(MONITORING_NOTIFICATION_PERMISSION_ERROR);
     }
   }
+
+  await ensureMonitoringTransportPermissions();
 
   const [handshakeToken, connectActionTicket, config] = await Promise.all([
     getRequiredClinicHandshakeToken(),
@@ -1100,6 +1125,17 @@ async function getRequiredClinicHandshakeToken() {
   return handshakeToken;
 }
 
+export async function bootstrapDefaultDeviceMonitoring(deviceId: string) {
+  await upsertDeviceRuntimeConfig(deviceId, {
+    lastMonitorError: null,
+    lastRuntimeError: null,
+    monitoringMode: "foreground_service",
+    sessionStatus: "connecting",
+  });
+
+  return await startDeviceMonitoring(deviceId);
+}
+
 async function ensureWifiBridgePermissions() {
   if (Platform.OS !== "android") {
     return;
@@ -1109,10 +1145,10 @@ async function ensureWifiBridgePermissions() {
     return;
   }
 
-  const permissions = [
-    PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES ?? "android.permission.NEARBY_WIFI_DEVICES",
-    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION ?? "android.permission.ACCESS_FINE_LOCATION",
-  ].filter(Boolean);
+  const permissions =
+    typeof Platform.Version === "number" && Platform.Version >= 33
+      ? [PermissionsAndroid.PERMISSIONS.NEARBY_WIFI_DEVICES ?? "android.permission.NEARBY_WIFI_DEVICES"]
+      : [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION ?? "android.permission.ACCESS_FINE_LOCATION"];
 
   if (permissions.length === 0) {
     return;
@@ -1123,6 +1159,39 @@ async function ensureWifiBridgePermissions() {
   if (denied) {
     throw new Error("WIFI_PERMISSION_REQUIRED");
   }
+}
+
+async function ensureBleTransportPermissions() {
+  if (Platform.OS !== "android") {
+    return;
+  }
+
+  if (!PermissionsAndroid?.requestMultiple || !PermissionsAndroid?.PERMISSIONS) {
+    return;
+  }
+
+  const permissions =
+    typeof Platform.Version === "number" && Platform.Version >= 31
+      ? [
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT ?? "android.permission.BLUETOOTH_CONNECT",
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN ?? "android.permission.BLUETOOTH_SCAN",
+        ]
+      : [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION ?? "android.permission.ACCESS_FINE_LOCATION"];
+
+  if (permissions.length === 0) {
+    return;
+  }
+
+  const statuses = await PermissionsAndroid.requestMultiple(permissions);
+  const denied = Object.values(statuses).some((status) => status !== PermissionsAndroid.RESULTS.GRANTED);
+  if (denied) {
+    throw new Error("BLE_PERMISSION_REQUIRED");
+  }
+}
+
+async function ensureMonitoringTransportPermissions() {
+  await ensureBleTransportPermissions();
+  await ensureWifiBridgePermissions();
 }
 
 function delay(ms: number) {

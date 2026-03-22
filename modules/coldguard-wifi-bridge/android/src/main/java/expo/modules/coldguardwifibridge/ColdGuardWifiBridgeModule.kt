@@ -59,30 +59,39 @@ class ColdGuardWifiBridgeModule : Module() {
     val network = controller.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
     val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
     val failures = mutableListOf<String>()
-    var alertsJson: String? = null
-    var statusJson: String? = null
-
-    try {
-      alertsJson = fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network)
+    val statusJson = try {
+      fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network)
     } catch (error: IOException) {
-      failures += "/api/v1/runtime/alerts: ${error.message ?: "request failed"}"
+      failures += "/api/v1/runtime/status: ${error.message ?: "request failed"}"
+      null
+    }
+
+    if (statusJson == null) {
+      throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
     }
 
     try {
-      statusJson = fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network)
+      val resolvedAlertsJson =
+        if (statusJson.contains("\"alerts\"")) {
+          statusJson
+        } else {
+          fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network)
+        }
+
+      return mapOf(
+        "alertsJson" to resolvedAlertsJson,
+        "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
+        "statusJson" to statusJson,
+      )
     } catch (error: IOException) {
-      failures += "/api/v1/runtime/status: ${error.message ?: "request failed"}"
+      failures += "/api/v1/runtime/alerts: ${error.message ?: "request failed"}"
     }
 
     if (failures.isNotEmpty()) {
       throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
     }
 
-    return mapOf(
-      "alertsJson" to (alertsJson ?: throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")),
-      "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
-      "statusJson" to (statusJson ?: throw IOException("WIFI_BRIDGE_STATUS_RESPONSE_MISSING")),
-    )
+    throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")
   }
 
   private fun releaseNetworkBinding() {

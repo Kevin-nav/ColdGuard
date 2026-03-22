@@ -8,6 +8,7 @@ const mockReplace = jest.fn();
 const mockRefreshDevices = jest.fn();
 const mockListAssignableNurses = jest.fn();
 const mockAssignColdGuardDevice = jest.fn();
+const mockBootstrapDefaultDeviceMonitoring = jest.fn();
 const mockConnectOrRecoverDevice = jest.fn();
 const mockGetDeviceRuntimeSession = jest.fn();
 const mockRunColdGuardConnectionTest = jest.fn();
@@ -78,6 +79,7 @@ jest.mock("../../../../src/features/devices/services/device-directory", () => ({
 
 jest.mock("../../../../src/features/devices/services/connection-service", () => ({
   assignColdGuardDevice: (args: unknown) => mockAssignColdGuardDevice(args),
+  bootstrapDefaultDeviceMonitoring: (deviceId: string) => mockBootstrapDefaultDeviceMonitoring(deviceId),
   connectOrRecoverDevice: (args: unknown) => mockConnectOrRecoverDevice(args),
   decommissionColdGuardDevice: (args: unknown) => mockDecommissionColdGuardDevice(args),
   getDeviceRuntimeSession: (deviceId: string) => mockGetDeviceRuntimeSession(deviceId),
@@ -99,6 +101,25 @@ beforeEach(() => {
     },
   ]);
   mockAssignColdGuardDevice.mockResolvedValue(undefined);
+  mockBootstrapDefaultDeviceMonitoring.mockResolvedValue({
+    activeRuntimeBaseUrl: "http://192.168.4.1",
+    activeTransport: "softap",
+    deviceId: "device-1",
+    facilityWifiPassword: null,
+    facilityWifiRuntimeBaseUrl: null,
+    facilityWifiSsid: null,
+    softApPassword: "softap-secret",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: Date.now(),
+    lastMonitorError: null,
+    lastPingAt: null,
+    lastRecoverAt: Date.now(),
+    lastRuntimeError: null,
+    monitoringMode: "foreground_service",
+    sessionStatus: "connecting",
+    updatedAt: 1,
+  });
   mockConnectOrRecoverDevice.mockResolvedValue({
     transport: "softap",
   });
@@ -147,6 +168,13 @@ test("shows supervisor assignment controls", async () => {
   expect(mockConnectOrRecoverDevice).not.toHaveBeenCalled();
 });
 
+test("bootstraps monitoring automatically when the device page opens", async () => {
+  render(<DeviceDetailsScreen />);
+
+  await waitFor(() => expect(mockBootstrapDefaultDeviceMonitoring).toHaveBeenCalledWith("device-1"));
+  expect(mockRefreshDevices).toHaveBeenCalled();
+});
+
 test("runs the connection test from device detail", async () => {
   const ui = render(<DeviceDetailsScreen />);
 
@@ -176,7 +204,7 @@ test("shows pending for an idle connection status", async () => {
   expect(ui.queryByText("Running")).toBeNull();
   expect(ui.getByText("Reconnect")).toBeTruthy();
   expect(ui.getByText("Diagnostics")).toBeTruthy();
-  expect(ui.getByText("Enable monitoring")).toBeTruthy();
+  expect(ui.getByText("Disable monitoring")).toBeTruthy();
   expect(ui.getByText("Save facility Wi-Fi")).toBeTruthy();
 });
 
@@ -184,10 +212,10 @@ test("shows a monitoring permission error instead of pretending monitoring was e
   mockStartDeviceMonitoring.mockRejectedValueOnce(
     new Error("Allow notifications to start ColdGuard background monitoring on this device."),
   );
+  mockBootstrapDefaultDeviceMonitoring.mockRejectedValueOnce(
+    new Error("Allow notifications to start ColdGuard background monitoring on this device."),
+  );
   const ui = render(<DeviceDetailsScreen />);
-
-  await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
-  fireEvent.press(ui.getByText("Enable monitoring"));
 
   await waitFor(() =>
     expect(

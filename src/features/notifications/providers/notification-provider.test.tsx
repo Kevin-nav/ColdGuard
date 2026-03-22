@@ -8,6 +8,7 @@ const mockUseNetworkStatus = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockListMonitoredDeviceRuntimeConfigs = jest.fn();
 const mockPollMonitoredDeviceRuntime = jest.fn();
+const mockStartDeviceMonitoring = jest.fn();
 const mockGetNativeMonitoringServiceStatuses = jest.fn();
 const mockSyncNotificationInbox = jest.fn();
 const mockSyncNotificationPreferences = jest.fn();
@@ -40,6 +41,7 @@ jest.mock("../../../lib/storage/sqlite/device-runtime-repository", () => ({
 
 jest.mock("../../devices/services/connection-service", () => ({
   pollMonitoredDeviceRuntime: (...args: unknown[]) => mockPollMonitoredDeviceRuntime(...args),
+  startDeviceMonitoring: (...args: unknown[]) => mockStartDeviceMonitoring(...args),
 }));
 
 jest.mock("../../devices/services/wifi-bridge", () => ({
@@ -120,6 +122,7 @@ beforeEach(() => {
     },
   ]);
   mockPollMonitoredDeviceRuntime.mockResolvedValue(undefined);
+  mockStartDeviceMonitoring.mockResolvedValue(undefined);
   mockSyncNotificationInbox.mockResolvedValue({
     incidents: [],
     syncError: null,
@@ -153,6 +156,7 @@ test("skips JS polling for devices already owned by the native monitoring servic
   await waitFor(() => expect(ui.getByText("ready")).toBeTruthy());
 
   expect(mockGetNativeMonitoringServiceStatuses).toHaveBeenCalled();
+  expect(mockStartDeviceMonitoring).toHaveBeenCalledWith("device-2");
   expect(mockListMonitoredDeviceRuntimeConfigs).toHaveBeenCalledWith({
     excludeDeviceIds: ["device-1"],
   });

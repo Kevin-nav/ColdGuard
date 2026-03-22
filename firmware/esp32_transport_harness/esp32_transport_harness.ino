@@ -8,12 +8,13 @@
 #include <WebServer.h>
 
 #include "src/ble_recovery.h"
+#include "src/device_ui.h"
 #include "src/device_state.h"
 #include "src/wifi_runtime.h"
 
 namespace {
 
-constexpr char kFirmwareVersion[] = "cg-transport-0.1.1";
+constexpr char kFirmwareVersion[] = "cg-transport-0.1.2";
 constexpr uint8_t kProtocolVersion = 1;
 constexpr unsigned long kProofWindowMs = 5UL * 60UL * 1000UL;
 constexpr unsigned long kVerifiedSessionWindowMs = 60UL * 1000UL;
@@ -25,6 +26,14 @@ constexpr char kActionTicketMasterKey[] = "coldguard-test-master-key";
 constexpr char kServiceUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110";
 constexpr char kCommandCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C111";
 constexpr char kResponseCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C112";
+constexpr uint8_t kTouchPin = T0;
+constexpr uint8_t kBuiltInLedPin = 2;
+constexpr uint8_t kLcdI2cAddress = 0x27;
+constexpr uint8_t kLcdColumns = 16;
+constexpr uint8_t kLcdRows = 2;
+constexpr float kTouchThresholdFactor = 0.40f;
+constexpr unsigned long kTouchDebounceMs = 200UL;
+constexpr unsigned long kTouchLongPressMs = 700UL;
 
 Preferences preferences;
 WebServer webServer(80);
@@ -44,9 +53,19 @@ constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
   kProtocolVersion,
 };
 
-String buildEnrollmentLink(const coldguard::DeviceState& state) {
-  return "https://coldguard.org/device/" + state.deviceId + "?claim=" + state.bootstrapToken + "&v=1";
-}
+constexpr coldguard::DeviceUiConfig kDeviceUiConfig = {
+  kTouchPin,
+  kBuiltInLedPin,
+  kLcdI2cAddress,
+  kLcdColumns,
+  kLcdRows,
+  kTouchThresholdFactor,
+  kTouchDebounceMs,
+  kTouchLongPressMs,
+  kFirmwareVersion,
+  kProtocolVersion,
+  kServiceUuid,
+};
 
 void logSecretValue(const String& label, const String& value) {
   if (kVerboseSecretLogging) {
@@ -177,6 +196,8 @@ void setup() {
   Serial.println("[BOOT] setup: serial ready");
   Serial.println("[BOOT] setup: loading device state");
   coldguard::loadDeviceState(preferences, kPreferencesNamespace, &deviceState);
+  Serial.println("[BOOT] setup: initializing device UI");
+  coldguard::initializeDeviceUi(kDeviceUiConfig);
   Serial.println("[BOOT] setup: starting wifi runtime tick");
   coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
   Serial.println("[BOOT] setup: initializing BLE");
@@ -184,15 +205,16 @@ void setup() {
   Serial.println("[BOOT] setup: init complete");
 
   Serial.println("ColdGuard ESP32 transport harness ready");
-  Serial.println("Device ID: " + deviceState.deviceId);
+  Serial.println(String("Device ID: ") + deviceState.deviceId);
   logSecretValue("Bootstrap Token: ", deviceState.bootstrapToken);
-  Serial.println("Enrollment Link: " + coldguard::buildEnrollmentLink(deviceState));
-  Serial.println("BLE Name: " + deviceState.bleName);
-  Serial.println("MAC: " + deviceState.macAddress);
+  Serial.println(String("Enrollment Link: ") + coldguard::buildEnrollmentLink(deviceState));
+  Serial.println(String("BLE Name: ") + deviceState.bleName);
+  Serial.println(String("MAC: ") + deviceState.macAddress);
 }
 
 void loop() {
   coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
+  coldguard::tickDeviceUi(&deviceState, preferences, webServer, advertising);
   if (deviceState.accessPointStarted || deviceState.stationConnected) {
     webServer.handleClient();
   }

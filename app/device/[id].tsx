@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
 import { Redirect, router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
@@ -25,6 +26,7 @@ import {
   stopDeviceMonitoring,
 } from "../../src/features/devices/services/connection-service";
 import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
+import { presentDeviceError, type PresentedDeviceError } from "../../src/features/devices/services/error-presenter";
 import type { DeviceAssignmentCandidate, DeviceRuntimeConfig } from "../../src/features/devices/types";
 
 function getStatusColor(status: DeviceRecord["mktStatus"], colors: ReturnType<typeof useTheme>["colors"]) {
@@ -129,7 +131,8 @@ export default function DeviceDetailsScreen() {
   const styles = useMemo(() => createSharedStyles(colors), [colors]);
   const { devices, error, isLoading, profile, refreshDevices } = useDashboardContext();
   const [assignableNurses, setAssignableNurses] = useState<DeviceAssignmentCandidate[]>([]);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<PresentedDeviceError | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [isSavingAssignments, setIsSavingAssignments] = useState(false);
   const [isRunningConnectionTest, setIsRunningConnectionTest] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
@@ -182,7 +185,7 @@ export default function DeviceDetailsScreen() {
       } catch (nextError) {
         if (!isMounted) return;
         setAssignableNurses([]);
-        setActionMessage(nextError instanceof Error ? nextError.message : "Assignment options could not be loaded.");
+          setActionFeedback(presentDeviceError(nextError, "Assignment options could not be loaded."));
       }
     }
 
@@ -311,7 +314,8 @@ export default function DeviceDetailsScreen() {
 
   async function handleSaveAssignments() {
     setIsSavingAssignments(true);
-    setActionMessage(null);
+    setActionFeedback(null);
+    setCopyMessage(null);
 
     try {
       await assignColdGuardDevice({
@@ -320,9 +324,9 @@ export default function DeviceDetailsScreen() {
         viewerStaffIds: viewerStaffIds.filter((staffId) => staffId !== primaryStaffId),
       });
       await refreshDevices();
-      setActionMessage("Assignments saved.");
+      setActionFeedback({ developerCode: null, userMessage: "Assignments saved." });
     } catch (nextError) {
-      setActionMessage(nextError instanceof Error ? nextError.message : "Assignments could not be saved.");
+      setActionFeedback(presentDeviceError(nextError, "Assignments could not be saved."));
     } finally {
       setIsSavingAssignments(false);
     }
@@ -330,16 +334,17 @@ export default function DeviceDetailsScreen() {
 
   async function handleRunConnectionTest() {
     setIsRunningConnectionTest(true);
-    setActionMessage(null);
+    setActionFeedback(null);
+    setCopyMessage(null);
 
     try {
       const result = await runColdGuardConnectionTest({ deviceId: activeDevice.id });
       await refreshDevices();
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionMessage(result.statusText || "Connection test completed.");
+      setActionFeedback({ developerCode: null, userMessage: result.statusText || "Connection test completed." });
     } catch (nextError) {
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionMessage(nextError instanceof Error ? nextError.message : "Connection test failed.");
+      setActionFeedback(presentDeviceError(nextError, "Connection test failed."));
     } finally {
       setIsRunningConnectionTest(false);
     }
@@ -347,16 +352,17 @@ export default function DeviceDetailsScreen() {
 
   async function handleReconnect() {
     setIsReconnecting(true);
-    setActionMessage(null);
+    setActionFeedback(null);
+    setCopyMessage(null);
 
     try {
       const result = await connectOrRecoverDevice({ deviceId: activeDevice.id });
       await refreshDevices();
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionMessage(`Connected over ${formatRuntimeTransportLabel(result.transport)}.`);
+      setActionFeedback({ developerCode: null, userMessage: `Connected over ${formatRuntimeTransportLabel(result.transport)}.` });
     } catch (nextError) {
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionMessage(nextError instanceof Error ? nextError.message : "Reconnect failed.");
+      setActionFeedback(presentDeviceError(nextError, "Reconnect failed."));
     } finally {
       setIsReconnecting(false);
     }
@@ -364,12 +370,13 @@ export default function DeviceDetailsScreen() {
 
   async function handleProvisionFacilityWifi() {
     if (!facilityWifiSsid.trim() || !facilityWifiPassword.trim()) {
-      setActionMessage("Enter both the facility Wi-Fi name and password.");
+      setActionFeedback({ developerCode: null, userMessage: "Enter both the facility Wi-Fi name and password." });
       return;
     }
 
     setIsProvisioningWifi(true);
-    setActionMessage(null);
+    setActionFeedback(null);
+    setCopyMessage(null);
 
     try {
       const result = await provisionFacilityWifi({
@@ -378,10 +385,10 @@ export default function DeviceDetailsScreen() {
         ssid: facilityWifiSsid.trim(),
       });
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionMessage(`Saved facility Wi-Fi. Runtime URL: ${result.runtimeBaseUrl}`);
+      setActionFeedback({ developerCode: null, userMessage: `Saved facility Wi-Fi. Runtime URL: ${result.runtimeBaseUrl}` });
     } catch (nextError) {
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionMessage(nextError instanceof Error ? nextError.message : "Facility Wi-Fi setup failed.");
+      setActionFeedback(presentDeviceError(nextError, "Facility Wi-Fi setup failed."));
     } finally {
       setIsProvisioningWifi(false);
     }
@@ -389,7 +396,8 @@ export default function DeviceDetailsScreen() {
 
   async function handleToggleMonitoring() {
     setIsTogglingMonitoring(true);
-    setActionMessage(null);
+    setActionFeedback(null);
+    setCopyMessage(null);
 
     try {
       const nextSession =
@@ -397,13 +405,15 @@ export default function DeviceDetailsScreen() {
           ? await stopDeviceMonitoring(activeDevice.id)
           : await startDeviceMonitoring(activeDevice.id);
       setRuntimeSession(nextSession);
-      setActionMessage(
-        nextSession.monitoringMode === "foreground_service"
-          ? "Background monitoring armed."
-          : "Background monitoring paused.",
-      );
+      setActionFeedback({
+        developerCode: null,
+        userMessage:
+          nextSession.monitoringMode === "foreground_service"
+            ? "Background monitoring armed."
+            : "Background monitoring paused.",
+      });
     } catch (nextError) {
-      setActionMessage(nextError instanceof Error ? nextError.message : "Monitoring could not be updated.");
+      setActionFeedback(presentDeviceError(nextError, "Monitoring could not be updated."));
     } finally {
       setIsTogglingMonitoring(false);
     }
@@ -413,17 +423,21 @@ export default function DeviceDetailsScreen() {
     const latestSession = await getDeviceRuntimeSession(activeDevice.id);
     setRuntimeSession(latestSession);
     if (!latestSession) {
-      setActionMessage("No runtime session has been established yet.");
+      setActionFeedback({ developerCode: null, userMessage: "No runtime session has been established yet." });
       return;
     }
-    setActionMessage(
-      `Transport: ${formatRuntimeTransportLabel(latestSession.activeTransport)} | Session: ${formatRuntimeSessionLabel(latestSession.sessionStatus)}${latestSession.lastRuntimeError ? ` | Last error: ${latestSession.lastRuntimeError}` : ""}`,
-    );
+    setActionFeedback({
+      developerCode: latestSession.lastRuntimeError ?? null,
+      userMessage:
+        `Transport: ${formatRuntimeTransportLabel(latestSession.activeTransport)} | Session: ${formatRuntimeSessionLabel(latestSession.sessionStatus)}` +
+        (latestSession.lastRuntimeError ? " | Review developer code for the last transport error." : ""),
+    });
   }
 
   async function handleRemoveDevice() {
     setIsRemovingDevice(true);
-    setActionMessage(null);
+    setActionFeedback(null);
+    setCopyMessage(null);
 
     try {
       await decommissionColdGuardDevice({
@@ -433,10 +447,19 @@ export default function DeviceDetailsScreen() {
       await refreshDevices();
       router.replace("/(tabs)/devices");
     } catch (nextError) {
-      setActionMessage(nextError instanceof Error ? nextError.message : "Device removal failed.");
+      setActionFeedback(presentDeviceError(nextError, "Device removal failed."));
     } finally {
       setIsRemovingDevice(false);
     }
+  }
+
+  async function handleCopyDeveloperCode() {
+    if (!actionFeedback?.developerCode) {
+      return;
+    }
+
+    await Clipboard.setStringAsync(actionFeedback.developerCode);
+    setCopyMessage("Developer code copied.");
   }
 
   return (
@@ -571,7 +594,18 @@ export default function DeviceDetailsScreen() {
               {isProvisioningWifi ? "Saving Wi-Fi..." : "Save facility Wi-Fi"}
             </Text>
           </Pressable>
-          {actionMessage ? <Text style={styles.helperText}>{actionMessage}</Text> : null}
+          {actionFeedback ? <Text style={styles.helperText}>{actionFeedback.userMessage}</Text> : null}
+          {actionFeedback?.developerCode ? (
+            <View style={localStyles.developerCodeBlock}>
+              <Text selectable style={styles.helperText}>
+                Developer code: {actionFeedback.developerCode}
+              </Text>
+              <Pressable onPress={() => void handleCopyDeveloperCode()} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>Copy developer code</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {copyMessage ? <Text style={styles.helperText}>{copyMessage}</Text> : null}
         </PanelCard>
       </DashboardSection>
 
@@ -782,6 +816,10 @@ const localStyles = StyleSheet.create({
   },
   actionButtons: {
     gap: spacing.sm,
+  },
+  developerCodeBlock: {
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
   assignmentChip: {
     borderRadius: 999,

@@ -21,6 +21,7 @@ import android.util.Base64
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -409,48 +410,83 @@ class ColdGuardBleRecoveryController(private val context: Context) {
     }
 
     companion object {
+      private const val CONNECT_RETRY_DELAY_MS = 750L
+      private const val CONNECT_RETRY_MAX_ATTEMPTS = 3
+
       suspend fun connect(context: Context, device: BluetoothDevice): ColdGuardBleGattSession {
-        val callback = SessionCallback()
-        val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-          device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
-        } else {
-          @Suppress("DEPRECATION")
-          device.connectGatt(context, false, callback)
-        } ?: throw IllegalStateException("BLE_GATT_CONNECT_FAILED")
+        var lastError: Exception? = null
 
-        val services = withTimeout(15_000L) {
-          callback.servicesDiscovered.await()
-        }
-        val service = services.firstOrNull { it.uuid == COLDGUARD_BLE_SERVICE_UUID }
-          ?: throw IllegalStateException("BLE_SERVICE_NOT_FOUND")
-        val commandCharacteristic = service.getCharacteristic(COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID)
-          ?: throw IllegalStateException("BLE_COMMAND_CHARACTERISTIC_NOT_FOUND")
-        val responseCharacteristic = service.getCharacteristic(COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID)
-          ?: throw IllegalStateException("BLE_RESPONSE_CHARACTERISTIC_NOT_FOUND")
+        for (attempt in 1..CONNECT_RETRY_MAX_ATTEMPTS) {
+          var gatt: BluetoothGatt? = null
+          try {
+            val callback = SessionCallback()
+            gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+              device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
+            } else {
+              @Suppress("DEPRECATION")
+              device.connectGatt(context, false, callback)
+            } ?: throw IllegalStateException("BLE_GATT_CONNECT_FAILED")
 
-        val notificationsEnabled = gatt.setCharacteristicNotification(responseCharacteristic, true)
-        if (!notificationsEnabled) {
-          throw IllegalStateException("BLE_NOTIFICATION_ENABLE_FAILED")
-        }
-        val descriptor = responseCharacteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID)
-          ?: throw IllegalStateException("BLE_RESPONSE_DESCRIPTOR_NOT_FOUND")
-        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-        callback.prepareDescriptorWrite()
-        @Suppress("DEPRECATION")
-        val descriptorWriteStarted = gatt.writeDescriptor(descriptor)
-        if (!descriptorWriteStarted) {
-          callback.clearPendingDescriptorWrite()
-          throw IllegalStateException("BLE_DESCRIPTOR_WRITE_FAILED")
-        }
-        withTimeout(RESPONSE_TIMEOUT_MS) {
-          callback.pendingDescriptorWrite?.await()
+            val services = withTimeout(15_000L) {
+              callback.servicesDiscovered.await()
+            }
+            val service = services.firstOrNull { it.uuid == COLDGUARD_BLE_SERVICE_UUID }
+              ?: throw IllegalStateException("BLE_SERVICE_NOT_FOUND")
+            val commandCharacteristic = service.getCharacteristic(COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID)
+              ?: throw IllegalStateException("BLE_COMMAND_CHARACTERISTIC_NOT_FOUND")
+            val responseCharacteristic = service.getCharacteristic(COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID)
+              ?: throw IllegalStateException("BLE_RESPONSE_CHARACTERISTIC_NOT_FOUND")
+
+            val notificationsEnabled = gatt.setCharacteristicNotification(responseCharacteristic, true)
+            if (!notificationsEnabled) {
+              throw IllegalStateException("BLE_NOTIFICATION_ENABLE_FAILED")
+            }
+            val descriptor = responseCharacteristic.getDescriptor(CLIENT_CHARACTERISTIC_CONFIG_UUID)
+              ?: throw IllegalStateException("BLE_RESPONSE_DESCRIPTOR_NOT_FOUND")
+            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            callback.prepareDescriptorWrite()
+            @Suppress("DEPRECATION")
+            val descriptorWriteStarted = gatt.writeDescriptor(descriptor)
+            if (!descriptorWriteStarted) {
+              callback.clearPendingDescriptorWrite()
+              throw IllegalStateException("BLE_DESCRIPTOR_WRITE_FAILED")
+            }
+            withTimeout(RESPONSE_TIMEOUT_MS) {
+              callback.pendingDescriptorWrite?.await()
+            }
+
+            return ColdGuardBleGattSession(
+              gatt = gatt,
+              commandCharacteristic = commandCharacteristic,
+              callback = callback,
+            )
+          } catch (error: Exception) {
+            lastError = error
+            try {
+              gatt?.disconnect()
+            } catch (_: Exception) {
+            }
+            try {
+              gatt?.close()
+            } catch (_: Exception) {
+            }
+            if (attempt < CONNECT_RETRY_MAX_ATTEMPTS && isTransientConnectError(error)) {
+              delay(CONNECT_RETRY_DELAY_MS)
+              continue
+            }
+            throw error
+          }
         }
 
-        return ColdGuardBleGattSession(
-          gatt = gatt,
-          commandCharacteristic = commandCharacteristic,
-          callback = callback,
-        )
+        throw lastError ?: IllegalStateException("BLE_GATT_CONNECT_FAILED")
+      }
+
+      private fun isTransientConnectError(error: Exception): Boolean {
+        val message = error.message?.lowercase(Locale.US) ?: return false
+        return message.contains("not_found") ||
+          message.contains("discover") ||
+          message.contains("gatt") ||
+          message.contains("disconnected")
       }
     }
 

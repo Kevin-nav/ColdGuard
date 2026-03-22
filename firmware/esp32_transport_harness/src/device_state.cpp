@@ -128,7 +128,13 @@ String uint64ToString(uint64_t value) {
 }
 
 String observableEnrollmentState(const DeviceState& state) {
-  return state.pendingEnrollment.active ? "pending" : state.enrollmentState;
+  if (state.pendingEnrollment.active) {
+    return "pending";
+  }
+  if (state.enrollmentState == "enrolled") {
+    return "enrolled";
+  }
+  return state.enrollmentReady ? "ready" : "blank";
 }
 
 uint64_t currentDeviceTimeMs() {
@@ -156,12 +162,14 @@ void loadDeviceState(Preferences& preferences, const char* preferencesNamespace,
     state->wifiPassword = generateWifiPassword();
     preferences.putString("wifi_pw", state->wifiPassword);
   }
+  state->enrollmentReady = preferences.getBool("enroll_ready", false);
   state->facilityWifiSsid = preferences.getString("fac_wifi_ssid", "");
   state->facilityWifiPassword = preferences.getString("fac_wifi_pw", "");
   state->enrollmentState = preferences.getString("state", "blank");
   state->institutionId = preferences.getString("institution", "");
   state->deviceNickname = preferences.getString("nickname", "");
   state->handshakeToken = preferences.getString("handshake", "");
+  state->lastErrorCode = preferences.getString("last_error", "");
   state->grantVersion = preferences.getUInt("grantVer", 0);
 }
 
@@ -169,12 +177,14 @@ void saveDeviceState(Preferences& preferences, const DeviceState& state) {
   preferences.putString("deviceId", state.deviceId);
   preferences.putString("bootstrap", state.bootstrapToken);
   preferences.putString("wifi_pw", state.wifiPassword);
+  preferences.putBool("enroll_ready", state.enrollmentReady);
   preferences.putString("fac_wifi_ssid", state.facilityWifiSsid);
   preferences.putString("fac_wifi_pw", state.facilityWifiPassword);
   preferences.putString("state", state.enrollmentState);
   preferences.putString("institution", state.institutionId);
   preferences.putString("nickname", state.deviceNickname);
   preferences.putString("handshake", state.handshakeToken);
+  preferences.putString("last_error", state.lastErrorCode);
   preferences.putUInt("grantVer", state.grantVersion);
 }
 
@@ -183,6 +193,7 @@ void clearEnrollmentState(DeviceState* state) {
   state->institutionId = "";
   state->deviceNickname = "";
   state->handshakeToken = "";
+  state->enrollmentReady = false;
   state->grantVersion = 0;
   state->pendingEnrollment = PendingEnrollment{};
   state->verifiedSessionUntilMs = 0;
@@ -190,11 +201,17 @@ void clearEnrollmentState(DeviceState* state) {
   state->lastHeartbeatAtMs = 0;
   state->lastStationConnectAttemptMs = 0;
   state->lastVerifiedPermission = "";
+  state->lastErrorCode = "";
   state->facilityWifiSsid = "";
   state->facilityWifiPassword = "";
   state->runtimeServerStarted = false;
   state->stationConnected = false;
+}
+
+void prepareNewEnrollment(DeviceState* state) {
+  clearEnrollmentState(state);
   state->bootstrapToken = generateBootstrapToken();
+  state->enrollmentReady = true;
 }
 
 }  // namespace coldguard

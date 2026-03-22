@@ -1,6 +1,7 @@
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import DeviceDetailsScreen from "../../../../app/device/[id]";
 
+const mockCopyToClipboard = jest.fn();
 const mockBack = jest.fn();
 const mockCanGoBack = jest.fn();
 const mockReplace = jest.fn();
@@ -22,6 +23,10 @@ jest.mock("expo-router", () => ({
     replace: (path: string) => mockReplace(path),
   },
   useLocalSearchParams: () => ({ id: "device-1" }),
+}));
+
+jest.mock("expo-clipboard", () => ({
+  setStringAsync: (value: string) => mockCopyToClipboard(value),
 }));
 
 jest.mock("../../../../src/features/dashboard/hooks/use-dashboard-context", () => ({
@@ -189,4 +194,22 @@ test("shows a monitoring permission error instead of pretending monitoring was e
       ui.getByText("Allow notifications to start ColdGuard background monitoring on this device."),
     ).toBeTruthy(),
   );
+});
+
+test("shows a user-facing reconnect error and lets developers copy the raw code", async () => {
+  mockConnectOrRecoverDevice.mockRejectedValueOnce(new Error("WIFI_PERMISSION_REQUIRED"));
+  const ui = render(<DeviceDetailsScreen />);
+
+  await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
+  fireEvent.press(ui.getByText("Reconnect"));
+
+  await waitFor(() =>
+    expect(ui.getByText("Allow Wi-Fi and location access to connect to the device.")).toBeTruthy(),
+  );
+  expect(ui.getByText("Developer code: WIFI_PERMISSION_REQUIRED")).toBeTruthy();
+
+  fireEvent.press(ui.getByText("Copy developer code"));
+
+  await waitFor(() => expect(mockCopyToClipboard).toHaveBeenCalledWith("WIFI_PERMISSION_REQUIRED"));
+  expect(ui.getByText("Developer code copied.")).toBeTruthy();
 });

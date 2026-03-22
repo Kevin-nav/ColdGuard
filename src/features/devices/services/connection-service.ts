@@ -77,6 +77,7 @@ type RemoteConnectionPayload = Omit<ColdGuardConnectionPayload, "lastSeenAt"> & 
 const DEVICE_CONNECTION_SYNC_JOB_TYPE = "device_connection_test_reconciliation";
 const MONITORING_NOTIFICATION_PERMISSION_ERROR =
   "Allow notifications to start ColdGuard background monitoring on this device.";
+const FACILITY_WIFI_PROOF_WINDOW_MS = 15 * 60 * 1000;
 
 function getMonitoringStatusForDevice(
   statuses: Record<
@@ -416,6 +417,22 @@ async function connectViaFacilityWifi(deviceId: string) {
   return snapshot;
 }
 
+function hasProvenFacilityWifiPath(config: Awaited<ReturnType<typeof getDeviceRuntimeConfig>>) {
+  if (!config?.facilityWifiRuntimeBaseUrl) {
+    return false;
+  }
+
+  if (config.activeTransport !== "facility_wifi") {
+    return false;
+  }
+
+  if (!config.lastPingAt) {
+    return false;
+  }
+
+  return Date.now() - config.lastPingAt <= FACILITY_WIFI_PROOF_WINDOW_MS;
+}
+
 async function connectViaSoftAp(args: {
   bleClient: ColdGuardBleClient;
   deviceId: string;
@@ -581,14 +598,60 @@ export async function connectOrRecoverDevice(args: {
   if (!device) {
     throw new Error("DEVICE_NOT_FOUND");
   }
+  const config = await getDeviceRuntimeConfig(args.deviceId);
 
   await upsertDeviceRuntimeConfig(args.deviceId, {
     lastRuntimeError: null,
     sessionStatus: "connecting",
   });
 
-  // Priority: WiFi Direct (SoftAP) first → facility WiFi → BLE-renegotiated SoftAP.
   const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
+  const preferFacilityWifiFirst = hasProvenFacilityWifiPath(config);
+
+  const connectWithBleRecoveryFallback = async (errorMessage: string) => {
+    const bleClient = args.bleClient ?? realBleClient;
+
+    try {
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        lastRuntimeError: errorMessage,
+        sessionStatus: "recovering",
+      });
+      return await connectViaSoftAp({
+        bleClient,
+        deviceId: args.deviceId,
+        wifiBridge,
+      });
+    } catch (softApRecoveryError) {
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        activeRuntimeBaseUrl: null,
+        activeTransport: "ble_fallback",
+        lastRuntimeError: softApRecoveryError instanceof Error ? softApRecoveryError.message : "Runtime recovery failed.",
+        sessionStatus: "failed",
+      });
+      throw softApRecoveryError;
+    }
+  };
+
+  const connectWithFacilityFallback = async (facilityErrorMessage: string) => {
+    try {
+      return await connectViaFacilityWifi(args.deviceId);
+    } catch (facilityError) {
+      return await connectWithBleRecoveryFallback(
+        facilityError instanceof Error ? facilityError.message : facilityErrorMessage,
+      );
+    }
+  };
+
+  if (preferFacilityWifiFirst) {
+    try {
+      return await connectViaFacilityWifi(args.deviceId);
+    } catch (facilityError) {
+      await upsertDeviceRuntimeConfig(args.deviceId, {
+        lastRuntimeError: facilityError instanceof Error ? facilityError.message : "Facility Wi-Fi unavailable.",
+        sessionStatus: "recovering",
+      });
+    }
+  }
 
   try {
     return await connectViaStoredSoftAp({
@@ -596,37 +659,19 @@ export async function connectOrRecoverDevice(args: {
       wifiBridge,
     });
   } catch (softApDirectError) {
-    try {
-      await upsertDeviceRuntimeConfig(args.deviceId, {
-        lastRuntimeError:
-          softApDirectError instanceof Error
-            ? softApDirectError.message
-            : "Stored SoftAP unavailable.",
-        sessionStatus: "recovering",
-      });
-      return await connectViaFacilityWifi(args.deviceId);
-    } catch (facilityError) {
-      const bleClient = args.bleClient ?? realBleClient;
-      try {
-        await upsertDeviceRuntimeConfig(args.deviceId, {
-          lastRuntimeError: facilityError instanceof Error ? facilityError.message : "Facility Wi-Fi unavailable.",
-          sessionStatus: "recovering",
-        });
-        return await connectViaSoftAp({
-          bleClient,
-          deviceId: args.deviceId,
-          wifiBridge,
-        });
-      } catch (softApRecoveryError) {
-        await upsertDeviceRuntimeConfig(args.deviceId, {
-          activeRuntimeBaseUrl: null,
-          activeTransport: "ble_fallback",
-          lastRuntimeError: softApRecoveryError instanceof Error ? softApRecoveryError.message : "Runtime recovery failed.",
-          sessionStatus: "failed",
-        });
-        throw softApRecoveryError;
-      }
+    await upsertDeviceRuntimeConfig(args.deviceId, {
+      lastRuntimeError:
+        softApDirectError instanceof Error
+          ? softApDirectError.message
+          : "Stored SoftAP unavailable.",
+      sessionStatus: "recovering",
+    });
+
+    if (preferFacilityWifiFirst) {
+      return await connectWithBleRecoveryFallback("SoftAP recovery failed.");
     }
+
+    return await connectWithFacilityFallback("Facility Wi-Fi unavailable.");
   }
 }
 
@@ -726,8 +771,13 @@ export async function startDeviceMonitoring(deviceId: string) {
     config.softApRuntimeBaseUrl ??
     (config.activeTransport === "softap" ? config.activeRuntimeBaseUrl : null);
   const monitoringTransport =
-    config.activeTransport ??
-    (facilityWifiRuntimeBaseUrl ? "facility_wifi" : softApRuntimeBaseUrl ? "softap" : "ble_fallback");
+    config.activeTransport === "facility_wifi" && facilityWifiRuntimeBaseUrl
+      ? "facility_wifi"
+      : softApRuntimeBaseUrl
+        ? "softap"
+        : facilityWifiRuntimeBaseUrl
+          ? "facility_wifi"
+          : "ble_fallback";
 
   const serviceStatuses = await startNativeMonitoringDevice({
     connectActionTicketJson: JSON.stringify(connectActionTicket),

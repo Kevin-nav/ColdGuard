@@ -255,35 +255,54 @@ class ColdGuardDeviceMonitoringService : Service() {
   }
 
   private suspend fun resolveRuntimePoll(currentOptions: MonitoringOptions, revision: Long): ResolvedRuntimePoll {
-    currentOptions.facilityWifiRuntimeBaseUrl
-      ?.takeIf { it.isNotBlank() }
-      ?.let { runtimeBaseUrl ->
-        ensureCurrentRevision(currentOptions.deviceId, revision)
-        try {
-          return fetchRuntimePoll(
-            network = null,
-            nextOptions = currentOptions.copy(transport = "facility_wifi"),
-            runtimeBaseUrl = runtimeBaseUrl,
-            transport = "facility_wifi",
-          )
-        } catch (_: Exception) {
-        }
-      }
-
     val softApRuntimeBaseUrl = currentOptions.softApRuntimeBaseUrl?.takeIf { it.isNotBlank() }
     val softApSsid = currentOptions.softApSsid?.takeIf { it.isNotBlank() }
     val softApPassword = currentOptions.softApPassword?.takeIf { it.isNotBlank() }
-    if (softApRuntimeBaseUrl != null && softApSsid != null && softApPassword != null) {
+    val facilityWifiRuntimeBaseUrl = currentOptions.facilityWifiRuntimeBaseUrl?.takeIf { it.isNotBlank() }
+
+    suspend fun tryFacilityWifi(): ResolvedRuntimePoll? {
+      if (facilityWifiRuntimeBaseUrl == null) {
+        return null
+      }
       ensureCurrentRevision(currentOptions.deviceId, revision)
-      try {
-        return fetchSoftApRuntimePoll(
+      return try {
+        fetchRuntimePoll(
+          network = null,
+          nextOptions = currentOptions.copy(transport = "facility_wifi"),
+          runtimeBaseUrl = facilityWifiRuntimeBaseUrl,
+          transport = "facility_wifi",
+        )
+      } catch (_: Exception) {
+        null
+      }
+    }
+
+    suspend fun tryStoredSoftAp(): ResolvedRuntimePoll? {
+      if (softApRuntimeBaseUrl == null || softApSsid == null || softApPassword == null) {
+        return null
+      }
+      ensureCurrentRevision(currentOptions.deviceId, revision)
+      return try {
+        fetchSoftApRuntimePoll(
           nextOptions = currentOptions.copy(transport = "softap"),
           password = softApPassword,
           runtimeBaseUrl = softApRuntimeBaseUrl,
           ssid = softApSsid,
         )
       } catch (_: Exception) {
+        null
       }
+    }
+
+    val preferredRuntimePoll =
+      if (currentOptions.transport == "facility_wifi") {
+        tryFacilityWifi() ?: tryStoredSoftAp()
+      } else {
+        tryStoredSoftAp() ?: tryFacilityWifi()
+      }
+
+    if (preferredRuntimePoll != null) {
+      return preferredRuntimePoll
     }
 
     ensureCurrentRevision(currentOptions.deviceId, revision)

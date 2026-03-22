@@ -55,7 +55,7 @@ export type ColdGuardDiscoveredDevice = {
   firmwareVersion: string;
   macAddress: string;
   protocolVersion: number;
-  state: "blank" | "enrolled" | "pending";
+  state: "blank" | "ready" | "enrolled" | "pending";
 };
 
 export type ColdGuardWifiTicket = {

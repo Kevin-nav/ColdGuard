@@ -1,5 +1,6 @@
 import {
   MockColdGuardBleClient,
+  connectOrRecoverDevice,
   decommissionColdGuardDevice,
   enrollColdGuardDevice,
   getDeviceRuntimeSession,
@@ -317,6 +318,38 @@ test("starts native monitoring with facility and softap recovery context", async
   });
 });
 
+test("starts monitoring on softap first when facility wifi is configured but not yet proven", async () => {
+  mockUpsertDeviceRuntimeConfig.mockResolvedValueOnce({
+    activeRuntimeBaseUrl: null,
+    activeTransport: null,
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: Date.now(),
+    lastMonitorError: null,
+    lastPingAt: null,
+    lastRecoverAt: null,
+    lastRuntimeError: null,
+    monitoringMode: "foreground_service",
+    sessionStatus: "idle",
+    updatedAt: Date.now(),
+  });
+
+  await startDeviceMonitoring("CG-ESP32-A100");
+
+  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+      softApRuntimeBaseUrl: "http://192.168.4.1",
+      transport: "softap",
+    }),
+  );
+});
+
 test("requests notification permission before starting background monitoring", async () => {
   mockGetLocalNotificationPermissionStatus.mockResolvedValueOnce("undetermined");
 
@@ -492,6 +525,83 @@ test("merges per-device native monitoring status into the runtime session", asyn
       monitoringMode: "foreground_service",
     }),
   );
+});
+
+test("prefers proven facility wifi over softap during reconnect", async () => {
+  jest.spyOn(Date, "now").mockReturnValue(2_000_000);
+  mockGetDeviceRuntimeConfig.mockResolvedValue({
+    activeRuntimeBaseUrl: "http://10.0.0.22",
+    activeTransport: "facility_wifi",
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: null,
+    lastMonitorError: null,
+    lastPingAt: 2_000_000,
+    lastRecoverAt: null,
+    lastRuntimeError: null,
+    monitoringMode: "off",
+    sessionStatus: "connected",
+    updatedAt: 2_000_000,
+  });
+
+  const wifiBridgeConnect = jest.fn();
+  const payload = await connectOrRecoverDevice({
+    deviceId: "CG-ESP32-A100",
+    wifiBridge: {
+      connect: wifiBridgeConnect,
+      release: async () => undefined,
+    },
+  });
+
+  expect(payload.transport).toBe("facility_wifi");
+  expect(wifiBridgeConnect).not.toHaveBeenCalled();
+});
+
+test("uses stored softap before facility wifi when facility path is not yet proven", async () => {
+  mockGetDeviceRuntimeConfig.mockResolvedValue({
+    activeRuntimeBaseUrl: null,
+    activeTransport: null,
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: null,
+    lastMonitorError: null,
+    lastPingAt: null,
+    lastRecoverAt: null,
+    lastRuntimeError: null,
+    monitoringMode: "off",
+    sessionStatus: "idle",
+    updatedAt: 1,
+  });
+
+  const payload = await connectOrRecoverDevice({
+    deviceId: "CG-ESP32-A100",
+    wifiBridge: {
+      connect: async () => ({
+        localIp: "192.168.4.2",
+        ssid: "ColdGuard_A100",
+      }),
+      fetchRuntimeSnapshot: async () => ({
+        alertsJson: "{\"alerts\":[]}",
+        runtimeBaseUrl: "http://192.168.4.1",
+        statusJson:
+          "{\"batteryLevel\":89,\"currentTempC\":4.7,\"doorOpen\":false,\"firmwareVersion\":\"fw-1.0.0\",\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Mock BLE-to-WiFi handover completed.\"}",
+      }),
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(payload.transport).toBe("softap");
+  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
 });
 
 test("runs a mock BLE-to-WiFi connection test and records success", async () => {

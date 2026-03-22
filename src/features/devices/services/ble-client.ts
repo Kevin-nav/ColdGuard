@@ -22,12 +22,13 @@ type HelloResponse = {
   deviceId: string;
   deviceNonce: string;
   deviceTimeMs: number;
+  enrollmentReady: boolean;
   firmwareVersion: string;
   macAddress: string;
   ok: boolean;
   protocolVersion: number;
   requestId: string;
-  state: "blank" | "enrolled" | "pending";
+  state: "blank" | "ready" | "enrolled" | "pending";
 };
 
 type HelloSession = HelloResponse & {
@@ -84,14 +85,22 @@ function isHelloResponse(value: unknown): value is HelloResponse {
     typeof candidate.deviceNonce === "string" &&
     typeof candidate.deviceTimeMs === "number" &&
     Number.isFinite(candidate.deviceTimeMs) &&
+    typeof candidate.enrollmentReady === "boolean" &&
     typeof candidate.firmwareVersion === "string" &&
     typeof candidate.macAddress === "string" &&
     typeof candidate.ok === "boolean" &&
     typeof candidate.protocolVersion === "number" &&
     Number.isFinite(candidate.protocolVersion) &&
     typeof candidate.requestId === "string" &&
-    (candidate.state === "blank" || candidate.state === "enrolled" || candidate.state === "pending")
+    (candidate.state === "blank" ||
+      candidate.state === "ready" ||
+      candidate.state === "enrolled" ||
+      candidate.state === "pending")
   );
+}
+
+function isBlankLikeState(state: HelloResponse["state"]) {
+  return state === "blank" || state === "ready";
 }
 
 function parseHelloResponse(helloResponse: GenericBleResponse): HelloResponse {
@@ -239,7 +248,11 @@ export class RealColdGuardBleClient {
     close();
     await device.cancelConnection().catch(() => undefined);
 
-    if (hello.state !== args.expectedState) {
+    if (args.expectedState === "blank") {
+      if (!isBlankLikeState(hello.state)) {
+        throw new Error("BLE_DEVICE_STATE_MISMATCH");
+      }
+    } else if (hello.state !== args.expectedState) {
       throw new Error("BLE_DEVICE_STATE_MISMATCH");
     }
 
@@ -265,8 +278,12 @@ export class RealColdGuardBleClient {
     const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
 
     try {
-      if (hello.state !== "blank") {
+      if (!isBlankLikeState(hello.state)) {
         throw new Error("BLE_DEVICE_STATE_MISMATCH");
+      }
+
+      if (!hello.enrollmentReady) {
+        throw new Error("ENROLLMENT_NOT_READY");
       }
 
       const proofTimestamp = createProofTimestamp(hello);
@@ -422,12 +439,14 @@ async function connectAndHello(expectedDeviceId: string) {
 
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= SCAN_RETRY_MAX_ATTEMPTS; attempt += 1) {
-    const device = await scanForColdGuardDevice(expectedDeviceId);
-    const connectedDevice = await device.connect({ requestMTU: 512, refreshGatt: "OnConnected" });
-    await connectedDevice.discoverAllServicesAndCharacteristics();
-    const session = openCommandSession(connectedDevice);
+    let connectedDevice: Device | null = null;
+    let session: BleCommandSession | null = null;
 
     try {
+      const device = await scanForColdGuardDevice(expectedDeviceId);
+      connectedDevice = await device.connect({ requestMTU: 512, refreshGatt: "OnConnected" });
+      await connectedDevice.discoverAllServicesAndCharacteristics();
+      session = openCommandSession(connectedDevice);
       const helloResponse = await session.sendCommand("hello", {});
       const helloReceivedAtMs = Date.now();
       const hello = parseHelloResponse(helloResponse);
@@ -445,10 +464,10 @@ async function connectAndHello(expectedDeviceId: string) {
         sendCommand: session.sendCommand,
       };
     } catch (error) {
-      session.close();
-      await connectedDevice.cancelConnection().catch(() => undefined);
+      session?.close();
+      await connectedDevice?.cancelConnection().catch(() => undefined);
       lastError = error instanceof Error ? error : new Error("BLE_CONNECTION_FAILED");
-      if (attempt < SCAN_RETRY_MAX_ATTEMPTS && lastError.message === "BLE_DEVICE_ID_MISMATCH") {
+      if (attempt < SCAN_RETRY_MAX_ATTEMPTS && isTransientBleConnectionError(lastError)) {
         await delay(SCAN_RETRY_DELAY_MS);
         continue;
       }
@@ -530,6 +549,17 @@ async function scanForColdGuardDeviceOnce(expectedDeviceId: string) {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientBleConnectionError(error: Error) {
+  const normalized = error.message.trim().toLowerCase();
+  return (
+    normalized === "ble_device_id_mismatch" ||
+    normalized.includes("not found") ||
+    normalized.includes("discover") ||
+    normalized.includes("gatt") ||
+    normalized.includes("disconnected")
+  );
 }
 
 function openCommandSession(device: Device): BleCommandSession {
@@ -683,6 +713,7 @@ export const __testing = {
   createProofTimestamp,
   doesDeviceMatchExpectedId,
   getBleManager,
+  isTransientBleConnectionError,
   splitTransportPayload,
   parseHelloResponse,
   parseWifiProvisionResponse,

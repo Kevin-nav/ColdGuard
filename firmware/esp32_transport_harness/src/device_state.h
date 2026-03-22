@@ -19,9 +19,11 @@ struct DeviceState {
   String macAddress;
   String bootstrapToken;
   String enrollmentState = "blank";
+  bool enrollmentReady = false;
   String institutionId;
   String deviceNickname;
   String handshakeToken;
+  String lastErrorCode;
   String lastDeviceNonce;
   String wifiSsid;
   String wifiPassword;
@@ -51,5 +53,6 @@ String buildAdvertisementPayload(const DeviceState& state, uint8_t protocolVersi
 void loadDeviceState(Preferences& preferences, const char* preferencesNamespace, DeviceState* state);
 void saveDeviceState(Preferences& preferences, const DeviceState& state);
 void clearEnrollmentState(DeviceState* state);
+void prepareNewEnrollment(DeviceState* state);
 
 }  // namespace coldguard

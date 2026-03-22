@@ -271,7 +271,15 @@ String redactJsonStringField(const String& payload, const char* key) {
   return redacted;
 }
 
-String buildErrorResponse(const String& command, const String& requestId, const String& errorCode, const String& message) {
+String buildErrorResponse(
+  DeviceState* state,
+  const String& command,
+  const String& requestId,
+  const String& errorCode,
+  const String& message) {
+  if (state != nullptr) {
+    state->lastErrorCode = errorCode;
+  }
   return "{"
          "\"ok\":false,"
          "\"command\":\"" + escapeJson(command) + "\","
@@ -298,6 +306,7 @@ String buildHelloResponse(DeviceState* state, const String& requestId, const Ble
          "\"macAddress\":\"" + escapeJson(state->macAddress) + "\","
          "\"deviceTimeMs\":" + uint64ToString(deviceTimeMs) + ","
          "\"protocolVersion\":" + String(config.protocolVersion) + ","
+         "\"enrollmentReady\":" + String(state->enrollmentReady ? "true" : "false") + ","
          "\"state\":\"" + escapeJson(observableEnrollmentState(*state)) + "\""
          "}";
 }
@@ -322,12 +331,22 @@ String handleEnrollBegin(
   debugBleRecovery("enter enroll.begin requestId=" + requestId);
   if (state->pendingEnrollment.active) {
     debugBleRecovery("enroll.begin rejected: pending enrollment already active");
-    return buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_PENDING", "Enrollment is already pending.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "ENROLLMENT_PENDING", "Enrollment is already pending.");
   }
 
   if (state->enrollmentState != "blank") {
     debugBleRecovery("enroll.begin rejected: device already enrolled");
-    return buildErrorResponse("enroll.begin", requestId, "DEVICE_ALREADY_ENROLLED", "Device is already enrolled.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "DEVICE_ALREADY_ENROLLED", "Device is already enrolled.");
+  }
+
+  if (!state->enrollmentReady) {
+    debugBleRecovery("enroll.begin rejected: enrollment not ready");
+    return buildErrorResponse(
+      state,
+      "enroll.begin",
+      requestId,
+      "ENROLLMENT_NOT_READY",
+      "Generate a new enrollment code on the device before pairing.");
   }
 
   const String incomingDeviceId = getJsonString(payload, "deviceId");
@@ -341,22 +360,22 @@ String handleEnrollBegin(
 
   if (incomingDeviceId != state->deviceId || incomingBootstrapToken != state->bootstrapToken) {
     debugBleRecovery("enroll.begin rejected: bootstrap/device mismatch");
-    return buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_BOOTSTRAP_INVALID", "Bootstrap token or device id did not match.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "ENROLLMENT_BOOTSTRAP_INVALID", "Bootstrap token or device id did not match.");
   }
 
   if (incomingInstitutionId.isEmpty()) {
     debugBleRecovery("enroll.begin rejected: institution missing");
-    return buildErrorResponse("enroll.begin", requestId, "INSTITUTION_REQUIRED", "Institution id is required for enrollment.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "INSTITUTION_REQUIRED", "Institution id is required for enrollment.");
   }
 
   if (incomingHandshakeToken.isEmpty()) {
     debugBleRecovery("enroll.begin rejected: handshake token missing");
-    return buildErrorResponse("enroll.begin", requestId, "HANDSHAKE_TOKEN_REQUIRED", "Handshake token is required for enrollment.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "HANDSHAKE_TOKEN_REQUIRED", "Handshake token is required for enrollment.");
   }
 
   if (!verifyHandshakeProofWithToken(incomingHandshakeToken, *state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
     debugBleRecovery("enroll.begin rejected: handshake proof invalid");
-    return buildErrorResponse("enroll.begin", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
   }
   debugBleRecovery("enroll.begin handshake proof passed");
 
@@ -371,7 +390,7 @@ String handleEnrollBegin(
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
     debugBleRecovery("enroll.begin rejected: action ticket invalid");
-    return buildErrorResponse("enroll.begin", requestId, "ENROLLMENT_TICKET_INVALID", "Supervisor enrollment action ticket verification failed.");
+    return buildErrorResponse(state, "enroll.begin", requestId, "ENROLLMENT_TICKET_INVALID", "Supervisor enrollment action ticket verification failed.");
   }
   debugBleRecovery("enroll.begin action ticket passed");
 
@@ -400,10 +419,11 @@ String handleEnrollCommit(
   debugBleRecovery("enter enroll.commit requestId=" + requestId);
   if (!state->pendingEnrollment.active) {
     debugBleRecovery("enroll.commit rejected: no pending enrollment");
-    return buildErrorResponse("enroll.commit", requestId, "NO_PENDING_ENROLLMENT", "Call enroll.begin before enroll.commit.");
+    return buildErrorResponse(state, "enroll.commit", requestId, "NO_PENDING_ENROLLMENT", "Call enroll.begin before enroll.commit.");
   }
 
   state->enrollmentState = "enrolled";
+  state->enrollmentReady = false;
   state->institutionId = state->pendingEnrollment.institutionId;
   state->deviceNickname = state->pendingEnrollment.nickname;
   state->handshakeToken = state->pendingEnrollment.handshakeToken;
@@ -433,7 +453,7 @@ String handleGrantVerify(
   Preferences& preferences,
   const BleRecoveryConfig& config) {
   if (state->enrollmentState != "enrolled") {
-    return buildErrorResponse("grant.verify", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before grant verification.");
+    return buildErrorResponse(state, "grant.verify", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before grant verification.");
   }
 
   const String incomingDeviceId = getJsonString(payload, "deviceId");
@@ -442,12 +462,12 @@ String handleGrantVerify(
   const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
 
   if (incomingDeviceId != state->deviceId) {
-    return buildErrorResponse("grant.verify", requestId, "DEVICE_ID_MISMATCH", "The grant was issued for a different device.");
+    return buildErrorResponse(state, "grant.verify", requestId, "DEVICE_ID_MISMATCH", "The grant was issued for a different device.");
   }
 
   uint32_t nextGrantVersion = 0;
   if (!verifyHandshakeProof(*state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
-    return buildErrorResponse("grant.verify", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+    return buildErrorResponse(state, "grant.verify", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
   }
 
   if (!verifyActionTicket(
@@ -459,11 +479,11 @@ String handleGrantVerify(
         config.proofWindowMs,
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
-    return buildErrorResponse("grant.verify", requestId, "ACTION_TICKET_INVALID", "Action ticket verification failed.");
+    return buildErrorResponse(state, "grant.verify", requestId, "ACTION_TICKET_INVALID", "Action ticket verification failed.");
   }
 
   if (nextGrantVersion < state->grantVersion) {
-    return buildErrorResponse("grant.verify", requestId, "GRANT_VERSION_STALE", "Grant version is older than the enrolled version.");
+    return buildErrorResponse(state, "grant.verify", requestId, "GRANT_VERSION_STALE", "Grant version is older than the enrolled version.");
   }
 
   state->grantVersion = nextGrantVersion;
@@ -485,11 +505,11 @@ String handleWifiTicketRequest(
   WebServer& webServer,
   const BleRecoveryConfig& config) {
   if (!hasVerifiedSession(*state, "connect")) {
-    return buildErrorResponse("wifi.ticket.request", requestId, "AUTH_REQUIRED", "Verify the BLE action ticket before requesting Wi-Fi handover.");
+    return buildErrorResponse(state, "wifi.ticket.request", requestId, "AUTH_REQUIRED", "Verify the BLE action ticket before requesting Wi-Fi handover.");
   }
 
   if (!ensureSoftApStarted(webServer, state, config.firmwareVersion)) {
-    return buildErrorResponse("wifi.ticket.request", requestId, "SOFTAP_START_FAILED", "ESP32 could not start its Wi-Fi access point.");
+    return buildErrorResponse(state, "wifi.ticket.request", requestId, "SOFTAP_START_FAILED", "ESP32 could not start its Wi-Fi access point.");
   }
 
   state->wifiTicketExpiryMs = millis() + 60000UL;
@@ -513,7 +533,7 @@ String handleWifiProvision(
   WebServer& webServer,
   const BleRecoveryConfig& config) {
   if (state->enrollmentState != "enrolled") {
-    return buildErrorResponse("wifi.provision", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before Wi-Fi provisioning.");
+    return buildErrorResponse(state, "wifi.provision", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before Wi-Fi provisioning.");
   }
 
   const String actionTicket = getJsonObject(payload, "actionTicket");
@@ -523,12 +543,12 @@ String handleWifiProvision(
   const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
 
   if (ssid.isEmpty() || password.length() < 8) {
-    return buildErrorResponse("wifi.provision", requestId, "WIFI_PROVISION_INPUT_INVALID", "Facility Wi-Fi credentials are incomplete.");
+    return buildErrorResponse(state, "wifi.provision", requestId, "WIFI_PROVISION_INPUT_INVALID", "Facility Wi-Fi credentials are incomplete.");
   }
 
   uint32_t nextGrantVersion = 0;
   if (!verifyHandshakeProof(*state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
-    return buildErrorResponse("wifi.provision", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+    return buildErrorResponse(state, "wifi.provision", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
   }
 
   if (!verifyActionTicket(
@@ -540,11 +560,11 @@ String handleWifiProvision(
         config.proofWindowMs,
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
-    return buildErrorResponse("wifi.provision", requestId, "ACTION_TICKET_INVALID", "Wi-Fi provisioning action ticket verification failed.");
+    return buildErrorResponse(state, "wifi.provision", requestId, "ACTION_TICKET_INVALID", "Wi-Fi provisioning action ticket verification failed.");
   }
 
   if (!provisionFacilityWifi(webServer, state, config.firmwareVersion, ssid, password)) {
-    return buildErrorResponse("wifi.provision", requestId, "FACILITY_WIFI_CONNECT_FAILED", "ESP32 could not join the provisioned Wi-Fi network.");
+    return buildErrorResponse(state, "wifi.provision", requestId, "FACILITY_WIFI_CONNECT_FAILED", "ESP32 could not join the provisioned Wi-Fi network.");
   }
 
   saveDeviceState(preferences, *state);
@@ -571,7 +591,7 @@ String handleDecommission(
   debugBleRecovery("enter device.decommission requestId=" + requestId);
   if (state->enrollmentState != "enrolled") {
     debugBleRecovery("device.decommission rejected: device not enrolled");
-    return buildErrorResponse("device.decommission", requestId, "DEVICE_NOT_ENROLLED", "Device is already blank.");
+    return buildErrorResponse(state, "device.decommission", requestId, "DEVICE_NOT_ENROLLED", "Device is already blank.");
   }
 
   const String actionTicket = getJsonObject(payload, "actionTicket");
@@ -581,7 +601,7 @@ String handleDecommission(
   uint32_t nextGrantVersion = 0;
   if (!verifyHandshakeProof(*state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
     debugBleRecovery("device.decommission rejected: handshake proof invalid");
-    return buildErrorResponse("device.decommission", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+    return buildErrorResponse(state, "device.decommission", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
   }
 
   if (!verifyActionTicket(
@@ -594,12 +614,12 @@ String handleDecommission(
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
     debugBleRecovery("device.decommission rejected: action ticket invalid");
-    return buildErrorResponse("device.decommission", requestId, "ACTION_TICKET_INVALID", "Supervisor decommission action ticket verification failed.");
+    return buildErrorResponse(state, "device.decommission", requestId, "ACTION_TICKET_INVALID", "Supervisor decommission action ticket verification failed.");
   }
 
   if (nextGrantVersion < state->grantVersion) {
     debugBleRecovery("device.decommission rejected: stale grant");
-    return buildErrorResponse("device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated.");
+    return buildErrorResponse(state, "device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated.");
   }
 
   debugBleRecovery("device.decommission clearing enrollment state");
@@ -633,7 +653,7 @@ String handleTransportChunk(
   const String requestId = getJsonString(payload, "requestId");
 
   if (transportId.isEmpty() || data.isEmpty()) {
-    return buildErrorResponse("transport.chunk", requestId, "TRANSPORT_CHUNK_INVALID", "Chunk transport payload is missing required fields.");
+    return buildErrorResponse(state, "transport.chunk", requestId, "TRANSPORT_CHUNK_INVALID", "Chunk transport payload is missing required fields.");
   }
 
   if (pendingTransportId != transportId) {
@@ -646,6 +666,7 @@ String handleTransportChunk(
     debugBleRecovery("transport payload too large transportId=" + transportId);
     resetPendingTransport();
     return buildErrorResponse(
+      state,
       "transport.chunk",
       requestId,
       "TRANSPORT_CHUNK_TOO_LARGE",
@@ -662,6 +683,7 @@ String handleTransportChunk(
     debugBleRecovery("transport payload too large before decode transportId=" + transportId);
     resetPendingTransport();
     return buildErrorResponse(
+      state,
       "transport.chunk",
       requestId,
       "TRANSPORT_CHUNK_TOO_LARGE",
@@ -674,7 +696,7 @@ String handleTransportChunk(
 
   if (decodedPayload.isEmpty()) {
     debugBleRecovery("transport decode failed transportId=" + transportId);
-    return buildErrorResponse("transport.chunk", requestId, "TRANSPORT_CHUNK_DECODE_FAILED", "Chunk transport payload could not be decoded.");
+    return buildErrorResponse(state, "transport.chunk", requestId, "TRANSPORT_CHUNK_DECODE_FAILED", "Chunk transport payload could not be decoded.");
   }
 
   debugBleRecovery("transport decode ok command=" + getJsonString(decodedPayload, "command") + " requestId=" + getJsonString(decodedPayload, "requestId"));
@@ -747,7 +769,7 @@ String dispatchCommand(
     return handleTransportChunk(payload, state, preferences, webServer, advertising, config, deferredActions);
   }
 
-  return buildErrorResponse("unknown", requestId, "UNKNOWN_COMMAND", "Command not recognized by the transport harness.");
+  return buildErrorResponse(state, "unknown", requestId, "UNKNOWN_COMMAND", "Command not recognized by the transport harness.");
 }
 
 }  // namespace coldguard

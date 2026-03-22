@@ -45,6 +45,7 @@ test("parses a valid hello response", () => {
       deviceId: "device-1",
       deviceNonce: "nonce-1",
       deviceTimeMs: 1200,
+      enrollmentReady: true,
       firmwareVersion: "fw-1.0.0",
       macAddress: "AA:BB:CC:DD:EE:01",
       ok: true,
@@ -58,6 +59,30 @@ test("parses a valid hello response", () => {
       deviceId: "device-1",
       deviceTimeMs: 1200,
       state: "pending",
+    }),
+  );
+});
+
+test("accepts a ready hello response for enrollment mode", () => {
+  expect(
+    __testing.parseHelloResponse({
+      bleName: "ColdGuard_A100",
+      command: "hello",
+      deviceId: "device-1",
+      deviceNonce: "nonce-1",
+      deviceTimeMs: 1200,
+      enrollmentReady: true,
+      firmwareVersion: "fw-1.0.0",
+      macAddress: "AA:BB:CC:DD:EE:01",
+      ok: true,
+      protocolVersion: 1,
+      requestId: "req-1",
+      state: "ready",
+    }),
+  ).toEqual(
+    expect.objectContaining({
+      enrollmentReady: true,
+      state: "ready",
     }),
   );
 });
@@ -119,6 +144,7 @@ test("creates a proof timestamp from device uptime plus local elapsed time", () 
       deviceId: "device-1",
       deviceNonce: "nonce-1",
       deviceTimeMs: 5000,
+      enrollmentReady: true,
       firmwareVersion: "fw-1.0.0",
       macAddress: "AA:BB:CC:DD:EE:01",
       ok: true,
@@ -166,4 +192,10 @@ test("splits oversized BLE transport payloads into multiple chunks", () => {
     "a".repeat(120),
     "a".repeat(10),
   ]);
+});
+
+test("treats service-discovery style failures as transient BLE connection errors", () => {
+  expect(__testing.isTransientBleConnectionError(new Error("Service 6B8F... not found"))).toBe(true);
+  expect(__testing.isTransientBleConnectionError(new Error("BLE_GATT_DISCONNECTED"))).toBe(true);
+  expect(__testing.isTransientBleConnectionError(new Error("BLE_PERMISSION_REQUIRED"))).toBe(false);
 });

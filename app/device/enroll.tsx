@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 import { router, useLocalSearchParams } from "expo-router";
 import { CameraView, type BarcodeScanningResult, useCameraPermissions } from "expo-camera";
 import { useEffect, useMemo, useState } from "react";
@@ -15,6 +16,7 @@ import {
   type PendingDeviceEnrollment,
 } from "../../src/features/devices/services/device-linking";
 import { enrollColdGuardDevice } from "../../src/features/devices/services/connection-service";
+import { presentDeviceError, type PresentedDeviceError } from "../../src/features/devices/services/error-presenter";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
 
@@ -58,7 +60,8 @@ export default function DeviceEnrollmentScreen() {
     profile: null,
   });
   const [nickname, setNickname] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<PresentedDeviceError | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const initialPayload = useMemo(
@@ -142,13 +145,14 @@ export default function DeviceEnrollmentScreen() {
     if (!permission?.granted) {
       const result = await requestPermission();
       if (!result.granted) {
-        setMessage("Camera permission is required to scan a device QR code.");
+        setFeedback({ developerCode: null, userMessage: "Camera permission is required to scan a device QR code." });
         return;
       }
     }
 
     setShowScanner(true);
-    setMessage(null);
+    setFeedback(null);
+    setCopyMessage(null);
   }
 
   function handleBarcodeScanned(result: BarcodeScanningResult) {
@@ -157,10 +161,10 @@ export default function DeviceEnrollmentScreen() {
       setPayload(parsed);
       setPayloadInput(parsed.sourceUrl);
       setShowScanner(false);
-      setMessage(`Scanned ${parsed.deviceId}.`);
+      setFeedback({ developerCode: null, userMessage: `Scanned ${parsed.deviceId}.` });
       void persistPendingDeviceEnrollment(parsed);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Invalid device QR payload.");
+      setFeedback(presentDeviceError(error, "Invalid device QR payload."));
     }
   }
 
@@ -170,7 +174,8 @@ export default function DeviceEnrollmentScreen() {
     }
 
     setIsBusy(true);
-    setMessage(null);
+    setFeedback(null);
+    setCopyMessage(null);
 
     try {
       const result = await enrollColdGuardDevice({
@@ -186,10 +191,19 @@ export default function DeviceEnrollmentScreen() {
         router.replace("/(onboarding)/link-institution");
         return;
       }
-      setMessage(error instanceof Error ? error.message : "Device enrollment failed.");
+      setFeedback(presentDeviceError(error, "Device enrollment failed."));
     } finally {
       setIsBusy(false);
     }
+  }
+
+  async function handleCopyDeveloperCode() {
+    if (!feedback?.developerCode) {
+      return;
+    }
+
+    await Clipboard.setStringAsync(feedback.developerCode);
+    setCopyMessage("Developer code copied.");
   }
 
   function renderBackButton() {
@@ -314,7 +328,18 @@ export default function DeviceEnrollmentScreen() {
               <Text style={styles.primaryButtonText}>{isBusy ? "Enrolling..." : "Start enrollment"}</Text>
             </Pressable>
           </View>
-          {message ? <Text style={styles.helperText}>{message}</Text> : null}
+          {feedback ? <Text style={styles.helperText}>{feedback.userMessage}</Text> : null}
+          {feedback?.developerCode ? (
+            <View style={localStyles.developerCodeBlock}>
+              <Text selectable style={styles.helperText}>
+                Developer code: {feedback.developerCode}
+              </Text>
+              <Pressable onPress={() => void handleCopyDeveloperCode()} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>Copy developer code</Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {copyMessage ? <Text style={styles.helperText}>{copyMessage}</Text> : null}
         </PanelCard>
       </DashboardSection>
     </DashboardPage>
@@ -334,6 +359,10 @@ const localStyles = StyleSheet.create({
   },
   buttonRow: {
     gap: 12,
+  },
+  developerCodeBlock: {
+    gap: 12,
+    marginTop: 12,
   },
   camera: {
     flex: 1,

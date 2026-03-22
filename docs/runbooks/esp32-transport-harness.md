@@ -9,6 +9,7 @@ This harness gives the ColdGuard app a real ESP32 target for BLE enrollment, gra
   - `firmware/esp32_transport_harness/src/device_state.cpp`
   - `firmware/esp32_transport_harness/src/action_ticket.cpp`
   - `firmware/esp32_transport_harness/src/ble_recovery.cpp`
+  - `firmware/esp32_transport_harness/src/device_ui.cpp`
   - `firmware/esp32_transport_harness/src/wifi_runtime.cpp`
 - Profile guidance: `docs/runbooks/firmware-profiles.md`
 
@@ -35,13 +36,56 @@ switch the partition scheme to `No OTA (2MB APP/2MB SPIFFS)` or `Huge APP (3MB N
 
 If the firmware keeps growing after that, the next reduction with the best payoff is migrating the BLE transport from classic ESP32 Bluedroid BLE to NimBLE, since this sketch only uses a basic GATT server and advertising flow.
 
-The sketch only uses Arduino-ESP32 built-ins:
+The sketch uses Arduino-ESP32 built-ins plus one LCD helper library:
 
 - `BLEDevice`
 - `WiFi`
 - `WebServer`
 - `Preferences`
 - `mbedtls`
+- `LiquidCrystal_I2C`
+
+## Local UI and Wiring
+
+Current harness assumptions:
+
+- I2C 16x2 LCD backpack at address `0x27`
+- capacitive touch input on `T0`
+- built-in LED on `GPIO 2`
+
+Current local control behavior:
+
+- short touch uses about `200ms` debounce
+- long touch uses about `700ms` hold time
+- long touch from runtime screen opens the menu
+- short touch advances to the next menu item or detail page
+- long touch inside the menu selects the current item
+- long touch inside `WiFi tools` clears stored facility Wi-Fi credentials
+
+Current LED behavior:
+
+- runtime normal: slow heartbeat
+- menu open: solid on
+- enrollment-ready: repeating double pulse
+- pending enrollment or Wi-Fi recovery activity: faster pulse
+- error present: repeating triple blink
+- event overlays briefly override the base mode for new enrollment generation, facility Wi-Fi clear, factory reset, and newly recorded runtime errors
+
+Current Serial observability:
+
+- touch calibration prints the measured baseline and computed threshold at boot
+- `[UI]` logs are emitted for menu opens, menu selections, pairing code viewing, facility Wi-Fi clears, factory reset, runtime error capture, and LED mode signal changes
+- every `New enrollment` action prints the device id, fresh bootstrap token, and full enrollment link to Serial
+
+Current menu items:
+
+- `Status`
+- `New enrollment`
+- `Pair code`
+- `WiFi tools`
+- `Diagnostics`
+- `Factory reset`
+- `Exit`
 
 ## BLE Contract
 
@@ -60,7 +104,7 @@ Production direction:
 ### Advertisement service data
 
 ```text
-id=<deviceId>;state=<blank|enrolled>;pv=1
+id=<deviceId>;state=<blank|ready|pending|enrolled>;pv=1
 ```
 
 ### Commands
@@ -128,6 +172,11 @@ response plus local elapsed time.
   "command": "hello"
 }
 ```
+
+Sample response fields now include:
+
+- `state`
+- `enrollmentReady`
 
 ### `enroll.begin`
 
@@ -236,6 +285,14 @@ The Android bridge is expected to:
 - explicitly release the bound network after success, timeout, or retry failure
 - tolerate repeated connection-test attempts without leaking callbacks or stale bindings
 
+ColdGuard transport policy is:
+
+1. use proven facility Wi-Fi first when the phone has already shown it can reach the device there
+2. otherwise use stored SoftAP credentials
+3. use BLE only to recover or refresh SoftAP access when Wi-Fi paths fail
+
+For enrolled devices, the ESP32 SoftAP should remain available continuously, including after reboot and while station mode is connected.
+
 The ESP32 starts a SoftAP and serves:
 
 - `GET http://192.168.4.1/api/v1/connection-test`
@@ -267,14 +324,26 @@ Sample JSON shape:
 5. Flash the sketch.
 6. Open Serial Monitor at `115200`.
 7. Note the generated `deviceId`.
-8. Copy the printed `Enrollment Link` from Serial Monitor.
-9. If you need to rebuild it manually, use:
+8. Long-touch `T0` to open the device menu.
+9. Select `New enrollment`.
+10. Watch the built-in LED for the enrollment-ready double pulse and the short enrollment overlay blink sequence.
+11. Use the LCD `Pair code` screen or Serial Monitor output for the current enrollment link.
+12. If you need to rebuild it manually, use:
 
 ```text
 https://coldguard.org/device/<deviceId>?claim=<bootstrapToken>&v=1
 ```
 
-10. Scan from the ColdGuard app and complete the BLE enrollment flow.
+13. Scan from the ColdGuard app and complete the BLE enrollment flow.
+
+Bench verification checklist:
+
+1. Confirm boot output includes `[UI] Touch calibrated: baseline=<n> threshold=<n>`.
+2. Confirm short touches advance menu items and detail pages.
+3. Confirm long touches open the menu, select menu items, and clear facility Wi-Fi in `WiFi tools`.
+4. Confirm the LED heartbeat, menu solid-on mode, enrollment-ready double pulse, and error triple-blink behave as expected.
+5. Run `New enrollment` and confirm LCD, LED overlay, `[UI]` action logs, bootstrap token, and full enrollment link all update together.
+6. If the board inverts the built-in LED or needs touch threshold tuning, record the adjustment before wider flashing.
 
 ## Notes for App Integration
 

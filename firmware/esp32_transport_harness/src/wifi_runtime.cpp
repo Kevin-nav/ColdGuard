@@ -99,6 +99,7 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
   const bool doorOpen = currentMockDoorOpen();
   const bool hasWarning = temp >= 4.5f || doorOpen || batteryLevel < 90;
   const String alerts = buildAlertsJson(temp, batteryLevel, doorOpen);
+  const String transportMode = state->stationConnected ? "facility_wifi" : "softap";
 
   return "{"
          "\"deviceId\":\"" + escapeJson(state->deviceId) + "\","
@@ -112,6 +113,9 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
          "\"lastSeenAgeMs\":0,"
          "\"nickname\":\"" + escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname) + "\","
          "\"institutionId\":\"" + escapeJson(state->institutionId) + "\","
+         "\"softApAvailable\":" + String(state->accessPointStarted ? "true" : "false") + ","
+         "\"stationConnected\":" + String(state->stationConnected ? "true" : "false") + ","
+         "\"transport\":\"" + transportMode + "\","
          "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
          "\"alerts\":" + alerts + ","
          "\"receivedAtMs\":" + String(nowMs) +

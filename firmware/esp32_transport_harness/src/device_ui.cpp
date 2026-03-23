@@ -140,14 +140,13 @@ const MenuItem kMenuItems[] = {
 
 constexpr size_t kMenuItemCount = sizeof(kMenuItems) / sizeof(kMenuItems[0]);
 constexpr uint8_t kDisplayWidth = 128;
-constexpr uint8_t kDisplayHeight = 64;
 constexpr uint8_t kHeaderDividerY = 15;
 constexpr uint8_t kFooterDividerY = 55;
 constexpr uint8_t kMenuFirstRowY = 18;
-constexpr uint8_t kMenuRowHeight = 9;
+constexpr uint8_t kMenuRowHeight = 10;
 constexpr size_t kTitleChars = 18;
-constexpr size_t kBodyChars = 20;
-constexpr size_t kFooterChars = 24;
+constexpr size_t kBodyChars = 22;
+constexpr size_t kFooterChars = 22;
 
 String enrollmentLabel(const DeviceState& state) {
   if (state.pendingEnrollment.active) {
@@ -173,42 +172,80 @@ bool runtimePhaseHasFailure(const DeviceState& state) {
   return state.runtimePhase == "facility-wifi-failed" || state.runtimePhase == "softap-failed";
 }
 
+bool runtimePhaseIsActive(const DeviceState& state) {
+  return state.stationConnectInProgress || state.softApStartInProgress || runtimePhaseHasFailure(state);
+}
+
 String runtimePhaseLabel(const DeviceState& state) {
   if (state.runtimePhase == "facility-wifi-provisioning") {
-    return "wifi save/join";
+    return "saving WiFi";
   }
   if (state.runtimePhase == "facility-wifi-connecting") {
-    return "wifi joining";
+    return "joining WiFi";
   }
   if (state.runtimePhase == "facility-wifi-retrying") {
-    return "wifi retrying";
+    return "retrying WiFi";
   }
   if (state.runtimePhase == "facility-wifi-ready") {
-    return "wifi ready";
+    return "WiFi ready";
   }
   if (state.runtimePhase == "facility-wifi-failed") {
-    return "wifi failed";
+    return "WiFi failed";
   }
   if (state.runtimePhase == "softap-starting") {
-    return "ap starting";
+    return "AP starting";
   }
   if (state.runtimePhase == "softap-ready") {
-    return "ap ready";
+    return "AP ready";
   }
   if (state.runtimePhase == "softap-failed") {
-    return "ap failed";
+    return "AP failed";
   }
   return "";
 }
 
-String homeStatusLine(const DeviceState& state) {
+String homePrimaryLine(const DeviceState& state) {
   const String runtimePhase = runtimePhaseLabel(state);
-  if (!runtimePhase.isEmpty() &&
-      (state.stationConnectInProgress || state.softApStartInProgress || runtimePhaseHasFailure(state))) {
+  if (!runtimePhase.isEmpty() && runtimePhaseIsActive(state)) {
     return runtimePhase;
   }
 
-  return enrollmentLabel(state) + " " + currentTransportLabel(state);
+  return enrollmentLabel(state) + " / " + currentTransportLabel(state);
+}
+
+String homeSecondaryLine(const DeviceState& state) {
+  if (state.stationConnectInProgress) {
+    return state.facilityWifiSsid.isEmpty()
+             ? "Joining facility Wi-Fi"
+             : String("Joining ") + state.facilityWifiSsid;
+  }
+
+  if (state.softApStartInProgress) {
+    return "Starting local AP";
+  }
+
+  if (runtimePhaseHasFailure(state)) {
+    return "Check Wi-Fi settings";
+  }
+
+  const String runtimePhase = runtimePhaseLabel(state);
+  if (!runtimePhase.isEmpty()) {
+    return runtimePhase;
+  }
+
+  if (state.pendingEnrollment.active) {
+    return "Enrollment pending";
+  }
+
+  if (state.enrollmentReady) {
+    return "Ready for pairing";
+  }
+
+  if (state.enrollmentState == "enrolled") {
+    return "Ready for runtime";
+  }
+
+  return "Select opens menu";
 }
 
 String menuLabel(MenuItem item) {
@@ -216,17 +253,17 @@ String menuLabel(MenuItem item) {
     case MenuItem::Status:
       return "Status";
     case MenuItem::NewEnrollment:
-      return "New enroll";
+      return "New enrollment";
     case MenuItem::ShowPairingCode:
-      return "Pair code";
+      return "Pairing code";
     case MenuItem::WifiTools:
-      return "WiFi tools";
+      return "Wi-Fi tools";
     case MenuItem::Diagnostics:
       return "Diagnostics";
     case MenuItem::FactoryReset:
       return "Factory reset";
     case MenuItem::Exit:
-      return "Exit";
+      return "Home";
   }
 
   return "Menu";
@@ -374,12 +411,17 @@ String fitFooterText(const String& value) {
 }
 
 void setHeaderFont() {
-  gDisplay->setFont(u8g2_font_7x13B_tf);
+  gDisplay->setFont(u8g2_font_6x12_tf);
+  gDisplay->setFontPosTop();
+}
+
+void setEmphasisFont() {
+  gDisplay->setFont(u8g2_font_6x12B_tf);
   gDisplay->setFontPosTop();
 }
 
 void setBodyFont() {
-  gDisplay->setFont(u8g2_font_6x12_tf);
+  gDisplay->setFont(u8g2_font_5x8_tf);
   gDisplay->setFontPosTop();
 }
 
@@ -606,20 +648,18 @@ void returnFromConfirm(bool accepted) {
 }
 
 void renderHomeScreen(const DeviceState& state) {
-  const unsigned long nowMs = millis();
   const String title = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
-  const String primary = fitBodyText(homeStatusLine(state), nowMs);
-  const String secondary = runtimePhaseLabel(state).isEmpty()
-                             ? String("transport ") + currentTransportLabel(state)
-                             : fitBodyText(runtimePhaseLabel(state), nowMs);
-  const String footer = currentFooterNotice("Select menu");
+  const unsigned long nowMs = millis();
+  const String primary = fitBodyText(homePrimaryLine(state), nowMs);
+  const String secondary = fitBodyText(homeSecondaryLine(state), nowMs);
+  const String footer = currentFooterNotice("Select: menu");
   const String frameKey = String("home|") + title + "|" + primary + "|" + secondary + "|" + footer;
   if (!beginFrame(frameKey)) {
     return;
   }
 
   drawHeader(title);
-  setHeaderFont();
+  setEmphasisFont();
   drawTextCentered(21, primary);
   setBodyFont();
   drawTextCentered(38, secondary);
@@ -629,7 +669,7 @@ void renderHomeScreen(const DeviceState& state) {
 
 void renderMenuScreen() {
   const unsigned long nowMs = millis();
-  const String footer = currentFooterNotice("Nav move  Sel open");
+  const String footer = currentFooterNotice("Nav: move  Select: open");
   const size_t visibleRows = 4;
   size_t startIndex = 0;
   if (gMenuIndex >= visibleRows) {
@@ -654,10 +694,10 @@ void renderMenuScreen() {
     if (selected) {
       gDisplay->drawBox(0, y - 1, kDisplayWidth, kMenuRowHeight);
       gDisplay->setDrawColor(0);
-      drawTextLeft(4, y, label);
+      drawTextLeft(5, y, label);
       gDisplay->setDrawColor(1);
     } else {
-      drawTextLeft(6, y, label);
+      drawTextLeft(7, y, label);
     }
   }
   drawFooter(footer);
@@ -670,8 +710,8 @@ void renderStatusDetail(const DeviceState& state) {
   String body2;
   switch (gDetailPage % 3) {
     case 0:
-      body1 = "Enroll " + enrollmentLabel(state);
-      body2 = "Trans " + currentTransportLabel(state);
+      body1 = "Enrollment " + enrollmentLabel(state);
+      body2 = "Transport " + currentTransportLabel(state);
       break;
     case 1:
       body1 = "SoftAP " + String(state.accessPointStarted ? "up" : "down");
@@ -683,7 +723,7 @@ void renderStatusDetail(const DeviceState& state) {
       break;
   }
 
-  const String footer = currentFooterNotice("Nav page  Hold back");
+  const String footer = currentFooterNotice("Nav: page  Hold: back");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
   const String frameKey = String("detail|status|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
@@ -692,10 +732,10 @@ void renderStatusDetail(const DeviceState& state) {
   }
 
   drawHeader("Status");
-  setHeaderFont();
+  setEmphasisFont();
   drawTextLeft(0, 21, shown1);
   setBodyFont();
-  drawTextLeft(0, 38, shown2);
+  drawTextLeft(0, 39, shown2);
   drawFooter(footer);
   endFrame();
 }
@@ -707,25 +747,25 @@ void renderPairingCodeDetail(const DeviceState& state) {
 
   if (!state.enrollmentReady) {
     body1 = "Pairing disabled";
-    body2 = "New enrollment first";
+    body2 = "Create new enrollment";
   } else {
     switch (gDetailPage % 3) {
       case 0:
-        body1 = "Enroll ready";
-        body2 = "ID " + state.deviceId;
+        body1 = "Ready to pair";
+        body2 = "Device ID " + state.deviceId;
         break;
       case 1:
         body1 = "Claim token";
         body2 = state.bootstrapToken;
         break;
       default:
-        body1 = "Enroll link";
+        body1 = "Enrollment link";
         body2 = buildEnrollmentLink(state);
         break;
     }
   }
 
-  const String footer = currentFooterNotice("Nav page  Hold back");
+  const String footer = currentFooterNotice("Nav: page  Hold: back");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
   const String frameKey = String("detail|pair|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
@@ -733,9 +773,10 @@ void renderPairingCodeDetail(const DeviceState& state) {
     return;
   }
 
-  drawHeader("Pair code");
+  drawHeader("Pairing code");
+  setEmphasisFont();
+  drawTextLeft(0, 21, shown1);
   setBodyFont();
-  drawTextLeft(0, 22, shown1);
   drawTextLeft(0, 37, shown2);
   drawFooter(footer);
   endFrame();
@@ -748,18 +789,20 @@ void renderWifiToolsDetail(const DeviceState& state) {
 
   switch (gDetailPage % 2) {
     case 0:
-      body1 = state.facilityWifiSsid.isEmpty() ? "SSID not set" : "SSID " + state.facilityWifiSsid;
-      body2 = "SoftAP " + String(state.accessPointStarted ? "up" : "down");
+      body1 = state.facilityWifiSsid.isEmpty() ? "Saved Wi-Fi: none" : "Saved Wi-Fi";
+      body2 = state.facilityWifiSsid.isEmpty()
+                ? "SoftAP " + String(state.accessPointStarted ? "up" : "down")
+                : state.facilityWifiSsid;
       break;
     default:
-      body1 = "Select to clear";
+      body1 = "Clear saved Wi-Fi";
       body2 = runtimePhaseLabel(state).isEmpty()
                 ? "Transport " + currentTransportLabel(state)
                 : runtimePhaseLabel(state);
       break;
   }
 
-  const String footer = currentFooterNotice("Nav page  Sel action");
+  const String footer = currentFooterNotice("Nav: page  Select: clear");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
   const String frameKey = String("detail|wifi|") + String(gDetailPage % 2) + "|" + shown1 + "|" + shown2 + "|" + footer;
@@ -767,9 +810,10 @@ void renderWifiToolsDetail(const DeviceState& state) {
     return;
   }
 
-  drawHeader("WiFi tools");
+  drawHeader("Wi-Fi tools");
+  setEmphasisFont();
+  drawTextLeft(0, 21, shown1);
   setBodyFont();
-  drawTextLeft(0, 22, shown1);
   drawTextLeft(0, 37, shown2);
   drawFooter(footer);
   endFrame();
@@ -782,20 +826,20 @@ void renderDiagnosticsDetail(const DeviceState& state) {
 
   switch (gDetailPage % 3) {
     case 0:
-      body1 = state.deviceId;
-      body2 = "FW " + String(gConfig.firmwareVersion);
+      body1 = "Device ID";
+      body2 = String("FW ") + String(gConfig.firmwareVersion);
       break;
     case 1:
-      body1 = "Error";
+      body1 = "Last error";
       body2 = state.lastErrorCode.isEmpty() ? "none" : state.lastErrorCode;
       break;
     default:
-      body1 = "BLE " + state.bleName;
-      body2 = "Mode " + enrollmentLabel(state);
+      body1 = "BLE name";
+      body2 = state.bleName + " / " + enrollmentLabel(state);
       break;
   }
 
-  const String footer = currentFooterNotice("Nav page  Hold back");
+  const String footer = currentFooterNotice("Nav: page  Hold: back");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
   const String frameKey = String("detail|diag|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
@@ -804,8 +848,9 @@ void renderDiagnosticsDetail(const DeviceState& state) {
   }
 
   drawHeader("Diagnostics");
+  setEmphasisFont();
+  drawTextLeft(0, 21, shown1);
   setBodyFont();
-  drawTextLeft(0, 22, shown1);
   drawTextLeft(0, 37, shown2);
   drawFooter(footer);
   endFrame();
@@ -818,7 +863,7 @@ void renderConfirmScreen() {
       prompt = "New enrollment?";
       break;
     case ConfirmAction::ClearFacilityWifi:
-      prompt = "Clear WiFi?";
+      prompt = "Clear saved Wi-Fi?";
       break;
     case ConfirmAction::FactoryReset:
       prompt = "Factory reset?";
@@ -828,16 +873,16 @@ void renderConfirmScreen() {
       break;
   }
 
-  const String footer = "Tap no  Hold yes";
+  const String footer = "Tap: no  Hold: yes";
   const String frameKey = String("confirm|") + String(confirmActionLabel(gConfirmAction)) + "|" + prompt;
   if (!beginFrame(frameKey)) {
     return;
   }
 
   drawHeader("Confirm");
-  gDisplay->drawFrame(6, 20, 116, 24);
-  setHeaderFont();
-  drawTextCentered(26, fitTitleText(prompt));
+  gDisplay->drawFrame(4, 19, 120, 26);
+  setEmphasisFont();
+  drawTextCentered(28, fitTitleText(prompt));
   drawFooter(footer);
   endFrame();
 }
@@ -915,14 +960,14 @@ void executeConfirmedAction(
       restartAdvertising(advertising, *state, gConfig.serviceUuid, gConfig.protocolVersion);
       logNewEnrollment(*state);
       triggerLedOverlay(LedOverlayType::EnrollmentGenerated, 1200UL);
-      showTransientMessage("New enroll ready");
+      showTransientMessage("Enrollment ready");
       openDetailView(DetailView::PairingCode);
       return;
     case ConfirmAction::ClearFacilityWifi:
       clearFacilityWifi(state, preferences);
       logUiEvent("Facility Wi-Fi cleared");
       triggerLedOverlay(LedOverlayType::FacilityWifiCleared, 1200UL);
-      showTransientMessage("Facility WiFi clr");
+      showTransientMessage("Wi-Fi cleared");
       openDetailView(DetailView::WifiTools);
       return;
     case ConfirmAction::FactoryReset:
@@ -1217,9 +1262,9 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   logTouchCalibration("Select", gConfig.selectTouchPin, gSelectTouchBaseline, gSelectTouchThreshold);
   if (beginFrame("boot|ui-ready")) {
     drawHeader("ColdGuard");
-    setHeaderFont();
-    drawTextCentered(24, "UI ready");
-    drawFooter("OLED online");
+    setEmphasisFont();
+    drawTextCentered(24, "OLED ready");
+    drawFooter("Two-touch UI");
     endFrame();
   }
 }

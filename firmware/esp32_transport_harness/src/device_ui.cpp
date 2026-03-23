@@ -124,6 +124,9 @@ bool gLastLedOutput = false;
 bool gHasLoggedLedMode = false;
 LedMode gLastLoggedLedMode = LedMode::Runtime;
 String gLastObservedErrorCode;
+bool gHasRenderedFrame = false;
+String gLastRenderedLine1;
+String gLastRenderedLine2;
 
 const MenuItem kMenuItems[] = {
   MenuItem::Status,
@@ -317,6 +320,14 @@ void renderLines(const String& rawLine1, const String& rawLine2) {
   const unsigned long nowMs = millis();
   const String line1 = scrollLine(rawLine1, nowMs);
   const String line2 = scrollLine(rawLine2, nowMs);
+
+  if (gHasRenderedFrame && line1 == gLastRenderedLine1 && line2 == gLastRenderedLine2) {
+    return;
+  }
+
+  gHasRenderedFrame = true;
+  gLastRenderedLine1 = line1;
+  gLastRenderedLine2 = line2;
 
   gDisplay->setCursor(0, 0);
   gDisplay->print(line1);
@@ -562,13 +573,13 @@ void renderDiagnosticsDetail(const DeviceState& state) {
 void renderConfirmScreen() {
   switch (gConfirmAction) {
     case ConfirmAction::NewEnrollment:
-      renderLines("New enroll?", "Tap no Hold ok");
+      renderLines("New enroll?", "Tap no hold yes");
       return;
     case ConfirmAction::ClearFacilityWifi:
-      renderLines("Clear WiFi?", "Tap no Hold ok");
+      renderLines("Clear WiFi?", "Tap no hold yes");
       return;
     case ConfirmAction::FactoryReset:
-      renderLines("Factory reset?", "Tap no Hold ok");
+      renderLines("Factory reset?", "Tap no hold yes");
       return;
     case ConfirmAction::None:
       renderLines("ColdGuard", "No action");
@@ -837,7 +848,33 @@ void maybeTrackErrorOverlay(const DeviceState& state) {
 
 void renderUi(const DeviceState& state) {
   if (gTransientUntilMs > millis()) {
-    renderLines("ColdGuard", gTransientMessage);
+    switch (gScreen) {
+      case UiScreen::Home:
+        renderLines(state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname, gTransientMessage);
+        return;
+      case UiScreen::Menu:
+        renderLines(">" + menuLabel(kMenuItems[gMenuIndex]), gTransientMessage);
+        return;
+      case UiScreen::Detail:
+        switch (gDetailView) {
+          case DetailView::Status:
+            renderLines("> Status", gTransientMessage);
+            return;
+          case DetailView::PairingCode:
+            renderLines("Pairing", gTransientMessage);
+            return;
+          case DetailView::WifiTools:
+            renderLines("> WiFi tools", gTransientMessage);
+            return;
+          case DetailView::Diagnostics:
+            renderLines("Diagnostics", gTransientMessage);
+            return;
+        }
+        return;
+      case UiScreen::Confirm:
+        renderConfirmScreen();
+        return;
+    }
     return;
   }
 
@@ -927,6 +964,9 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   gLastLedOutput = false;
   gHasLoggedLedMode = false;
   gLastObservedErrorCode = "";
+  gHasRenderedFrame = false;
+  gLastRenderedLine1 = "";
+  gLastRenderedLine2 = "";
 
   pinMode(gConfig.ledPin, OUTPUT);
   setLedOutput(false);

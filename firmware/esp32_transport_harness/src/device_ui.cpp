@@ -57,6 +57,7 @@ struct LedOverlayState {
 
 DeviceUiConfig gConfig = {
   T0,
+  T4,
   2,
   0x27,
   16,
@@ -74,8 +75,10 @@ size_t gMenuIndex = 0;
 size_t gDetailPage = 0;
 unsigned long gTransientUntilMs = 0;
 String gTransientMessage;
-uint16_t gTouchBaseline = 0;
-uint16_t gTouchThreshold = 0;
+uint16_t gNavTouchBaseline = 0;
+uint16_t gNavTouchThreshold = 0;
+uint16_t gSelectTouchBaseline = 0;
+uint16_t gSelectTouchThreshold = 0;
 bool gTouchStableActive = false;
 bool gTouchRawActive = false;
 bool gTouchLongPressHandled = false;
@@ -178,6 +181,13 @@ const char* ledModeLabel(LedMode mode) {
 
 void logUiEvent(const String& message) {
   Serial.println(String("[UI] ") + message);
+}
+
+void logTouchCalibration(const char* role, uint8_t touchPin, uint16_t baseline, uint16_t threshold) {
+  Serial.println(
+    String("[UI] ") + role + " touch calibrated: pin=" + String(touchPin) +
+    String(" baseline=") + String(baseline) +
+    String(" threshold=") + String(threshold));
 }
 
 void setUiMode(UiMode mode) {
@@ -533,8 +543,8 @@ void handleLongPress(
   openMenu();
 }
 
-bool sampleTouchActive() {
-  return touchRead(gConfig.touchPin) < gTouchThreshold;
+bool sampleNavTouchActive() {
+  return touchRead(gConfig.navTouchPin) < gNavTouchThreshold;
 }
 
 void processTouch(
@@ -543,7 +553,7 @@ void processTouch(
   WebServer& webServer,
   BLEAdvertising* advertising) {
   const unsigned long nowMs = millis();
-  const bool rawActive = sampleTouchActive();
+  const bool rawActive = sampleNavTouchActive();
 
   if (rawActive != gTouchRawActive) {
     gTouchRawActive = rawActive;
@@ -657,8 +667,10 @@ uint16_t deriveTouchThreshold(uint16_t baseline, float factor) {
 void initializeDeviceUi(const DeviceUiConfig& config) {
   gConfig = config;
   delay(500);
-  gTouchBaseline = calibrateTouchBaseline(gConfig.touchPin);
-  gTouchThreshold = deriveTouchThreshold(gTouchBaseline, gConfig.touchThresholdFactor);
+  gNavTouchBaseline = calibrateTouchBaseline(gConfig.navTouchPin);
+  gNavTouchThreshold = deriveTouchThreshold(gNavTouchBaseline, gConfig.touchThresholdFactor);
+  gSelectTouchBaseline = calibrateTouchBaseline(gConfig.selectTouchPin);
+  gSelectTouchThreshold = deriveTouchThreshold(gSelectTouchBaseline, gConfig.touchThresholdFactor);
   gTouchRawActive = false;
   gTouchStableActive = false;
   gTouchLongPressHandled = false;
@@ -678,9 +690,8 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   gDisplay->backlight();
   gDisplay->clear();
 
-  Serial.println(
-    String("[UI] Touch calibrated: baseline=") + String(gTouchBaseline) +
-    String(" threshold=") + String(gTouchThreshold));
+  logTouchCalibration("Nav", gConfig.navTouchPin, gNavTouchBaseline, gNavTouchThreshold);
+  logTouchCalibration("Select", gConfig.selectTouchPin, gSelectTouchBaseline, gSelectTouchThreshold);
   renderLines("ColdGuard", "UI ready");
 }
 

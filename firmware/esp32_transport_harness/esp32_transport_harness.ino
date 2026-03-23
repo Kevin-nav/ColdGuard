@@ -26,7 +26,8 @@ constexpr char kActionTicketMasterKey[] = "coldguard-test-master-key";
 constexpr char kServiceUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110";
 constexpr char kCommandCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C111";
 constexpr char kResponseCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C112";
-constexpr uint8_t kTouchPin = T0;
+constexpr uint8_t kNavTouchPin = T0;
+constexpr uint8_t kSelectTouchPin = T4;  // GPIO 13
 constexpr uint8_t kBuiltInLedPin = 2;
 constexpr uint8_t kLcdI2cAddress = 0x27;
 constexpr uint8_t kLcdColumns = 16;
@@ -54,7 +55,8 @@ constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
 };
 
 constexpr coldguard::DeviceUiConfig kDeviceUiConfig = {
-  kTouchPin,
+  kNavTouchPin,
+  kSelectTouchPin,
   kBuiltInLedPin,
   kLcdI2cAddress,
   kLcdColumns,

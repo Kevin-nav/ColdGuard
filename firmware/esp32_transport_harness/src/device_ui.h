@@ -11,7 +11,8 @@
 namespace coldguard {
 
 struct DeviceUiConfig {
-  uint8_t touchPin;
+  uint8_t navTouchPin;
+  uint8_t selectTouchPin;
   uint8_t ledPin;
   uint8_t lcdAddress;
   uint8_t lcdColumns;

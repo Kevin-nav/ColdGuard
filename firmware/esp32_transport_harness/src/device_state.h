@@ -30,15 +30,21 @@ struct DeviceState {
   String facilityWifiSsid;
   String facilityWifiPassword;
   String lastVerifiedPermission;
+  String runtimePhase = "idle";
   uint32_t grantVersion = 0;
   unsigned long verifiedSessionUntilMs = 0;
   unsigned long wifiTicketExpiryMs = 0;
   unsigned long lastHeartbeatAtMs = 0;
   unsigned long lastStationConnectAttemptMs = 0;
+  unsigned long runtimePhaseChangedAtMs = 0;
+  unsigned long stationConnectDeadlineMs = 0;
   uint64_t lastDeviceNonceIssuedAtMs = 0;
   bool accessPointStarted = false;
   bool runtimeServerStarted = false;
   bool stationConnected = false;
+  bool stationConnectInProgress = false;
+  bool softApStartInProgress = false;
+  bool facilityWifiProvisioning = false;
   PendingEnrollment pendingEnrollment;
 };
 

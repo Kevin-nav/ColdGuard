@@ -7,6 +7,27 @@ namespace coldguard {
 namespace {
 
 constexpr unsigned long kMonitoringHeartbeatWindowMs = 90UL * 1000UL;
+constexpr unsigned long kStationConnectRetryMs = 10000UL;
+constexpr unsigned long kStationConnectTimeoutMs = 15000UL;
+
+void logRuntimeEvent(const String& message) {
+  Serial.println(String("[UI] Runtime -> ") + message);
+}
+
+void setRuntimePhase(DeviceState* state, const String& phase) {
+  if (state->runtimePhase == phase) {
+    return;
+  }
+
+  state->runtimePhase = phase;
+  state->runtimePhaseChangedAtMs = millis();
+  logRuntimeEvent(phase);
+}
+
+void resetStationConnectState(DeviceState* state) {
+  state->stationConnectInProgress = false;
+  state->stationConnectDeadlineMs = 0;
+}
 
 bool hasValidSoftApTicket(const DeviceState* state) {
   if (state->wifiTicketExpiryMs != 0 && static_cast<long>(millis() - state->wifiTicketExpiryMs) <= 0) {
@@ -200,30 +221,69 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
 
   webServer.begin();
   state->runtimeServerStarted = true;
+  if (state->stationConnected) {
+    setRuntimePhase(state, "facility-wifi-ready");
+  } else if (state->accessPointStarted) {
+    setRuntimePhase(state, "softap-ready");
+  }
 }
 
 void maybeEnsureStationConnected(DeviceState* state) {
   if (state->facilityWifiSsid.isEmpty()) {
     state->stationConnected = false;
+    resetStationConnectState(state);
+    if (state->accessPointStarted) {
+      setRuntimePhase(state, "softap-ready");
+    } else {
+      setRuntimePhase(state, "idle");
+    }
     return;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
     state->stationConnected = true;
+    if (!state->stationConnectInProgress) {
+      state->stationConnectDeadlineMs = 0;
+    }
+    resetStationConnectState(state);
+    state->facilityWifiProvisioning = false;
+    setRuntimePhase(state, "facility-wifi-ready");
     return;
   }
 
   const unsigned long nowMs = millis();
-  if (state->lastStationConnectAttemptMs != 0 &&
-      static_cast<long>(nowMs - state->lastStationConnectAttemptMs) < 10000L) {
+  if (state->stationConnectInProgress) {
+    if (state->stationConnectDeadlineMs != 0 &&
+        static_cast<long>(nowMs - state->stationConnectDeadlineMs) >= 0) {
+      resetStationConnectState(state);
+      state->stationConnected = false;
+      setRuntimePhase(state, "facility-wifi-failed");
+      return;
+    }
+
     state->stationConnected = false;
+    setRuntimePhase(
+      state,
+      state->facilityWifiProvisioning ? "facility-wifi-provisioning" : "facility-wifi-connecting");
+    return;
+  }
+
+  if (state->lastStationConnectAttemptMs != 0 &&
+      static_cast<long>(nowMs - state->lastStationConnectAttemptMs) < static_cast<long>(kStationConnectRetryMs)) {
+    state->stationConnected = false;
+    setRuntimePhase(state, "facility-wifi-retrying");
     return;
   }
 
   WiFi.mode(state->accessPointStarted ? WIFI_AP_STA : WIFI_STA);
   WiFi.begin(state->facilityWifiSsid.c_str(), state->facilityWifiPassword.c_str());
   state->lastStationConnectAttemptMs = nowMs;
+  state->stationConnectDeadlineMs = nowMs + kStationConnectTimeoutMs;
+  state->stationConnectInProgress = true;
   state->stationConnected = false;
+  setRuntimePhase(
+    state,
+    state->facilityWifiProvisioning ? "facility-wifi-provisioning" : "facility-wifi-connecting");
 }
 
 }  // namespace
@@ -236,11 +296,18 @@ void stopSoftAp(WebServer& webServer, DeviceState* state) {
 
   WiFi.softAPdisconnect(true);
   state->accessPointStarted = false;
+  state->softApStartInProgress = false;
   state->wifiTicketExpiryMs = 0;
 
   if (!state->stationConnected && state->runtimeServerStarted) {
     webServer.stop();
     state->runtimeServerStarted = false;
+  }
+
+  if (state->stationConnected) {
+    setRuntimePhase(state, "facility-wifi-ready");
+  } else if (state->facilityWifiSsid.isEmpty()) {
+    setRuntimePhase(state, "idle");
   }
 }
 
@@ -258,17 +325,27 @@ bool ensureSoftApStarted(WebServer& webServer, DeviceState* state, const char* f
     if (!state->runtimeServerStarted) {
       ensureRuntimeRoutesRegistered(webServer, state, firmwareVersion);
     }
+    if (!state->stationConnectInProgress && !state->stationConnected) {
+      setRuntimePhase(state, "softap-ready");
+    }
     return true;
   }
 
   state->wifiSsid = state->bleName;
+  state->softApStartInProgress = true;
+  setRuntimePhase(state, "softap-starting");
   WiFi.mode(state->facilityWifiSsid.isEmpty() ? WIFI_AP : WIFI_AP_STA);
   state->accessPointStarted = WiFi.softAP(state->wifiSsid.c_str(), state->wifiPassword.c_str());
+  state->softApStartInProgress = false;
   if (!state->accessPointStarted) {
+    setRuntimePhase(state, "softap-failed");
     return false;
   }
 
   ensureRuntimeRoutesRegistered(webServer, state, firmwareVersion);
+  if (!state->stationConnectInProgress && !state->stationConnected) {
+    setRuntimePhase(state, "softap-ready");
+  }
   return true;
 }
 
@@ -282,16 +359,26 @@ bool provisionFacilityWifi(
     WiFi.disconnect(false, false);
     state->stationConnected = false;
     state->lastStationConnectAttemptMs = 0;
+    resetStationConnectState(state);
   }
   state->facilityWifiSsid = ssid;
   state->facilityWifiPassword = password;
   state->lastStationConnectAttemptMs = 0;
+  state->facilityWifiProvisioning = true;
+  resetStationConnectState(state);
   maybeEnsureStationConnected(state);
   const unsigned long startedAtMs = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startedAtMs < 15000UL) {
-    delay(250);
+  while (WiFi.status() != WL_CONNECTED && millis() - startedAtMs < kStationConnectTimeoutMs) {
+    maybeEnsureStationConnected(state);
+    delay(20);
+    yield();
   }
   state->stationConnected = WiFi.status() == WL_CONNECTED;
+  state->facilityWifiProvisioning = false;
+  if (!state->stationConnected) {
+    resetStationConnectState(state);
+    setRuntimePhase(state, "facility-wifi-failed");
+  }
 
   if (state->stationConnected && !state->runtimeServerStarted) {
     ensureRuntimeRoutesRegistered(webServer, state, firmwareVersion);
@@ -328,6 +415,9 @@ void tickWifiRuntime(WebServer& webServer, DeviceState* state, const char* firmw
   if (!state->accessPointStarted && !state->stationConnected && state->runtimeServerStarted) {
     webServer.stop();
     state->runtimeServerStarted = false;
+    if (state->facilityWifiSsid.isEmpty()) {
+      setRuntimePhase(state, "idle");
+    }
   }
 }
 

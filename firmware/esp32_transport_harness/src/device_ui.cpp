@@ -160,6 +160,48 @@ String currentTransportLabel(const DeviceState& state) {
   return "ble";
 }
 
+bool runtimePhaseHasFailure(const DeviceState& state) {
+  return state.runtimePhase == "facility-wifi-failed" || state.runtimePhase == "softap-failed";
+}
+
+String runtimePhaseLabel(const DeviceState& state) {
+  if (state.runtimePhase == "facility-wifi-provisioning") {
+    return "wifi save/join";
+  }
+  if (state.runtimePhase == "facility-wifi-connecting") {
+    return "wifi joining";
+  }
+  if (state.runtimePhase == "facility-wifi-retrying") {
+    return "wifi retrying";
+  }
+  if (state.runtimePhase == "facility-wifi-ready") {
+    return "wifi ready";
+  }
+  if (state.runtimePhase == "facility-wifi-failed") {
+    return "wifi failed";
+  }
+  if (state.runtimePhase == "softap-starting") {
+    return "ap starting";
+  }
+  if (state.runtimePhase == "softap-ready") {
+    return "ap ready";
+  }
+  if (state.runtimePhase == "softap-failed") {
+    return "ap failed";
+  }
+  return "";
+}
+
+String homeStatusLine(const DeviceState& state) {
+  const String runtimePhase = runtimePhaseLabel(state);
+  if (!runtimePhase.isEmpty() &&
+      (state.stationConnectInProgress || state.softApStartInProgress || runtimePhaseHasFailure(state))) {
+    return runtimePhase;
+  }
+
+  return enrollmentLabel(state) + " " + currentTransportLabel(state);
+}
+
 String menuLabel(MenuItem item) {
   switch (item) {
     case MenuItem::Status:
@@ -379,13 +421,15 @@ bool overlayPatternActive(LedOverlayType type, unsigned long nowMs) {
 }
 
 LedMode determineLedMode(const DeviceState& state) {
-  if (!state.lastErrorCode.isEmpty()) {
+  if (!state.lastErrorCode.isEmpty() || runtimePhaseHasFailure(state)) {
     return LedMode::Error;
   }
   if (gScreen == UiScreen::Menu || gScreen == UiScreen::Confirm) {
     return LedMode::Menu;
   }
-  if (state.pendingEnrollment.active ||
+  if (state.softApStartInProgress ||
+      state.stationConnectInProgress ||
+      state.pendingEnrollment.active ||
       (!state.facilityWifiSsid.isEmpty() && !state.stationConnected)) {
     return LedMode::PendingActivity;
   }
@@ -500,7 +544,7 @@ void returnFromConfirm(bool accepted) {
 
 void renderHomeScreen(const DeviceState& state) {
   const String title = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
-  renderLines(title, enrollmentLabel(state) + " " + currentTransportLabel(state));
+  renderLines(title, homeStatusLine(state));
 }
 
 void renderMenuScreen() {
@@ -510,14 +554,17 @@ void renderMenuScreen() {
 }
 
 void renderStatusDetail(const DeviceState& state) {
-  switch (gDetailPage % 2) {
+  switch (gDetailPage % 3) {
     case 0:
       renderLines("> Status", "Trans:" + currentTransportLabel(state));
       break;
-    default:
+    case 1:
       renderLines(
         "State:" + enrollmentLabel(state),
         "WiFi:" + String(state.stationConnected ? "up" : "down"));
+      break;
+    default:
+      renderLines("Runtime", runtimePhaseLabel(state).isEmpty() ? "steady" : runtimePhaseLabel(state));
       break;
   }
 }
@@ -551,7 +598,8 @@ void renderWifiToolsDetail(const DeviceState& state) {
     default:
       renderLines(
         "Select:clear",
-        "SoftAP:" + String(state.accessPointStarted ? "up" : "down"));
+        runtimePhaseLabel(state).isEmpty() ? "SoftAP:" + String(state.accessPointStarted ? "up" : "down")
+                                           : runtimePhaseLabel(state));
       break;
   }
 }
@@ -592,9 +640,14 @@ void clearFacilityWifi(
   Preferences& preferences) {
   state->facilityWifiSsid = "";
   state->facilityWifiPassword = "";
+  state->facilityWifiProvisioning = false;
   state->stationConnected = false;
+  state->stationConnectInProgress = false;
+  state->stationConnectDeadlineMs = 0;
   state->lastStationConnectAttemptMs = 0;
   state->lastErrorCode = "";
+  state->runtimePhase = state->accessPointStarted ? "softap-ready" : "idle";
+  state->runtimePhaseChangedAtMs = millis();
   WiFi.disconnect(false, false);
   saveDeviceState(preferences, *state);
 }
@@ -669,6 +722,12 @@ void executeConfirmedAction(
       stopSoftAp(webServer, state);
       WiFi.disconnect(false, false);
       clearEnrollmentState(state);
+      state->runtimePhase = "idle";
+      state->runtimePhaseChangedAtMs = millis();
+      state->stationConnectInProgress = false;
+      state->stationConnectDeadlineMs = 0;
+      state->facilityWifiProvisioning = false;
+      state->softApStartInProgress = false;
       saveDeviceState(preferences, *state);
       restartAdvertising(advertising, *state, gConfig.serviceUuid, gConfig.protocolVersion);
       logUiEvent("Factory reset");

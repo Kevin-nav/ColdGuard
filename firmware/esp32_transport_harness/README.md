@@ -16,11 +16,48 @@ Setup notes:
 - current device UI assumptions:
   - I2C 16x2 LCD using `LiquidCrystal_I2C`
   - LCD I2C address `0x27`
-  - capacitive touch input on `T0`
+  - capacitive touch navigation input on `T0`
+  - capacitive touch select input on `T4`
   - built-in LED on `GPIO 2`
-  - short touch uses the tested capacitive-tap behavior with about `200ms` debounce
-  - long touch uses about `700ms` hold time to open the menu or select the current action
-  - the LED runs continuous mode patterns for runtime, menu, enrollment-ready, pending/recovery, and error states
-  - major UI actions also print `[UI] ...` logs to Serial, including fresh enrollment links
+
+Current local control behavior:
+
+- nav tap advances menu and detail navigation
+- nav hold returns home or backs out of the current flow
+- select tap opens the menu from home, selects the current menu item, or advances detail pages
+- select hold confirms actions on confirm screens
+- `New enrollment`, `Clear Wi-Fi`, and `Factory reset` use explicit confirm screens
+- the touch timing still uses roughly `200ms` debounce and `700ms` hold detection, but it is applied per touch role instead of one shared sensor path
+
+Current LED behavior:
+
+- runtime normal: slow heartbeat
+- menu open: solid on
+- enrollment-ready: repeating double pulse
+- pending enrollment or Wi-Fi recovery activity: faster pulse
+- runtime transition states such as `wifi joining`, `wifi retrying`, and `ap starting` are surfaced through the pending/error patterns
+- error present: repeating triple blink
+- event overlays briefly override the base mode for new enrollment generation, facility Wi-Fi clear, factory reset, and newly recorded runtime errors
+
+Current Serial observability:
+
+- touch calibration prints the measured baseline and computed threshold for both nav and select inputs at boot
+- `[UI] Screen -> ...` logs are emitted for home, menu, detail, and confirm transitions
+- `[UI] Selection -> ...` logs are emitted when the menu cursor changes
+- `[UI] Input -> ...` logs are emitted for nav and select tap/hold events
+- `[UI] Confirm -> ...` logs are emitted for confirm entry, accept, and cancel
+- `[UI] Runtime -> ...` logs are emitted for runtime phase changes such as `softap-starting`, `softap-ready`, `facility-wifi-connecting`, `facility-wifi-retrying`, and `facility-wifi-failed`
+- every `New enrollment` action prints the device id, fresh bootstrap token, and full enrollment link to Serial
+
+Bench validation checklist:
+
+1. Confirm boot output includes separate nav and select calibration logs with baseline and threshold values.
+2. Confirm the home screen stays readable and shows runtime transition text when Wi-Fi or SoftAP changes state.
+3. Confirm nav tap moves the menu cursor and detail pages, while nav hold returns home or backs out cleanly.
+4. Confirm select tap opens the menu from home and activates the current menu item.
+5. Confirm `New enrollment`, `Clear Wi-Fi`, and `Factory reset` each show a confirm screen before executing.
+6. Confirm the LED heartbeat, menu solid-on mode, enrollment-ready double pulse, pending transition pattern, and error triple-blink behave as expected.
+7. Run `New enrollment` and confirm LCD, LED overlay, `[UI]` screen/input/confirm logs, bootstrap token, and full enrollment link all update together.
+8. If the board inverts the built-in LED or needs touch threshold tuning, record the adjustment before wider flashing.
 
 For the full contract and test flow, see `docs/runbooks/esp32-transport-harness.md`.

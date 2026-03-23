@@ -26,13 +26,25 @@ enum class UiInputEvent {
   SelectHold,
 };
 
-enum class UiMode {
-  Runtime,
+enum class UiScreen {
+  Home,
   Menu,
+  Detail,
+  Confirm,
+};
+
+enum class DetailView {
   Status,
   PairingCode,
   WifiTools,
   Diagnostics,
+};
+
+enum class ConfirmAction {
+  None,
+  NewEnrollment,
+  ClearFacilityWifi,
+  FactoryReset,
 };
 
 enum class MenuItem {
@@ -92,7 +104,11 @@ DeviceUiConfig gConfig = {
   "",
 };
 LiquidCrystal_I2C* gDisplay = nullptr;
-UiMode gMode = UiMode::Runtime;
+UiScreen gScreen = UiScreen::Home;
+DetailView gDetailView = DetailView::Status;
+ConfirmAction gConfirmAction = ConfirmAction::None;
+UiScreen gConfirmReturnScreen = UiScreen::Menu;
+DetailView gConfirmReturnDetailView = DetailView::Status;
 size_t gMenuIndex = 0;
 size_t gDetailPage = 0;
 unsigned long gTransientUntilMs = 0;
@@ -162,23 +178,49 @@ String menuLabel(MenuItem item) {
   return "Menu";
 }
 
-const char* uiModeLabel(UiMode mode) {
-  switch (mode) {
-    case UiMode::Runtime:
-      return "runtime";
-    case UiMode::Menu:
+const char* screenLabel(UiScreen screen) {
+  switch (screen) {
+    case UiScreen::Home:
+      return "home";
+    case UiScreen::Menu:
       return "menu";
-    case UiMode::Status:
+    case UiScreen::Detail:
+      return "detail";
+    case UiScreen::Confirm:
+      return "confirm";
+  }
+
+  return "home";
+}
+
+const char* detailViewLabel(DetailView view) {
+  switch (view) {
+    case DetailView::Status:
       return "status";
-    case UiMode::PairingCode:
+    case DetailView::PairingCode:
       return "pairing";
-    case UiMode::WifiTools:
+    case DetailView::WifiTools:
       return "wifi-tools";
-    case UiMode::Diagnostics:
+    case DetailView::Diagnostics:
       return "diagnostics";
   }
 
-  return "runtime";
+  return "status";
+}
+
+const char* confirmActionLabel(ConfirmAction action) {
+  switch (action) {
+    case ConfirmAction::None:
+      return "none";
+    case ConfirmAction::NewEnrollment:
+      return "new-enrollment";
+    case ConfirmAction::ClearFacilityWifi:
+      return "clear-facility-wifi";
+    case ConfirmAction::FactoryReset:
+      return "factory-reset";
+  }
+
+  return "none";
 }
 
 const char* ledModeLabel(LedMode mode) {
@@ -228,13 +270,17 @@ void logInputEvent(UiInputEvent event) {
   logUiEvent(String("Input -> ") + inputEventLabel(event));
 }
 
-void setUiMode(UiMode mode) {
-  if (gMode == mode) {
+void logMenuSelection() {
+  logUiEvent(String("Selection -> item=") + menuLabel(kMenuItems[gMenuIndex]));
+}
+
+void setUiScreen(UiScreen screen) {
+  if (gScreen == screen) {
     return;
   }
 
-  gMode = mode;
-  logUiEvent(String("Mode -> ") + uiModeLabel(mode));
+  gScreen = screen;
+  logUiEvent(String("Screen -> ") + screenLabel(screen));
 }
 
 String padToWidth(const String& value) {
@@ -325,7 +371,7 @@ LedMode determineLedMode(const DeviceState& state) {
   if (!state.lastErrorCode.isEmpty()) {
     return LedMode::Error;
   }
-  if (gMode == UiMode::Menu) {
+  if (gScreen == UiScreen::Menu || gScreen == UiScreen::Confirm) {
     return LedMode::Menu;
   }
   if (state.pendingEnrollment.active ||
@@ -389,16 +435,61 @@ void renderLed(const DeviceState& state) {
   }
 }
 
+void openHome() {
+  gDetailPage = 0;
+  setUiScreen(UiScreen::Home);
+}
+
 void openMenu() {
   gMenuIndex = 0;
   gDetailPage = 0;
-  setUiMode(UiMode::Menu);
-  logUiEvent("Menu opened");
+  setUiScreen(UiScreen::Menu);
+  logMenuSelection();
 }
 
-void renderRuntimeScreen(const DeviceState& state) {
+void openDetailView(DetailView view) {
+  gDetailView = view;
+  gDetailPage = 0;
+  setUiScreen(UiScreen::Detail);
+  logUiEvent(String("Detail -> ") + detailViewLabel(view));
+}
+
+void openConfirmScreen(ConfirmAction action, UiScreen returnScreen, DetailView returnDetailView) {
+  gConfirmAction = action;
+  gConfirmReturnScreen = returnScreen;
+  gConfirmReturnDetailView = returnDetailView;
+  setUiScreen(UiScreen::Confirm);
+  logUiEvent(String("Confirm -> action=") + confirmActionLabel(action));
+}
+
+void returnFromConfirm(bool accepted) {
+  logUiEvent(
+    String("Confirm -> action=") + confirmActionLabel(gConfirmAction) +
+    String(accepted ? " accepted" : " cancelled"));
+
+  const UiScreen returnScreen = gConfirmReturnScreen;
+  const DetailView returnDetailView = gConfirmReturnDetailView;
+  gConfirmAction = ConfirmAction::None;
+
+  if (accepted) {
+    return;
+  }
+
+  if (returnScreen == UiScreen::Detail) {
+    openDetailView(returnDetailView);
+    return;
+  }
+  if (returnScreen == UiScreen::Menu) {
+    setUiScreen(UiScreen::Menu);
+    logMenuSelection();
+    return;
+  }
+  openHome();
+}
+
+void renderHomeScreen(const DeviceState& state) {
   const String title = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
-  renderLines(title, "State:" + enrollmentLabel(state) + " " + currentTransportLabel(state));
+  renderLines(title, enrollmentLabel(state) + " " + currentTransportLabel(state));
 }
 
 void renderMenuScreen() {
@@ -407,20 +498,20 @@ void renderMenuScreen() {
   renderLines(">" + menuLabel(current), " " + menuLabel(next));
 }
 
-void renderStatusScreen(const DeviceState& state) {
+void renderStatusDetail(const DeviceState& state) {
   switch (gDetailPage % 2) {
     case 0:
-      renderLines("State:" + enrollmentLabel(state), "Trans:" + currentTransportLabel(state));
+      renderLines("> Status", "Trans:" + currentTransportLabel(state));
       break;
     default:
       renderLines(
-        "SoftAP:" + String(state.accessPointStarted ? "up" : "down"),
+        "State:" + enrollmentLabel(state),
         "WiFi:" + String(state.stationConnected ? "up" : "down"));
       break;
   }
 }
 
-void renderPairingCodeScreen(const DeviceState& state) {
+void renderPairingCodeDetail(const DeviceState& state) {
   if (!state.enrollmentReady) {
     renderLines("Pairing disabled", "New enroll first");
     return;
@@ -428,7 +519,7 @@ void renderPairingCodeScreen(const DeviceState& state) {
 
   switch (gDetailPage % 3) {
     case 0:
-      renderLines("Enroll ready", "ID:" + state.deviceId);
+      renderLines("> Pair code", "ID:" + state.deviceId);
       break;
     case 1:
       renderLines("Claim", state.bootstrapToken);
@@ -439,22 +530,22 @@ void renderPairingCodeScreen(const DeviceState& state) {
   }
 }
 
-void renderWifiToolsScreen(const DeviceState& state) {
+void renderWifiToolsDetail(const DeviceState& state) {
   switch (gDetailPage % 2) {
     case 0:
       renderLines(
-        "Facility SSID",
-        state.facilityWifiSsid.isEmpty() ? "not set" : state.facilityWifiSsid);
+        "> WiFi tools",
+        state.facilityWifiSsid.isEmpty() ? "SSID:not set" : "SSID:" + state.facilityWifiSsid);
       break;
     default:
       renderLines(
-        "Long:clear WiFi",
+        "Select:clear",
         "SoftAP:" + String(state.accessPointStarted ? "up" : "down"));
       break;
   }
 }
 
-void renderDiagnosticsScreen(const DeviceState& state) {
+void renderDiagnosticsDetail(const DeviceState& state) {
   switch (gDetailPage % 3) {
     case 0:
       renderLines(state.deviceId, "FW:" + String(gConfig.firmwareVersion));
@@ -465,6 +556,23 @@ void renderDiagnosticsScreen(const DeviceState& state) {
     default:
       renderLines("BLE:" + state.bleName, "Mode:" + enrollmentLabel(state));
       break;
+  }
+}
+
+void renderConfirmScreen() {
+  switch (gConfirmAction) {
+    case ConfirmAction::NewEnrollment:
+      renderLines("New enroll?", "Tap no Hold ok");
+      return;
+    case ConfirmAction::ClearFacilityWifi:
+      renderLines("Clear WiFi?", "Tap no Hold ok");
+      return;
+    case ConfirmAction::FactoryReset:
+      renderLines("Factory reset?", "Tap no Hold ok");
+      return;
+    case ConfirmAction::None:
+      renderLines("ColdGuard", "No action");
+      return;
   }
 }
 
@@ -497,29 +605,56 @@ void performMenuAction(
 
   switch (item) {
     case MenuItem::Status:
-      gDetailPage = 0;
-      setUiMode(UiMode::Status);
+      openDetailView(DetailView::Status);
       return;
     case MenuItem::NewEnrollment:
+      openConfirmScreen(ConfirmAction::NewEnrollment, UiScreen::Menu, DetailView::Status);
+      return;
+    case MenuItem::ShowPairingCode:
+      logUiEvent("Pairing code viewed");
+      openDetailView(DetailView::PairingCode);
+      return;
+    case MenuItem::WifiTools:
+      openDetailView(DetailView::WifiTools);
+      return;
+    case MenuItem::FactoryReset:
+      openConfirmScreen(ConfirmAction::FactoryReset, UiScreen::Menu, DetailView::Status);
+      return;
+    case MenuItem::Diagnostics:
+      openDetailView(DetailView::Diagnostics);
+      return;
+    case MenuItem::Exit:
+      openHome();
+      return;
+  }
+}
+
+void executeConfirmedAction(
+  DeviceState* state,
+  Preferences& preferences,
+  WebServer& webServer,
+  BLEAdvertising* advertising) {
+  const ConfirmAction action = gConfirmAction;
+  returnFromConfirm(true);
+
+  switch (action) {
+    case ConfirmAction::NewEnrollment:
       prepareNewEnrollment(state);
       saveDeviceState(preferences, *state);
       restartAdvertising(advertising, *state, gConfig.serviceUuid, gConfig.protocolVersion);
       logNewEnrollment(*state);
       triggerLedOverlay(LedOverlayType::EnrollmentGenerated, 1200UL);
       showTransientMessage("New enroll ready");
-      gDetailPage = 0;
-      setUiMode(UiMode::PairingCode);
+      openDetailView(DetailView::PairingCode);
       return;
-    case MenuItem::ShowPairingCode:
-      logUiEvent("Pairing code viewed");
-      gDetailPage = 0;
-      setUiMode(UiMode::PairingCode);
+    case ConfirmAction::ClearFacilityWifi:
+      clearFacilityWifi(state, preferences);
+      logUiEvent("Facility Wi-Fi cleared");
+      triggerLedOverlay(LedOverlayType::FacilityWifiCleared, 1200UL);
+      showTransientMessage("Facility WiFi clr");
+      openDetailView(DetailView::WifiTools);
       return;
-    case MenuItem::WifiTools:
-      gDetailPage = 0;
-      setUiMode(UiMode::WifiTools);
-      return;
-    case MenuItem::FactoryReset:
+    case ConfirmAction::FactoryReset:
       stopSoftAp(webServer, state);
       WiFi.disconnect(false, false);
       clearEnrollmentState(state);
@@ -528,14 +663,9 @@ void performMenuAction(
       logUiEvent("Factory reset");
       triggerLedOverlay(LedOverlayType::FactoryReset, 1400UL);
       showTransientMessage("Factory reset");
-      setUiMode(UiMode::Runtime);
+      openHome();
       return;
-    case MenuItem::Diagnostics:
-      gDetailPage = 0;
-      setUiMode(UiMode::Diagnostics);
-      return;
-    case MenuItem::Exit:
-      setUiMode(UiMode::Runtime);
+    case ConfirmAction::None:
       return;
   }
 }
@@ -553,24 +683,34 @@ bool sampleTouchActive(const TouchTracker& tracker) {
 }
 
 void advanceUiPage() {
-  if (gMode == UiMode::Menu) {
+  if (gScreen == UiScreen::Menu) {
     gMenuIndex = (gMenuIndex + 1) % kMenuItemCount;
+    logMenuSelection();
     return;
   }
 
-  if (gMode != UiMode::Runtime) {
+  if (gScreen == UiScreen::Detail) {
     gDetailPage += 1;
+    return;
+  }
+
+  if (gScreen == UiScreen::Confirm) {
+    returnFromConfirm(false);
   }
 }
 
 void goBackFromCurrentScreen() {
-  if (gMode == UiMode::Menu) {
-    setUiMode(UiMode::Runtime);
+  if (gScreen == UiScreen::Home) {
     return;
   }
 
-  if (gMode == UiMode::Runtime) {
-    openMenu();
+  if (gScreen == UiScreen::Menu) {
+    openHome();
+    return;
+  }
+
+  if (gScreen == UiScreen::Confirm) {
+    returnFromConfirm(false);
     return;
   }
 
@@ -593,28 +733,35 @@ void handleInputEvent(
       goBackFromCurrentScreen();
       return;
     case UiInputEvent::SelectTap:
-      if (gMode == UiMode::Menu) {
-        performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
-        return;
-      }
-      if (gMode == UiMode::Runtime) {
+      if (gScreen == UiScreen::Home) {
         openMenu();
         return;
       }
-      advanceUiPage();
-      return;
-    case UiInputEvent::SelectHold:
-      if (gMode == UiMode::WifiTools) {
-        clearFacilityWifi(state, preferences);
-        logUiEvent("Facility Wi-Fi cleared");
-        triggerLedOverlay(LedOverlayType::FacilityWifiCleared, 1200UL);
-        showTransientMessage("Facility WiFi clr");
-        gDetailPage = 0;
-        setUiMode(UiMode::WifiTools);
+      if (gScreen == UiScreen::Menu) {
+        performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
         return;
       }
-      if (gMode == UiMode::Menu) {
+      if (gScreen == UiScreen::Detail) {
+        if (gDetailView == DetailView::WifiTools) {
+          openConfirmScreen(ConfirmAction::ClearFacilityWifi, UiScreen::Detail, DetailView::WifiTools);
+          return;
+        }
+        advanceUiPage();
+        return;
+      }
+      returnFromConfirm(false);
+      return;
+    case UiInputEvent::SelectHold:
+      if (gScreen == UiScreen::Confirm) {
+        executeConfirmedAction(state, preferences, webServer, advertising);
+        return;
+      }
+      if (gScreen == UiScreen::Menu) {
         performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
+        return;
+      }
+      if (gScreen == UiScreen::Detail && gDetailView == DetailView::WifiTools) {
+        openConfirmScreen(ConfirmAction::ClearFacilityWifi, UiScreen::Detail, DetailView::WifiTools);
         return;
       }
       openMenu();
@@ -694,24 +841,31 @@ void renderUi(const DeviceState& state) {
     return;
   }
 
-  switch (gMode) {
-    case UiMode::Runtime:
-      renderRuntimeScreen(state);
+  switch (gScreen) {
+    case UiScreen::Home:
+      renderHomeScreen(state);
       return;
-    case UiMode::Menu:
+    case UiScreen::Menu:
       renderMenuScreen();
       return;
-    case UiMode::Status:
-      renderStatusScreen(state);
+    case UiScreen::Detail:
+      switch (gDetailView) {
+        case DetailView::Status:
+          renderStatusDetail(state);
+          return;
+        case DetailView::PairingCode:
+          renderPairingCodeDetail(state);
+          return;
+        case DetailView::WifiTools:
+          renderWifiToolsDetail(state);
+          return;
+        case DetailView::Diagnostics:
+          renderDiagnosticsDetail(state);
+          return;
+      }
       return;
-    case UiMode::PairingCode:
-      renderPairingCodeScreen(state);
-      return;
-    case UiMode::WifiTools:
-      renderWifiToolsScreen(state);
-      return;
-    case UiMode::Diagnostics:
-      renderDiagnosticsScreen(state);
+    case UiScreen::Confirm:
+      renderConfirmScreen();
       return;
   }
 }
@@ -762,6 +916,13 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   gSelectTouch = TouchTracker{gConfig.selectTouchPin, gSelectTouchThreshold};
   clearTouchTracker(&gNavTouch);
   clearTouchTracker(&gSelectTouch);
+  gScreen = UiScreen::Home;
+  gDetailView = DetailView::Status;
+  gConfirmAction = ConfirmAction::None;
+  gConfirmReturnScreen = UiScreen::Menu;
+  gConfirmReturnDetailView = DetailView::Status;
+  gMenuIndex = 0;
+  gDetailPage = 0;
   gLedOverlay = LedOverlayState{};
   gLastLedOutput = false;
   gHasLoggedLedMode = false;

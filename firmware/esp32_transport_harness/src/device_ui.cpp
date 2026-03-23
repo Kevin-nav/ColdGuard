@@ -14,6 +14,18 @@ namespace {
 constexpr unsigned long kTransientMessageMs = 2500UL;
 constexpr bool kBuiltInLedActiveHigh = true;
 
+enum class TouchRole {
+  Nav,
+  Select,
+};
+
+enum class UiInputEvent {
+  NavTap,
+  NavHold,
+  SelectTap,
+  SelectHold,
+};
+
 enum class UiMode {
   Runtime,
   Menu,
@@ -55,6 +67,16 @@ struct LedOverlayState {
   unsigned long durationMs = 0;
 };
 
+struct TouchTracker {
+  uint8_t pin = 0;
+  uint16_t threshold = 0;
+  bool stableActive = false;
+  bool rawActive = false;
+  bool longPressHandled = false;
+  unsigned long stateChangedAtMs = 0;
+  unsigned long startedAtMs = 0;
+};
+
 DeviceUiConfig gConfig = {
   T0,
   T4,
@@ -79,11 +101,8 @@ uint16_t gNavTouchBaseline = 0;
 uint16_t gNavTouchThreshold = 0;
 uint16_t gSelectTouchBaseline = 0;
 uint16_t gSelectTouchThreshold = 0;
-bool gTouchStableActive = false;
-bool gTouchRawActive = false;
-bool gTouchLongPressHandled = false;
-unsigned long gTouchStateChangedAtMs = 0;
-unsigned long gTouchStartedAtMs = 0;
+TouchTracker gNavTouch;
+TouchTracker gSelectTouch;
 LedOverlayState gLedOverlay;
 bool gLastLedOutput = false;
 bool gHasLoggedLedMode = false;
@@ -188,6 +207,25 @@ void logTouchCalibration(const char* role, uint8_t touchPin, uint16_t baseline, 
     String("[UI] ") + role + " touch calibrated: pin=" + String(touchPin) +
     String(" baseline=") + String(baseline) +
     String(" threshold=") + String(threshold));
+}
+
+const char* inputEventLabel(UiInputEvent event) {
+  switch (event) {
+    case UiInputEvent::NavTap:
+      return "nav_tap";
+    case UiInputEvent::NavHold:
+      return "nav_hold";
+    case UiInputEvent::SelectTap:
+      return "select_tap";
+    case UiInputEvent::SelectHold:
+      return "select_hold";
+  }
+
+  return "input";
+}
+
+void logInputEvent(UiInputEvent event) {
+  logUiEvent(String("Input -> ") + inputEventLabel(event));
 }
 
 void setUiMode(UiMode mode) {
@@ -502,87 +540,136 @@ void performMenuAction(
   }
 }
 
-void handleShortPress() {
-  if (gMode == UiMode::Runtime) {
-    return;
-  }
+void clearTouchTracker(TouchTracker* tracker) {
+  tracker->stableActive = false;
+  tracker->rawActive = false;
+  tracker->longPressHandled = false;
+  tracker->stateChangedAtMs = millis();
+  tracker->startedAtMs = 0;
+}
 
+bool sampleTouchActive(const TouchTracker& tracker) {
+  return touchRead(tracker.pin) < tracker.threshold;
+}
+
+void advanceUiPage() {
   if (gMode == UiMode::Menu) {
     gMenuIndex = (gMenuIndex + 1) % kMenuItemCount;
     return;
   }
 
-  gDetailPage += 1;
+  if (gMode != UiMode::Runtime) {
+    gDetailPage += 1;
+  }
 }
 
-void handleLongPress(
-  DeviceState* state,
-  Preferences& preferences,
-  WebServer& webServer,
-  BLEAdvertising* advertising) {
+void goBackFromCurrentScreen() {
+  if (gMode == UiMode::Menu) {
+    setUiMode(UiMode::Runtime);
+    return;
+  }
+
   if (gMode == UiMode::Runtime) {
     openMenu();
-    return;
-  }
-
-  if (gMode == UiMode::Menu) {
-    performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
-    return;
-  }
-
-  if (gMode == UiMode::WifiTools) {
-    clearFacilityWifi(state, preferences);
-    logUiEvent("Facility Wi-Fi cleared");
-    triggerLedOverlay(LedOverlayType::FacilityWifiCleared, 1200UL);
-    showTransientMessage("Facility WiFi clr");
-    gDetailPage = 0;
-    setUiMode(UiMode::WifiTools);
     return;
   }
 
   openMenu();
 }
 
-bool sampleNavTouchActive() {
-  return touchRead(gConfig.navTouchPin) < gNavTouchThreshold;
+void handleInputEvent(
+  UiInputEvent event,
+  DeviceState* state,
+  Preferences& preferences,
+  WebServer& webServer,
+  BLEAdvertising* advertising) {
+  logInputEvent(event);
+
+  switch (event) {
+    case UiInputEvent::NavTap:
+      advanceUiPage();
+      return;
+    case UiInputEvent::NavHold:
+      goBackFromCurrentScreen();
+      return;
+    case UiInputEvent::SelectTap:
+      if (gMode == UiMode::Menu) {
+        performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
+        return;
+      }
+      if (gMode == UiMode::Runtime) {
+        openMenu();
+        return;
+      }
+      advanceUiPage();
+      return;
+    case UiInputEvent::SelectHold:
+      if (gMode == UiMode::WifiTools) {
+        clearFacilityWifi(state, preferences);
+        logUiEvent("Facility Wi-Fi cleared");
+        triggerLedOverlay(LedOverlayType::FacilityWifiCleared, 1200UL);
+        showTransientMessage("Facility WiFi clr");
+        gDetailPage = 0;
+        setUiMode(UiMode::WifiTools);
+        return;
+      }
+      if (gMode == UiMode::Menu) {
+        performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
+        return;
+      }
+      openMenu();
+      return;
+  }
 }
 
-void processTouch(
+void processTouchTracker(
+  TouchTracker* tracker,
+  TouchRole role,
   DeviceState* state,
   Preferences& preferences,
   WebServer& webServer,
   BLEAdvertising* advertising) {
   const unsigned long nowMs = millis();
-  const bool rawActive = sampleNavTouchActive();
+  const bool rawActive = sampleTouchActive(*tracker);
 
-  if (rawActive != gTouchRawActive) {
-    gTouchRawActive = rawActive;
-    gTouchStateChangedAtMs = nowMs;
+  if (rawActive != tracker->rawActive) {
+    tracker->rawActive = rawActive;
+    tracker->stateChangedAtMs = nowMs;
   }
 
-  if (nowMs - gTouchStateChangedAtMs < gConfig.touchDebounceMs) {
+  if (nowMs - tracker->stateChangedAtMs < gConfig.touchDebounceMs) {
     return;
   }
 
-  if (rawActive != gTouchStableActive) {
-    gTouchStableActive = rawActive;
+  if (rawActive != tracker->stableActive) {
+    tracker->stableActive = rawActive;
     if (rawActive) {
-      gTouchStartedAtMs = nowMs;
-      gTouchLongPressHandled = false;
+      tracker->startedAtMs = nowMs;
+      tracker->longPressHandled = false;
       return;
     }
 
-    if (!gTouchLongPressHandled) {
-      handleShortPress();
+    if (!tracker->longPressHandled) {
+      handleInputEvent(
+        role == TouchRole::Nav ? UiInputEvent::NavTap : UiInputEvent::SelectTap,
+        state,
+        preferences,
+        webServer,
+        advertising);
     }
     return;
   }
 
-  if (gTouchStableActive &&
-      !gTouchLongPressHandled &&
-      nowMs - gTouchStartedAtMs >= gConfig.longPressMs) {
-    gTouchLongPressHandled = true;
-    handleLongPress(state, preferences, webServer, advertising);
+  if (tracker->stableActive &&
+      !tracker->longPressHandled &&
+      nowMs - tracker->startedAtMs >= gConfig.longPressMs) {
+    tracker->longPressHandled = true;
+    handleInputEvent(
+      role == TouchRole::Nav ? UiInputEvent::NavHold : UiInputEvent::SelectHold,
+      state,
+      preferences,
+      webServer,
+      advertising);
   }
 }
 
@@ -671,11 +758,10 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   gNavTouchThreshold = deriveTouchThreshold(gNavTouchBaseline, gConfig.touchThresholdFactor);
   gSelectTouchBaseline = calibrateTouchBaseline(gConfig.selectTouchPin);
   gSelectTouchThreshold = deriveTouchThreshold(gSelectTouchBaseline, gConfig.touchThresholdFactor);
-  gTouchRawActive = false;
-  gTouchStableActive = false;
-  gTouchLongPressHandled = false;
-  gTouchStateChangedAtMs = millis();
-  gTouchStartedAtMs = 0;
+  gNavTouch = TouchTracker{gConfig.navTouchPin, gNavTouchThreshold};
+  gSelectTouch = TouchTracker{gConfig.selectTouchPin, gSelectTouchThreshold};
+  clearTouchTracker(&gNavTouch);
+  clearTouchTracker(&gSelectTouch);
   gLedOverlay = LedOverlayState{};
   gLastLedOutput = false;
   gHasLoggedLedMode = false;
@@ -700,7 +786,8 @@ void tickDeviceUi(
   Preferences& preferences,
   WebServer& webServer,
   BLEAdvertising* advertising) {
-  processTouch(state, preferences, webServer, advertising);
+  processTouchTracker(&gNavTouch, TouchRole::Nav, state, preferences, webServer, advertising);
+  processTouchTracker(&gSelectTouch, TouchRole::Select, state, preferences, webServer, advertising);
   maybeTrackErrorOverlay(*state);
   renderLed(*state);
   renderUi(*state);

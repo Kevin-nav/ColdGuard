@@ -176,6 +176,71 @@ bool runtimePhaseIsActive(const DeviceState& state) {
   return state.stationConnectInProgress || state.softApStartInProgress || runtimePhaseHasFailure(state);
 }
 
+bool runtimePhaseIsPending(const DeviceState& state) {
+  return state.stationConnectInProgress ||
+         state.softApStartInProgress ||
+         state.facilityWifiProvisioning ||
+         (!state.facilityWifiSsid.isEmpty() && !state.stationConnected && state.runtimePhase != "facility-wifi-failed");
+}
+
+String runtimeStatusTag(const DeviceState& state) {
+  if (runtimePhaseHasFailure(state) || !state.lastErrorCode.isEmpty()) {
+    return "ERROR";
+  }
+  if (state.stationConnectInProgress || state.softApStartInProgress || state.facilityWifiProvisioning) {
+    return "PENDING";
+  }
+  if (state.enrollmentReady || state.pendingEnrollment.active) {
+    return "READY";
+  }
+  if (state.stationConnected) {
+    return "ONLINE";
+  }
+  return "IDLE";
+}
+
+String runtimeStatusLine(const DeviceState& state) {
+  if (runtimePhaseHasFailure(state) || !state.lastErrorCode.isEmpty()) {
+    return "Check Wi-Fi settings";
+  }
+
+  if (state.stationConnectInProgress) {
+    return state.facilityWifiSsid.isEmpty()
+             ? "Joining facility Wi-Fi"
+             : String("Joining ") + state.facilityWifiSsid;
+  }
+
+  if (state.softApStartInProgress) {
+    return "Starting local AP";
+  }
+
+  if (state.facilityWifiProvisioning) {
+    return "Saving Wi-Fi settings";
+  }
+
+  if (state.stationConnected) {
+    return "Facility Wi-Fi ready";
+  }
+
+  if (!state.facilityWifiSsid.isEmpty()) {
+    return "Facility Wi-Fi retrying";
+  }
+
+  if (state.enrollmentReady) {
+    return "Ready for pairing";
+  }
+
+  if (state.pendingEnrollment.active) {
+    return "Enrollment pending";
+  }
+
+  if (state.enrollmentState == "enrolled") {
+    return "Ready for runtime";
+  }
+
+  return "Select opens menu";
+}
+
 String runtimePhaseLabel(const DeviceState& state) {
   if (state.runtimePhase == "facility-wifi-provisioning") {
     return "saving WiFi";
@@ -214,38 +279,7 @@ String homePrimaryLine(const DeviceState& state) {
 }
 
 String homeSecondaryLine(const DeviceState& state) {
-  if (state.stationConnectInProgress) {
-    return state.facilityWifiSsid.isEmpty()
-             ? "Joining facility Wi-Fi"
-             : String("Joining ") + state.facilityWifiSsid;
-  }
-
-  if (state.softApStartInProgress) {
-    return "Starting local AP";
-  }
-
-  if (runtimePhaseHasFailure(state)) {
-    return "Check Wi-Fi settings";
-  }
-
-  const String runtimePhase = runtimePhaseLabel(state);
-  if (!runtimePhase.isEmpty()) {
-    return runtimePhase;
-  }
-
-  if (state.pendingEnrollment.active) {
-    return "Enrollment pending";
-  }
-
-  if (state.enrollmentReady) {
-    return "Ready for pairing";
-  }
-
-  if (state.enrollmentState == "enrolled") {
-    return "Ready for runtime";
-  }
-
-  return "Select opens menu";
+  return runtimeStatusLine(state);
 }
 
 String menuLabel(MenuItem item) {
@@ -386,6 +420,19 @@ String marqueeText(const String& value, size_t maxChars, unsigned long nowMs) {
     window += padded.charAt((windowStart + index) % padded.length());
   }
   return window;
+}
+
+String uiFrameSignature(const DeviceState& state) {
+  return String("screen=") + screenLabel(gScreen) +
+         String("|detail=") + detailViewLabel(gDetailView) +
+         String("|confirm=") + confirmActionLabel(gConfirmAction) +
+         String("|menu=") + String(gMenuIndex) +
+         String("|page=") + String(gDetailPage) +
+         String("|rt=") + state.runtimePhase +
+         String("|rtTag=") + runtimeStatusTag(state) +
+         String("|rtBusy=") + String(runtimePhaseIsPending(state) ? "1" : "0") +
+         String("|err=") + (state.lastErrorCode.isEmpty() ? String("none") : state.lastErrorCode) +
+         String("|transient=") + (gTransientUntilMs > millis() && gScreen != UiScreen::Confirm ? gTransientMessage : String("none"));
 }
 
 String clipText(const String& value, size_t maxChars) {
@@ -650,10 +697,10 @@ void returnFromConfirm(bool accepted) {
 void renderHomeScreen(const DeviceState& state) {
   const String title = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
   const unsigned long nowMs = millis();
-  const String primary = fitBodyText(homePrimaryLine(state), nowMs);
+  const String primary = fitBodyText(runtimeStatusTag(state) + String("  ") + homePrimaryLine(state), nowMs);
   const String secondary = fitBodyText(homeSecondaryLine(state), nowMs);
   const String footer = currentFooterNotice("Select: menu");
-  const String frameKey = String("home|") + title + "|" + primary + "|" + secondary + "|" + footer;
+  const String frameKey = String("home|") + title + "|" + primary + "|" + secondary + "|" + footer + "|" + uiFrameSignature(state);
   if (!beginFrame(frameKey)) {
     return;
   }
@@ -719,14 +766,14 @@ void renderStatusDetail(const DeviceState& state) {
       break;
     default:
       body1 = "Runtime";
-      body2 = runtimePhaseLabel(state).isEmpty() ? "steady" : runtimePhaseLabel(state);
+      body2 = runtimePhaseLabel(state).isEmpty() ? runtimeStatusTag(state) : runtimePhaseLabel(state);
       break;
   }
 
   const String footer = currentFooterNotice("Nav: page  Hold: back");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
-  const String frameKey = String("detail|status|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  const String frameKey = String("detail|status|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
   if (!beginFrame(frameKey)) {
     return;
   }
@@ -797,7 +844,7 @@ void renderWifiToolsDetail(const DeviceState& state) {
     default:
       body1 = "Clear saved Wi-Fi";
       body2 = runtimePhaseLabel(state).isEmpty()
-                ? "Transport " + currentTransportLabel(state)
+                ? runtimeStatusLine(state)
                 : runtimePhaseLabel(state);
       break;
   }
@@ -805,7 +852,7 @@ void renderWifiToolsDetail(const DeviceState& state) {
   const String footer = currentFooterNotice("Nav: page  Select: clear");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
-  const String frameKey = String("detail|wifi|") + String(gDetailPage % 2) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  const String frameKey = String("detail|wifi|") + String(gDetailPage % 2) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
   if (!beginFrame(frameKey)) {
     return;
   }
@@ -842,7 +889,7 @@ void renderDiagnosticsDetail(const DeviceState& state) {
   const String footer = currentFooterNotice("Nav: page  Hold: back");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
-  const String frameKey = String("detail|diag|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  const String frameKey = String("detail|diag|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
   if (!beginFrame(frameKey)) {
     return;
   }
@@ -874,7 +921,7 @@ void renderConfirmScreen() {
   }
 
   const String footer = "Tap: no  Hold: yes";
-  const String frameKey = String("confirm|") + String(confirmActionLabel(gConfirmAction)) + "|" + prompt;
+  const String frameKey = String("confirm|") + String(confirmActionLabel(gConfirmAction)) + "|" + prompt + "|" + gTransientMessage;
   if (!beginFrame(frameKey)) {
     return;
   }
@@ -1260,7 +1307,7 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
 
   logTouchCalibration("Nav", gConfig.navTouchPin, gNavTouchBaseline, gNavTouchThreshold);
   logTouchCalibration("Select", gConfig.selectTouchPin, gSelectTouchBaseline, gSelectTouchThreshold);
-  if (beginFrame("boot|ui-ready")) {
+  if (beginFrame("boot|ui-ready|oled")) {
     drawHeader("ColdGuard");
     setEmphasisFont();
     drawTextCentered(24, "OLED ready");

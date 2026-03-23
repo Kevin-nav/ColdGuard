@@ -14,8 +14,9 @@ Setup notes:
 - for Arduino IDE, use `Tools > Partition Scheme > No OTA (2MB APP/2MB SPIFFS)` on a 4MB `ESP32 Dev Module`
 - keep `Tools > Debug Level > None`; the core is already built with size optimization and the current sketch can exceed the default `1310720` byte app limit
 - current device UI assumptions:
-  - I2C 16x2 LCD using `LiquidCrystal_I2C`
-  - LCD I2C address `0x27`
+  - 1.3" SH1106 I2C OLED using `U8g2`
+  - OLED driver `U8G2_SH1106_128X64_NONAME_F_HW_I2C`
+  - OLED I2C wiring `SDA=21`, `SCL=22`
   - capacitive touch navigation input on `T0`
   - capacitive touch select input on `T4`
   - built-in LED on `GPIO 2`
@@ -29,13 +30,14 @@ Current local control behavior:
 - `New enrollment`, `Clear Wi-Fi`, and `Factory reset` use explicit confirm screens
 - the touch timing still uses roughly `200ms` debounce and `700ms` hold detection, but it is applied per touch role instead of one shared sensor path
 
-Current LED behavior:
+Current OLED and LED behavior:
 
+- the OLED shows a header/body/footer layout with a visible menu highlight, clearer detail pages, and centered confirm prompts
 - runtime normal: slow heartbeat
 - menu open: solid on
 - enrollment-ready: repeating double pulse
 - pending enrollment or Wi-Fi recovery activity: faster pulse
-- runtime transition states such as `wifi joining`, `wifi retrying`, and `ap starting` are surfaced through the pending/error patterns
+- runtime transition states such as `PENDING`, `READY`, `ONLINE`, and `ERROR` are surfaced on the OLED and reflected by the LED mode
 - error present: repeating triple blink
 - event overlays briefly override the base mode for new enrollment generation, facility Wi-Fi clear, factory reset, and newly recorded runtime errors
 
@@ -52,12 +54,13 @@ Current Serial observability:
 Bench validation checklist:
 
 1. Confirm boot output includes separate nav and select calibration logs with baseline and threshold values.
-2. Confirm the home screen stays readable and shows runtime transition text when Wi-Fi or SoftAP changes state.
+2. Confirm the OLED boots to a readable `OLED ready` frame and the home screen stays readable during runtime transitions.
 3. Confirm nav tap moves the menu cursor and detail pages, while nav hold returns home or backs out cleanly.
 4. Confirm select tap opens the menu from home and activates the current menu item.
 5. Confirm `New enrollment`, `Clear Wi-Fi`, and `Factory reset` each show a confirm screen before executing.
-6. Confirm the LED heartbeat, menu solid-on mode, enrollment-ready double pulse, pending transition pattern, and error triple-blink behave as expected.
-7. Run `New enrollment` and confirm LCD, LED overlay, `[UI]` screen/input/confirm logs, bootstrap token, and full enrollment link all update together.
-8. If the board inverts the built-in LED or needs touch threshold tuning, record the adjustment before wider flashing.
+6. Confirm the OLED highlight, detail layout, and confirm prompt are readable on the SH1106 panel without flicker.
+7. Confirm the LED heartbeat, menu solid-on mode, enrollment-ready double pulse, pending transition pattern, and error triple-blink behave as expected.
+8. Run `New enrollment` and confirm OLED, LED overlay, `[UI]` screen/input/confirm logs, bootstrap token, and full enrollment link all update together.
+9. If the board inverts the built-in LED or needs touch threshold tuning, record the adjustment before wider flashing.
 
 For the full contract and test flow, see `docs/runbooks/esp32-transport-harness.md`.

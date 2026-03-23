@@ -93,7 +93,8 @@ DeviceUiConfig gConfig = {
   T0,
   T4,
   2,
-  0x27,
+  21,
+  22,
   16,
   2,
   0.40f,
@@ -125,8 +126,7 @@ bool gHasLoggedLedMode = false;
 LedMode gLastLoggedLedMode = LedMode::Runtime;
 String gLastObservedErrorCode;
 bool gHasRenderedFrame = false;
-String gLastRenderedLine1;
-String gLastRenderedLine2;
+String gLastRenderedFrameKey;
 
 const MenuItem kMenuItems[] = {
   MenuItem::Status,
@@ -139,6 +139,15 @@ const MenuItem kMenuItems[] = {
 };
 
 constexpr size_t kMenuItemCount = sizeof(kMenuItems) / sizeof(kMenuItems[0]);
+constexpr uint8_t kDisplayWidth = 128;
+constexpr uint8_t kDisplayHeight = 64;
+constexpr uint8_t kHeaderDividerY = 15;
+constexpr uint8_t kFooterDividerY = 55;
+constexpr uint8_t kMenuFirstRowY = 18;
+constexpr uint8_t kMenuRowHeight = 9;
+constexpr size_t kTitleChars = 18;
+constexpr size_t kBodyChars = 20;
+constexpr size_t kFooterChars = 24;
 
 String enrollmentLabel(const DeviceState& state) {
   if (state.pendingEnrollment.active) {
@@ -328,55 +337,107 @@ void setUiScreen(UiScreen screen) {
   logUiEvent(String("Screen -> ") + screenLabel(screen));
 }
 
-String padToWidth(const String& value) {
-  String padded = value;
-  if (padded.length() >= gConfig.lcdColumns) {
-    return padded.substring(0, gConfig.lcdColumns);
-  }
-
-  while (padded.length() < gConfig.lcdColumns) {
-    padded += " ";
-  }
-  return padded;
-}
-
-String scrollLine(const String& value, unsigned long nowMs) {
-  if (value.length() <= gConfig.lcdColumns) {
-    return padToWidth(value);
+String marqueeText(const String& value, size_t maxChars, unsigned long nowMs) {
+  if (value.length() <= maxChars) {
+    return value;
   }
 
   const String padded = value + "   ";
   const size_t windowStart = (nowMs / 450UL) % padded.length();
   String window;
-  for (size_t index = 0; index < gConfig.lcdColumns; index++) {
+  for (size_t index = 0; index < maxChars; index++) {
     window += padded.charAt((windowStart + index) % padded.length());
   }
   return window;
 }
 
-void renderLines(const String& rawLine1, const String& rawLine2) {
+String clipText(const String& value, size_t maxChars) {
+  if (value.length() <= maxChars) {
+    return value;
+  }
+  if (maxChars <= 3) {
+    return value.substring(0, maxChars);
+  }
+  return value.substring(0, maxChars - 3) + "...";
+}
+
+String fitBodyText(const String& value, unsigned long nowMs) {
+  return marqueeText(value, kBodyChars, nowMs);
+}
+
+String fitTitleText(const String& value) {
+  return clipText(value, kTitleChars);
+}
+
+String fitFooterText(const String& value) {
+  return clipText(value, kFooterChars);
+}
+
+void setHeaderFont() {
+  gDisplay->setFont(u8g2_font_7x13B_tf);
+  gDisplay->setFontPosTop();
+}
+
+void setBodyFont() {
+  gDisplay->setFont(u8g2_font_6x12_tf);
+  gDisplay->setFontPosTop();
+}
+
+void setFooterFont() {
+  gDisplay->setFont(u8g2_font_5x7_tf);
+  gDisplay->setFontPosTop();
+}
+
+void drawTextLeft(uint8_t x, uint8_t y, const String& text) {
+  gDisplay->drawStr(x, y, text.c_str());
+}
+
+void drawTextCentered(uint8_t y, const String& text) {
+  const int16_t width = gDisplay->getStrWidth(text.c_str());
+  int16_t x = (kDisplayWidth - width) / 2;
+  if (x < 0) {
+    x = 0;
+  }
+  gDisplay->drawStr(static_cast<uint8_t>(x), y, text.c_str());
+}
+
+bool beginFrame(const String& frameKey) {
   if (gDisplay == nullptr) {
-    return;
+    return false;
   }
 
-  const unsigned long nowMs = millis();
-  const String line1 = scrollLine(rawLine1, nowMs);
-  const String line2 = scrollLine(rawLine2, nowMs);
-
-  if (gHasRenderedFrame && line1 == gLastRenderedLine1 && line2 == gLastRenderedLine2) {
-    return;
+  if (gHasRenderedFrame && frameKey == gLastRenderedFrameKey) {
+    return false;
   }
 
   gHasRenderedFrame = true;
-  gLastRenderedLine1 = line1;
-  gLastRenderedLine2 = line2;
+  gLastRenderedFrameKey = frameKey;
 
   gDisplay->clearBuffer();
-  gDisplay->setFont(u8g2_font_6x12_tf);
-  gDisplay->setFontPosTop();
-  gDisplay->drawStr(0, 0, line1.c_str());
-  gDisplay->drawStr(0, 16, line2.c_str());
+  return true;
+}
+
+void endFrame() {
   gDisplay->sendBuffer();
+}
+
+void drawHeader(const String& title) {
+  setHeaderFont();
+  drawTextLeft(0, 0, fitTitleText(title));
+  gDisplay->drawHLine(0, kHeaderDividerY, kDisplayWidth);
+}
+
+void drawFooter(const String& text) {
+  gDisplay->drawHLine(0, kFooterDividerY, kDisplayWidth);
+  setFooterFont();
+  drawTextLeft(0, kFooterDividerY + 2, fitFooterText(text));
+}
+
+String currentFooterNotice(const String& defaultText) {
+  if (gTransientUntilMs > millis() && gScreen != UiScreen::Confirm) {
+    return gTransientMessage;
+  }
+  return defaultText;
 }
 
 void showTransientMessage(const String& message) {
@@ -545,96 +606,240 @@ void returnFromConfirm(bool accepted) {
 }
 
 void renderHomeScreen(const DeviceState& state) {
+  const unsigned long nowMs = millis();
   const String title = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
-  renderLines(title, homeStatusLine(state));
-}
-
-void renderMenuScreen() {
-  const MenuItem current = kMenuItems[gMenuIndex];
-  const MenuItem next = kMenuItems[(gMenuIndex + 1) % kMenuItemCount];
-  renderLines(">" + menuLabel(current), " " + menuLabel(next));
-}
-
-void renderStatusDetail(const DeviceState& state) {
-  switch (gDetailPage % 3) {
-    case 0:
-      renderLines("> Status", "Trans:" + currentTransportLabel(state));
-      break;
-    case 1:
-      renderLines(
-        "State:" + enrollmentLabel(state),
-        "WiFi:" + String(state.stationConnected ? "up" : "down"));
-      break;
-    default:
-      renderLines("Runtime", runtimePhaseLabel(state).isEmpty() ? "steady" : runtimePhaseLabel(state));
-      break;
-  }
-}
-
-void renderPairingCodeDetail(const DeviceState& state) {
-  if (!state.enrollmentReady) {
-    renderLines("Pairing disabled", "New enroll first");
+  const String primary = fitBodyText(homeStatusLine(state), nowMs);
+  const String secondary = runtimePhaseLabel(state).isEmpty()
+                             ? String("transport ") + currentTransportLabel(state)
+                             : fitBodyText(runtimePhaseLabel(state), nowMs);
+  const String footer = currentFooterNotice("Select menu");
+  const String frameKey = String("home|") + title + "|" + primary + "|" + secondary + "|" + footer;
+  if (!beginFrame(frameKey)) {
     return;
   }
 
+  drawHeader(title);
+  setHeaderFont();
+  drawTextCentered(21, primary);
+  setBodyFont();
+  drawTextCentered(38, secondary);
+  drawFooter(footer);
+  endFrame();
+}
+
+void renderMenuScreen() {
+  const unsigned long nowMs = millis();
+  const String footer = currentFooterNotice("Nav move  Sel open");
+  const size_t visibleRows = 4;
+  size_t startIndex = 0;
+  if (gMenuIndex >= visibleRows) {
+    startIndex = gMenuIndex - (visibleRows - 1);
+  }
+
+  String frameKey = String("menu|") + String(gMenuIndex) + "|" + footer;
+  for (size_t row = 0; row < visibleRows && startIndex + row < kMenuItemCount; row++) {
+    frameKey += "|" + menuLabel(kMenuItems[startIndex + row]);
+  }
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Menu");
+  setBodyFont();
+  for (size_t row = 0; row < visibleRows && startIndex + row < kMenuItemCount; row++) {
+    const size_t itemIndex = startIndex + row;
+    const bool selected = itemIndex == gMenuIndex;
+    const uint8_t y = kMenuFirstRowY + static_cast<uint8_t>(row) * kMenuRowHeight;
+    const String label = fitBodyText(menuLabel(kMenuItems[itemIndex]), nowMs);
+    if (selected) {
+      gDisplay->drawBox(0, y - 1, kDisplayWidth, kMenuRowHeight);
+      gDisplay->setDrawColor(0);
+      drawTextLeft(4, y, label);
+      gDisplay->setDrawColor(1);
+    } else {
+      drawTextLeft(6, y, label);
+    }
+  }
+  drawFooter(footer);
+  endFrame();
+}
+
+void renderStatusDetail(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  String body1;
+  String body2;
   switch (gDetailPage % 3) {
     case 0:
-      renderLines("> Pair code", "ID:" + state.deviceId);
+      body1 = "Enroll " + enrollmentLabel(state);
+      body2 = "Trans " + currentTransportLabel(state);
       break;
     case 1:
-      renderLines("Claim", state.bootstrapToken);
+      body1 = "SoftAP " + String(state.accessPointStarted ? "up" : "down");
+      body2 = "WiFi " + String(state.stationConnected ? "up" : "down");
       break;
     default:
-      renderLines("Link", buildEnrollmentLink(state));
+      body1 = "Runtime";
+      body2 = runtimePhaseLabel(state).isEmpty() ? "steady" : runtimePhaseLabel(state);
       break;
   }
+
+  const String footer = currentFooterNotice("Nav page  Hold back");
+  const String shown1 = fitBodyText(body1, nowMs);
+  const String shown2 = fitBodyText(body2, nowMs);
+  const String frameKey = String("detail|status|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Status");
+  setHeaderFont();
+  drawTextLeft(0, 21, shown1);
+  setBodyFont();
+  drawTextLeft(0, 38, shown2);
+  drawFooter(footer);
+  endFrame();
+}
+
+void renderPairingCodeDetail(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  String body1;
+  String body2;
+
+  if (!state.enrollmentReady) {
+    body1 = "Pairing disabled";
+    body2 = "New enrollment first";
+  } else {
+    switch (gDetailPage % 3) {
+      case 0:
+        body1 = "Enroll ready";
+        body2 = "ID " + state.deviceId;
+        break;
+      case 1:
+        body1 = "Claim token";
+        body2 = state.bootstrapToken;
+        break;
+      default:
+        body1 = "Enroll link";
+        body2 = buildEnrollmentLink(state);
+        break;
+    }
+  }
+
+  const String footer = currentFooterNotice("Nav page  Hold back");
+  const String shown1 = fitBodyText(body1, nowMs);
+  const String shown2 = fitBodyText(body2, nowMs);
+  const String frameKey = String("detail|pair|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Pair code");
+  setBodyFont();
+  drawTextLeft(0, 22, shown1);
+  drawTextLeft(0, 37, shown2);
+  drawFooter(footer);
+  endFrame();
 }
 
 void renderWifiToolsDetail(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  String body1;
+  String body2;
+
   switch (gDetailPage % 2) {
     case 0:
-      renderLines(
-        "> WiFi tools",
-        state.facilityWifiSsid.isEmpty() ? "SSID:not set" : "SSID:" + state.facilityWifiSsid);
+      body1 = state.facilityWifiSsid.isEmpty() ? "SSID not set" : "SSID " + state.facilityWifiSsid;
+      body2 = "SoftAP " + String(state.accessPointStarted ? "up" : "down");
       break;
     default:
-      renderLines(
-        "Select:clear",
-        runtimePhaseLabel(state).isEmpty() ? "SoftAP:" + String(state.accessPointStarted ? "up" : "down")
-                                           : runtimePhaseLabel(state));
+      body1 = "Select to clear";
+      body2 = runtimePhaseLabel(state).isEmpty()
+                ? "Transport " + currentTransportLabel(state)
+                : runtimePhaseLabel(state);
       break;
   }
+
+  const String footer = currentFooterNotice("Nav page  Sel action");
+  const String shown1 = fitBodyText(body1, nowMs);
+  const String shown2 = fitBodyText(body2, nowMs);
+  const String frameKey = String("detail|wifi|") + String(gDetailPage % 2) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("WiFi tools");
+  setBodyFont();
+  drawTextLeft(0, 22, shown1);
+  drawTextLeft(0, 37, shown2);
+  drawFooter(footer);
+  endFrame();
 }
 
 void renderDiagnosticsDetail(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  String body1;
+  String body2;
+
   switch (gDetailPage % 3) {
     case 0:
-      renderLines(state.deviceId, "FW:" + String(gConfig.firmwareVersion));
+      body1 = state.deviceId;
+      body2 = "FW " + String(gConfig.firmwareVersion);
       break;
     case 1:
-      renderLines("Err", state.lastErrorCode.isEmpty() ? "none" : state.lastErrorCode);
+      body1 = "Error";
+      body2 = state.lastErrorCode.isEmpty() ? "none" : state.lastErrorCode;
       break;
     default:
-      renderLines("BLE:" + state.bleName, "Mode:" + enrollmentLabel(state));
+      body1 = "BLE " + state.bleName;
+      body2 = "Mode " + enrollmentLabel(state);
       break;
   }
+
+  const String footer = currentFooterNotice("Nav page  Hold back");
+  const String shown1 = fitBodyText(body1, nowMs);
+  const String shown2 = fitBodyText(body2, nowMs);
+  const String frameKey = String("detail|diag|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer;
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Diagnostics");
+  setBodyFont();
+  drawTextLeft(0, 22, shown1);
+  drawTextLeft(0, 37, shown2);
+  drawFooter(footer);
+  endFrame();
 }
 
 void renderConfirmScreen() {
+  String prompt;
   switch (gConfirmAction) {
     case ConfirmAction::NewEnrollment:
-      renderLines("New enroll?", "Tap no hold yes");
-      return;
+      prompt = "New enrollment?";
+      break;
     case ConfirmAction::ClearFacilityWifi:
-      renderLines("Clear WiFi?", "Tap no hold yes");
-      return;
+      prompt = "Clear WiFi?";
+      break;
     case ConfirmAction::FactoryReset:
-      renderLines("Factory reset?", "Tap no hold yes");
-      return;
+      prompt = "Factory reset?";
+      break;
     case ConfirmAction::None:
-      renderLines("ColdGuard", "No action");
-      return;
+      prompt = "No action";
+      break;
   }
+
+  const String footer = "Tap no  Hold yes";
+  const String frameKey = String("confirm|") + String(confirmActionLabel(gConfirmAction)) + "|" + prompt;
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Confirm");
+  gDisplay->drawFrame(6, 20, 116, 24);
+  setHeaderFont();
+  drawTextCentered(26, fitTitleText(prompt));
+  drawFooter(footer);
+  endFrame();
 }
 
 void clearFacilityWifi(
@@ -908,37 +1113,6 @@ void maybeTrackErrorOverlay(const DeviceState& state) {
 }
 
 void renderUi(const DeviceState& state) {
-  if (gTransientUntilMs > millis()) {
-    switch (gScreen) {
-      case UiScreen::Home:
-        renderLines(state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname, gTransientMessage);
-        return;
-      case UiScreen::Menu:
-        renderLines(">" + menuLabel(kMenuItems[gMenuIndex]), gTransientMessage);
-        return;
-      case UiScreen::Detail:
-        switch (gDetailView) {
-          case DetailView::Status:
-            renderLines("> Status", gTransientMessage);
-            return;
-          case DetailView::PairingCode:
-            renderLines("Pairing", gTransientMessage);
-            return;
-          case DetailView::WifiTools:
-            renderLines("> WiFi tools", gTransientMessage);
-            return;
-          case DetailView::Diagnostics:
-            renderLines("Diagnostics", gTransientMessage);
-            return;
-        }
-        return;
-      case UiScreen::Confirm:
-        renderConfirmScreen();
-        return;
-    }
-    return;
-  }
-
   switch (gScreen) {
     case UiScreen::Home:
       renderHomeScreen(state);
@@ -1026,8 +1200,7 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   gHasLoggedLedMode = false;
   gLastObservedErrorCode = "";
   gHasRenderedFrame = false;
-  gLastRenderedLine1 = "";
-  gLastRenderedLine2 = "";
+  gLastRenderedFrameKey = "";
 
   pinMode(gConfig.ledPin, OUTPUT);
   setLedOutput(false);
@@ -1042,7 +1215,13 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
 
   logTouchCalibration("Nav", gConfig.navTouchPin, gNavTouchBaseline, gNavTouchThreshold);
   logTouchCalibration("Select", gConfig.selectTouchPin, gSelectTouchBaseline, gSelectTouchThreshold);
-  renderLines("ColdGuard", "UI ready");
+  if (beginFrame("boot|ui-ready")) {
+    drawHeader("ColdGuard");
+    setHeaderFont();
+    drawTextCentered(24, "UI ready");
+    drawFooter("OLED online");
+    endFrame();
+  }
 }
 
 void tickDeviceUi(

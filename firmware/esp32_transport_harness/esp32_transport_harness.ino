@@ -29,7 +29,6 @@ constexpr char kResponseCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7
 constexpr uint8_t kNavTouchPin = T0;
 constexpr uint8_t kSelectTouchPin = T4;  // GPIO 13
 constexpr uint8_t kBuiltInLedPin = 2;
-constexpr uint8_t kLcdI2cAddress = 0x27;
 constexpr uint8_t kLcdColumns = 16;
 constexpr uint8_t kLcdRows = 2;
 constexpr float kTouchThresholdFactor = 0.40f;
@@ -58,7 +57,8 @@ constexpr coldguard::DeviceUiConfig kDeviceUiConfig = {
   kNavTouchPin,
   kSelectTouchPin,
   kBuiltInLedPin,
-  kLcdI2cAddress,
+  21,
+  22,
   kLcdColumns,
   kLcdRows,
   kTouchThresholdFactor,

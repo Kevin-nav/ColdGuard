@@ -1,7 +1,7 @@
 #include "device_ui.h"
 
-#include <LiquidCrystal_I2C.h>
 #include <Wire.h>
+#include <U8g2lib.h>
 #include <WiFi.h>
 
 #include "ble_recovery.h"
@@ -103,7 +103,7 @@ DeviceUiConfig gConfig = {
   1,
   "",
 };
-LiquidCrystal_I2C* gDisplay = nullptr;
+U8G2_SH1106_128X64_NONAME_F_HW_I2C* gDisplay = nullptr;
 UiScreen gScreen = UiScreen::Home;
 DetailView gDetailView = DetailView::Status;
 ConfirmAction gConfirmAction = ConfirmAction::None;
@@ -371,10 +371,12 @@ void renderLines(const String& rawLine1, const String& rawLine2) {
   gLastRenderedLine1 = line1;
   gLastRenderedLine2 = line2;
 
-  gDisplay->setCursor(0, 0);
-  gDisplay->print(line1);
-  gDisplay->setCursor(0, 1);
-  gDisplay->print(line2);
+  gDisplay->clearBuffer();
+  gDisplay->setFont(u8g2_font_6x12_tf);
+  gDisplay->setFontPosTop();
+  gDisplay->drawStr(0, 0, line1.c_str());
+  gDisplay->drawStr(0, 16, line2.c_str());
+  gDisplay->sendBuffer();
 }
 
 void showTransientMessage(const String& message) {
@@ -1030,11 +1032,13 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   pinMode(gConfig.ledPin, OUTPUT);
   setLedOutput(false);
 
-  Wire.begin();
-  gDisplay = new LiquidCrystal_I2C(gConfig.lcdAddress, gConfig.lcdColumns, gConfig.lcdRows);
-  gDisplay->init();
-  gDisplay->backlight();
-  gDisplay->clear();
+  Wire.begin(gConfig.oledI2cSdaPin, gConfig.oledI2cSclPin);
+  gDisplay = new U8G2_SH1106_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE);
+  gDisplay->begin();
+  gDisplay->setFont(u8g2_font_6x12_tf);
+  gDisplay->setFontPosTop();
+  gDisplay->clearBuffer();
+  gDisplay->sendBuffer();
 
   logTouchCalibration("Nav", gConfig.navTouchPin, gNavTouchBaseline, gNavTouchThreshold);
   logTouchCalibration("Select", gConfig.selectTouchPin, gSelectTouchBaseline, gSelectTouchThreshold);

@@ -14,7 +14,8 @@ struct DeviceUiConfig {
   uint8_t navTouchPin;
   uint8_t selectTouchPin;
   uint8_t ledPin;
-  uint8_t lcdAddress;
+  uint8_t oledI2cSdaPin;
+  uint8_t oledI2cSclPin;
   uint8_t lcdColumns;
   uint8_t lcdRows;
   float touchThresholdFactor;

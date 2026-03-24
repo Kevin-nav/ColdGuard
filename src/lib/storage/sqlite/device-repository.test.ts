@@ -10,18 +10,14 @@ import {
 const mockRunAsync: jest.Mock<any, any> = jest.fn(async () => undefined);
 const mockGetAllAsync: jest.Mock<any, any> = jest.fn(async () => []);
 const mockGetFirstAsync: jest.Mock<any, any> = jest.fn(async () => null);
-const mockWithExclusiveTransactionAsync: jest.Mock<any, any> = jest.fn(async (task) =>
-  task({
-    runAsync: mockRunAsync,
-  }),
-);
+const mockWithTransactionAsync: jest.Mock<any, any> = jest.fn(async (task) => task());
 
 jest.mock("./client", () => ({
   initializeSQLite: jest.fn(async () => ({
     runAsync: mockRunAsync,
     getAllAsync: mockGetAllAsync,
     getFirstAsync: mockGetFirstAsync,
-    withExclusiveTransactionAsync: mockWithExclusiveTransactionAsync,
+    withTransactionAsync: mockWithTransactionAsync,
   })),
 }));
 
@@ -43,7 +39,7 @@ test("saves legacy seeded devices for an institution", async () => {
     },
   ]);
 
-  expect(mockWithExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
+  expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
     1,
     "DELETE FROM devices WHERE institution_id = ?",
@@ -111,7 +107,7 @@ test("replaces cached backend-backed devices for an institution", async () => {
     ],
   });
 
-  expect(mockWithExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
+  expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
     1,
     "DELETE FROM devices WHERE institution_id = ?",
@@ -119,7 +115,7 @@ test("replaces cached backend-backed devices for an institution", async () => {
   );
 });
 
-test("propagates insert failures from the exclusive transaction helper", async () => {
+test("propagates insert failures from the transaction helper", async () => {
   mockRunAsync.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("insert failed"));
 
   await expect(
@@ -155,7 +151,7 @@ test("propagates insert failures from the exclusive transaction helper", async (
     }),
   ).rejects.toThrow("insert failed");
 
-  expect(mockWithExclusiveTransactionAsync).toHaveBeenCalledTimes(1);
+  expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
     1,
     "DELETE FROM devices WHERE institution_id = ?",

@@ -256,27 +256,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
     private fun encodeTransportPayload(jsonPayload: String): String {
-      return java.util.Base64.getEncoder().withoutPadding().encodeToString(jsonPayload.toByteArray(StandardCharsets.UTF_8))
-    }
-
-    private fun decodeBleMessage(rawValue: String): JSONObject {
-      val sanitizedValue = rawValue
-        .replace("\u0000", "")
-        .trim()
-        .let { candidate ->
-          val objectStart = candidate.indexOf('{')
-          val objectEnd = candidate.lastIndexOf('}')
-          if (objectStart >= 0 && objectEnd >= objectStart) {
-            candidate.substring(objectStart, objectEnd + 1)
-          } else {
-            candidate
-          }
-        }
-      return try {
-        JSONObject(sanitizedValue)
-      } catch (_: Exception) {
-        throw IllegalStateException("BLE_MESSAGE_JSON_INVALID")
-      }
+      return java.util.Base64.getEncoder().encodeToString(jsonPayload.toByteArray(StandardCharsets.UTF_8))
     }
 
     private fun splitTransportPayload(value: String, chunkSize: Int = TRANSPORT_CHUNK_BYTES): List<String> {
@@ -373,11 +353,13 @@ class ColdGuardBleRecoveryController(private val context: Context) {
     }
 
     private suspend fun writePayload(payload: String, requestId: String?, command: String): JSONObject {
-      if (requestId != null) {
-        callback.awaitResponse(requestId)
-      } else {
-        callback.clearPendingResponse()
-      }
+      val responseDeferred =
+        if (requestId != null) {
+          callback.awaitResponse(requestId)
+        } else {
+          callback.clearPendingResponse()
+          null
+        }
 
       val writeDeferred = callback.prepareWrite()
       commandCharacteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
@@ -400,7 +382,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       }
 
       val response = withTimeout(RESPONSE_TIMEOUT_MS) {
-        callback.pendingResponse?.await()
+        responseDeferred?.await()
       } ?: throw IllegalStateException("BLE_RESPONSE_TIMEOUT_${command.uppercase(Locale.US).replace('.', '_')}")
 
       if (!response.optBoolean("ok", false)) {
@@ -495,6 +477,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
 
     private class SessionCallback : BluetoothGattCallback() {
       val servicesDiscovered = CompletableDeferred<List<BluetoothGattService>>()
+      private val responseAssembler = ColdGuardBleJsonAssembler()
       var pendingDescriptorWrite: CompletableDeferred<Unit>? = null
         private set
       var pendingResponse: CompletableDeferred<JSONObject>? = null
@@ -523,10 +506,12 @@ class ColdGuardBleRecoveryController(private val context: Context) {
         pendingWrite = null
       }
 
-      fun awaitResponse(requestId: String) {
+      fun awaitResponse(requestId: String): CompletableDeferred<JSONObject> {
         pendingResponse?.cancel()
         pendingResponseId = requestId
-        pendingResponse = CompletableDeferred()
+        return CompletableDeferred<JSONObject>().also {
+          pendingResponse = it
+        }
       }
 
       fun clearPendingResponse() {
@@ -539,6 +524,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
         clearPendingDescriptorWrite()
         clearPendingWrite()
         clearPendingResponse()
+        responseAssembler.clear()
       }
 
       override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -617,9 +603,13 @@ class ColdGuardBleRecoveryController(private val context: Context) {
           "[characteristic_changed] bytes=${rawBytes.size} payload=${rawValue.replace("\u0000", "\\0")}",
         )
         val response = try {
-          decodeBleMessage(rawValue)
+          responseAssembler.append(rawValue)
         } catch (error: Exception) {
           Log.w(LOG_TAG, "[characteristic_changed_parse_failed] message=${error.message}")
+          return
+        }
+        if (response == null) {
+          Log.d(LOG_TAG, "[characteristic_changed_partial] bytes=${rawBytes.size}")
           return
         }
         if (pendingResponseId != null && response.optString("requestId") == pendingResponseId) {

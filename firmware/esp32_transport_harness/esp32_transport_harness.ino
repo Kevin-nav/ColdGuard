@@ -34,6 +34,7 @@ constexpr uint8_t kLcdRows = 2;
 constexpr float kTouchThresholdFactor = 0.40f;
 constexpr unsigned long kTouchDebounceMs = 200UL;
 constexpr unsigned long kTouchLongPressMs = 700UL;
+constexpr size_t kBleNotifyChunkBytes = 20;
 
 Preferences preferences;
 WebServer webServer(80);
@@ -90,8 +91,14 @@ void sendBleResponse(const String& payload) {
   if (payload.isEmpty()) {
     return;
   }
-  responseCharacteristic->setValue(payload.c_str());
-  responseCharacteristic->notify();
+
+  for (size_t offset = 0; offset < payload.length(); offset += kBleNotifyChunkBytes) {
+    const String chunk = payload.substring(offset, offset + kBleNotifyChunkBytes);
+    responseCharacteristic->setValue(chunk.c_str());
+    responseCharacteristic->notify();
+    delay(10);
+  }
+
   logBlePayload("[BLE] ", payload);
 }
 

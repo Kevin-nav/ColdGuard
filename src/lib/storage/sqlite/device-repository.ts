@@ -78,11 +78,11 @@ export async function replaceDevicesForInstitution(
   devices: Omit<DeviceRecord, "institutionId" | "institutionName">[],
 ) {
   const database = await initializeSQLite();
-  await database.withExclusiveTransactionAsync(async (txn) => {
-    await txn.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
+  await database.withTransactionAsync(async () => {
+    await database.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
 
     for (const device of devices) {
-      await txn.runAsync(
+      await database.runAsync(
         `
           INSERT INTO devices
           (

@@ -121,6 +121,9 @@ beforeEach(() => {
     updatedAt: 1,
   });
   mockConnectOrRecoverDevice.mockResolvedValue({
+    accessMode: "temporary_shared_access",
+    primaryTransport: "bluetooth",
+    statusText: "Temporary shared SoftAP access is active.",
     transport: "softap",
   });
   mockGetDeviceRuntimeSession.mockResolvedValue({
@@ -140,6 +143,7 @@ beforeEach(() => {
     lastRuntimeError: null,
     monitoringMode: "off",
     sessionStatus: "connected",
+    transport: "softap",
     updatedAt: 1,
   });
   mockProvisionFacilityWifi.mockResolvedValue({
@@ -148,7 +152,17 @@ beforeEach(() => {
     ssid: "ClinicNet",
   });
   mockRunColdGuardConnectionTest.mockResolvedValue({
+    accessMode: "bluetooth_primary",
+    batteryLevel: 93,
+    currentTempC: 4.6,
+    doorOpen: false,
+    firmwareVersion: "fw-1.0.0",
+    lastSeenAt: Date.now(),
+    macAddress: "AA:BB:CC:DD:EE:01",
+    mktStatus: "safe",
+    primaryTransport: "bluetooth",
     statusText: "Connection confirmed",
+    transport: "softap",
   });
   mockStartDeviceMonitoring.mockResolvedValue({
     monitoringMode: "foreground_service",
@@ -179,8 +193,8 @@ test("runs the connection test from device detail", async () => {
   const ui = render(<DeviceDetailsScreen />);
 
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
-  expect(ui.getByText("Run connection test")).toBeTruthy();
-  fireEvent.press(ui.getByText("Run connection test"));
+  expect(ui.getByText("Run transport check")).toBeTruthy();
+  fireEvent.press(ui.getByText("Run transport check"));
 
   await waitFor(() => expect(mockRunColdGuardConnectionTest).toHaveBeenCalledWith({ deviceId: "device-1" }));
 });
@@ -202,10 +216,11 @@ test("shows pending for an idle connection status", async () => {
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
   expect(ui.getByText("Pending")).toBeTruthy();
   expect(ui.queryByText("Running")).toBeNull();
-  expect(ui.getByText("Reconnect")).toBeTruthy();
-  expect(ui.getByText("Diagnostics")).toBeTruthy();
+  expect(ui.getByText("Open temporary SoftAP access")).toBeTruthy();
+  expect(ui.getByText("Live diagnostics")).toBeTruthy();
   expect(ui.getByText("Disable monitoring")).toBeTruthy();
   expect(ui.getByText("Save facility Wi-Fi")).toBeTruthy();
+  expect(ui.getByText("Not established")).toBeTruthy();
 });
 
 test("shows a monitoring permission error instead of pretending monitoring was enabled", async () => {
@@ -229,7 +244,7 @@ test("shows a user-facing reconnect error and lets developers copy the raw code"
   const ui = render(<DeviceDetailsScreen />);
 
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
-  fireEvent.press(ui.getByText("Reconnect"));
+  fireEvent.press(ui.getByText("Open temporary SoftAP access"));
 
   await waitFor(() =>
     expect(ui.getByText("Allow Wi-Fi and location access to connect to the device.")).toBeTruthy(),

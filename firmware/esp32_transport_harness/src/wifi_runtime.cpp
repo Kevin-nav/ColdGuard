@@ -2,6 +2,8 @@
 
 #include <WiFi.h>
 
+#include "runtime_mock_data.h"
+
 namespace coldguard {
 
 namespace {
@@ -38,21 +40,6 @@ bool hasValidSoftApTicket(const DeviceState* state) {
          static_cast<long>(millis() - state->lastHeartbeatAtMs) <= static_cast<long>(kMonitoringHeartbeatWindowMs);
 }
 
-float currentMockTemperature() {
-  const unsigned long nowMs = millis();
-  return 4.2f + static_cast<float>((nowMs / 1000UL) % 5) * 0.1f;
-}
-
-int currentMockBatteryLevel() {
-  const unsigned long nowMs = millis();
-  return 87 + static_cast<int>((nowMs / 5000UL) % 7);
-}
-
-bool currentMockDoorOpen() {
-  const unsigned long nowMs = millis();
-  return ((nowMs / 15000UL) % 2) == 1;
-}
-
 String buildRuntimeBaseUrl(DeviceState* state) {
   if (state->stationConnected && WiFi.localIP()[0] != 0) {
     return "http://" + WiFi.localIP().toString();
@@ -60,84 +47,33 @@ String buildRuntimeBaseUrl(DeviceState* state) {
   return "http://" + WiFi.softAPIP().toString();
 }
 
-String buildAlertsJson(float temp, int batteryLevel, bool doorOpen) {
-  const unsigned long nowMs = millis();
-  String alerts = "[";
-  bool first = true;
-
-  if (temp >= 4.5f) {
-    alerts += "{"
-              "\"cursor\":\"temperature-warning\","
-              "\"incidentType\":\"temperature\","
-              "\"severity\":\"warning\","
-              "\"status\":\"open\","
-              "\"title\":\"Temperature excursion in progress\","
-              "\"body\":\"Runtime polling detected a warming trend.\","
-              "\"triggeredAt\":" + String(nowMs) +
-              "}";
-    first = false;
-  }
-
-  if (doorOpen) {
-    if (!first) {
-      alerts += ",";
-    }
-    alerts += "{"
-              "\"cursor\":\"door-open\","
-              "\"incidentType\":\"door_open\","
-              "\"severity\":\"warning\","
-              "\"status\":\"open\","
-              "\"title\":\"Door is still open\","
-              "\"body\":\"Runtime polling detected an open door state.\","
-              "\"triggeredAt\":" + String(nowMs) +
-              "}";
-    first = false;
-  }
-
-  if (batteryLevel < 90) {
-    if (!first) {
-      alerts += ",";
-    }
-    alerts += "{"
-              "\"cursor\":\"battery-low\","
-              "\"incidentType\":\"battery_low\","
-              "\"severity\":\"warning\","
-              "\"status\":\"open\","
-              "\"title\":\"Battery is trending low\","
-              "\"body\":\"Runtime polling detected reduced battery headroom.\","
-              "\"triggeredAt\":" + String(nowMs) +
-              "}";
-  }
-
-  alerts += "]";
-  return alerts;
-}
-
 String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion) {
   const unsigned long nowMs = millis();
-  const float temp = currentMockTemperature();
-  const int batteryLevel = currentMockBatteryLevel();
-  const bool doorOpen = currentMockDoorOpen();
-  const bool hasWarning = temp >= 4.5f || doorOpen || batteryLevel < 90;
-  const String alerts = buildAlertsJson(temp, batteryLevel, doorOpen);
-  const String transportMode = state->stationConnected ? "facility_wifi" : "softap";
+  const String runtimeBaseUrl = buildRuntimeBaseUrl(state);
+  const RuntimeSnapshot snapshot = buildRuntimeSnapshot(*state, runtimeBaseUrl);
+  const String alerts = buildRuntimeAlertsJson(snapshot, nowMs);
 
   return "{"
          "\"deviceId\":\"" + escapeJson(state->deviceId) + "\","
          "\"firmwareVersion\":\"" + escapeJson(firmwareVersion) + "\","
          "\"macAddress\":\"" + escapeJson(state->macAddress) + "\","
-         "\"currentTempC\":" + String(temp, 2) + ","
-         "\"batteryLevel\":" + String(batteryLevel) + ","
-         "\"doorOpen\":" + String(doorOpen ? "true" : "false") + ","
-         "\"mktStatus\":\"" + String(hasWarning ? "warning" : "safe") + "\","
-         "\"statusText\":\"Runtime status available.\","
+         "\"currentTempC\":" + String(snapshot.currentTempC, 2) + ","
+         "\"batteryLevel\":" + String(snapshot.batteryLevel) + ","
+         "\"doorOpen\":" + String(snapshot.doorOpen ? "true" : "false") + ","
+         "\"mktStatus\":\"" + snapshot.mktStatus + "\","
+         "\"statusText\":\"" + escapeJson(snapshot.statusText) + "\","
          "\"lastSeenAgeMs\":0,"
          "\"nickname\":\"" + escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname) + "\","
          "\"institutionId\":\"" + escapeJson(state->institutionId) + "\","
-         "\"softApAvailable\":" + String(state->accessPointStarted ? "true" : "false") + ","
-         "\"stationConnected\":" + String(state->stationConnected ? "true" : "false") + ","
-         "\"transport\":\"" + transportMode + "\","
-         "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
+         "\"primaryTransport\":\"" + snapshot.primaryTransport + "\","
+         "\"secondaryTransport\":" + (snapshot.secondaryTransport.isEmpty() ? String("null") : "\"" + snapshot.secondaryTransport + "\"") + ","
+         "\"accessMode\":\"" + snapshot.accessMode + "\","
+         "\"softApAvailable\":" + String(snapshot.softApAvailable ? "true" : "false") + ","
+         "\"softApClientCount\":" + String(snapshot.softApClientCount) + ","
+         "\"softApIdleTimeoutMs\":" + String(snapshot.softApIdleTimeoutMs) + ","
+         "\"stationConnected\":" + String(snapshot.stationConnected ? "true" : "false") + ","
+         "\"transport\":\"" + snapshot.transport + "\","
+         "\"runtimeBaseUrl\":\"" + escapeJson(snapshot.runtimeBaseUrl) + "\","
          "\"alerts\":" + alerts + ","
          "\"receivedAtMs\":" + String(nowMs) +
          "}";
@@ -183,16 +119,14 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
       return;
     }
 
-    const float temp = currentMockTemperature();
-    const int batteryLevel = currentMockBatteryLevel();
-    const bool doorOpen = currentMockDoorOpen();
+    const RuntimeSnapshot snapshot = buildRuntimeSnapshot(*state, buildRuntimeBaseUrl(state));
     webServer.send(
       200,
       "application/json",
       "{"
       "\"ok\":true,"
       "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
-      "\"alerts\":" + buildAlertsJson(temp, batteryLevel, doorOpen) +
+      "\"alerts\":" + buildRuntimeAlertsJson(snapshot, millis()) +
       "}");
   });
 

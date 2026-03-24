@@ -20,6 +20,7 @@ import {
   assignColdGuardDevice,
   connectOrRecoverDevice,
   decommissionColdGuardDevice,
+  type ConnectionTestPayload,
   getDeviceRuntimeSession,
   runColdGuardConnectionTest,
   provisionFacilityWifi,
@@ -126,6 +127,23 @@ function formatRuntimeSessionLabel(status: DeviceRuntimeConfig["sessionStatus"] 
   }
 }
 
+function formatRuntimeAccessModeLabel(
+  accessMode: ConnectionTestPayload["accessMode"] | undefined,
+) {
+  switch (accessMode) {
+    case "bluetooth_primary":
+      return "Primary Bluetooth control";
+    case "temporary_shared_access":
+      return "Temporary shared SoftAP access";
+    case "facility_runtime":
+      return "Facility Wi-Fi runtime";
+    case "runtime_recovery":
+      return "SoftAP recovery";
+    default:
+      return "Not established";
+  }
+}
+
 export default function DeviceDetailsScreen() {
   const { claim, id, v } = useLocalSearchParams<{ claim?: string; id: string; v?: string }>();
   const { colors } = useTheme();
@@ -146,6 +164,7 @@ export default function DeviceDetailsScreen() {
   const [facilityWifiSsid, setFacilityWifiSsid] = useState("");
   const [viewerStaffIds, setViewerStaffIds] = useState<string[]>([]);
   const [hasBootstrappedMonitoring, setHasBootstrappedMonitoring] = useState<string | null>(null);
+  const [lastRuntimeSnapshot, setLastRuntimeSnapshot] = useState<ConnectionTestPayload | null>(null);
 
   const device = devices.find((entry) => entry.id === id);
   let enrollmentLink = null;
@@ -422,6 +441,7 @@ export default function DeviceDetailsScreen() {
 
     try {
       const result = await runColdGuardConnectionTest({ deviceId: activeDevice.id });
+      setLastRuntimeSnapshot(result);
       await refreshDevices();
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
       setActionFeedback({ developerCode: null, userMessage: result.statusText || "Connection test completed." });
@@ -440,9 +460,13 @@ export default function DeviceDetailsScreen() {
 
     try {
       const result = await connectOrRecoverDevice({ deviceId: activeDevice.id });
+      setLastRuntimeSnapshot(result);
       await refreshDevices();
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
-      setActionFeedback({ developerCode: null, userMessage: `Connected over ${formatRuntimeTransportLabel(result.transport)}.` });
+      setActionFeedback({
+        developerCode: null,
+        userMessage: result.statusText || `Connected over ${formatRuntimeTransportLabel(result.transport)}.`,
+      });
     } catch (nextError) {
       setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
       setActionFeedback(presentDeviceError(nextError, "Reconnect failed."));
@@ -503,18 +527,26 @@ export default function DeviceDetailsScreen() {
   }
 
   async function handleDiagnostics() {
-    const latestSession = await getDeviceRuntimeSession(activeDevice.id);
-    setRuntimeSession(latestSession);
-    if (!latestSession) {
-      setActionFeedback({ developerCode: null, userMessage: "No runtime session has been established yet." });
-      return;
+    try {
+      const [latestSession, runtimeSnapshot] = await Promise.all([
+        getDeviceRuntimeSession(activeDevice.id),
+        runColdGuardConnectionTest({ deviceId: activeDevice.id }),
+      ]);
+      setRuntimeSession(latestSession);
+      setLastRuntimeSnapshot(runtimeSnapshot);
+      setActionFeedback({
+        developerCode: latestSession?.lastRuntimeError ?? null,
+        userMessage:
+          `Primary: ${runtimeSnapshot.primaryTransport ?? "bluetooth"} | ` +
+          `Access: ${formatRuntimeAccessModeLabel(runtimeSnapshot.accessMode)} | ` +
+          `Runtime transport: ${formatRuntimeTransportLabel(runtimeSnapshot.transport)} | ` +
+          runtimeSnapshot.statusText,
+      });
+      await refreshDevices();
+    } catch (nextError) {
+      setRuntimeSession(await getDeviceRuntimeSession(activeDevice.id));
+      setActionFeedback(presentDeviceError(nextError, "Diagnostics failed."));
     }
-    setActionFeedback({
-      developerCode: latestSession.lastRuntimeError ?? null,
-      userMessage:
-        `Transport: ${formatRuntimeTransportLabel(latestSession.activeTransport)} | Session: ${formatRuntimeSessionLabel(latestSession.sessionStatus)}` +
-        (latestSession.lastRuntimeError ? " | Review developer code for the last transport error." : ""),
-    });
   }
 
   async function handleRemoveDevice() {
@@ -603,7 +635,20 @@ export default function DeviceDetailsScreen() {
               label="Session"
               value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
             />
+            <MetricRow
+              iconName="git-network-outline"
+              label="Access mode"
+              value={formatRuntimeAccessModeLabel(lastRuntimeSnapshot?.accessMode)}
+            />
           </View>
+          <Text style={styles.helperText}>
+            Bluetooth is the primary control path. SoftAP is temporary shared access for short-lived secondary users and should be released when that work is finished.
+          </Text>
+          {lastRuntimeSnapshot?.accessMode === "temporary_shared_access" ? (
+            <Text style={styles.helperText}>
+              Temporary SoftAP access is active. Use this for short shared sessions, then leave the shared-access flow so the phone can release the connection.
+            </Text>
+          ) : null}
           <View style={localStyles.actionButtons}>
             <Pressable
               disabled={isRunningConnectionTest}
@@ -614,7 +659,7 @@ export default function DeviceDetailsScreen() {
               ]}
             >
               <Text style={styles.primaryButtonText}>
-                {isRunningConnectionTest ? "Running connection test..." : "Run connection test"}
+                {isRunningConnectionTest ? "Running transport check..." : "Run transport check"}
               </Text>
             </Pressable>
             <Pressable
@@ -625,10 +670,12 @@ export default function DeviceDetailsScreen() {
                 (pressed || isReconnecting) && styles.buttonDisabled,
               ]}
             >
-              <Text style={styles.secondaryButtonText}>{isReconnecting ? "Reconnecting..." : "Reconnect"}</Text>
+              <Text style={styles.secondaryButtonText}>
+                {isReconnecting ? "Opening temporary access..." : "Open temporary SoftAP access"}
+              </Text>
             </Pressable>
             <Pressable onPress={() => void handleDiagnostics()} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>Diagnostics</Text>
+              <Text style={styles.secondaryButtonText}>Live diagnostics</Text>
             </Pressable>
             <Pressable
               disabled={isTogglingMonitoring}

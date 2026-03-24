@@ -117,6 +117,7 @@ export type DeviceRuntimeConfig = {
 };
 
 export type ColdGuardConnectionPayload = {
+  accessMode?: "bluetooth_primary" | "facility_runtime" | "runtime_recovery" | "temporary_shared_access";
   batteryLevel: number;
   currentTempC: number;
   doorOpen: boolean;
@@ -124,7 +125,13 @@ export type ColdGuardConnectionPayload = {
   lastSeenAt: number;
   macAddress: string;
   mktStatus: "safe" | "warning" | "alert";
+  primaryTransport?: "bluetooth";
+  secondaryTransport?: "softap" | null;
+  softApAvailable?: boolean;
+  softApClientCount?: number;
+  softApIdleTimeoutMs?: number;
   statusText: string;
+  transport?: RuntimeTransportMode;
 };
 
 export type RemoteManagedDevice = {

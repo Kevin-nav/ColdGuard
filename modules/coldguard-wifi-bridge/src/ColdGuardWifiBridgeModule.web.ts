@@ -1,4 +1,5 @@
 import type {
+  ColdGuardEnrollmentRequest,
   ColdGuardMonitoringDeviceStatus,
   ColdGuardMonitoringServiceOptions,
   ColdGuardMonitoringStatusMap,
@@ -7,6 +8,13 @@ import type {
 
 function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract {
   return {
+    addListener() {
+      return {
+        remove() {
+          return;
+        },
+      };
+    },
     async connectToAccessPointAsync() {
       throw new Error("WIFI_BRIDGE_UNAVAILABLE");
     },
@@ -18,6 +26,9 @@ function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract
     },
     async releaseNetworkBindingAsync() {
       return;
+    },
+    async startEnrollmentAsync(_options: ColdGuardEnrollmentRequest) {
+      throw new Error("WIFI_BRIDGE_UNAVAILABLE");
     },
     async startMonitoringDeviceAsync(
       _options: ColdGuardMonitoringServiceOptions,

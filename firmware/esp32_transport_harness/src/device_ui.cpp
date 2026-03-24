@@ -463,7 +463,7 @@ void setHeaderFont() {
 }
 
 void setEmphasisFont() {
-  gDisplay->setFont(u8g2_font_6x12B_tf);
+  gDisplay->setFont(u8g2_font_6x13B_tf);
   gDisplay->setFontPosTop();
 }
 

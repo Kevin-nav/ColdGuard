@@ -32,8 +32,10 @@ const mockGetDeviceRuntimeConfig = jest.fn();
 const mockRegisterEnrolledDevice = jest.fn();
 const mockDecommissionManagedDevice = jest.fn();
 const mockRecordDeviceConnectionTest = jest.fn();
+const mockStartNativeEnrollment = jest.fn();
 const mockStartNativeMonitoringDevice = jest.fn();
 const mockStopNativeMonitoringDevice = jest.fn();
+const mockSubscribeToNativeEnrollmentStages = jest.fn();
 const mockFetch = jest.fn();
 const mockGetLocalNotificationPermissionStatus = jest.fn();
 const mockRequestLocalNotificationPermission = jest.fn();
@@ -93,8 +95,10 @@ jest.mock("./wifi-bridge", () => ({
     release: (...args: unknown[]) => mockWifiBridgeRelease(...args),
   }),
   getNativeMonitoringServiceStatuses: (...args: unknown[]) => mockGetNativeMonitoringServiceStatuses(...args),
+  startNativeEnrollment: (...args: unknown[]) => mockStartNativeEnrollment(...args),
   startNativeMonitoringDevice: (...args: unknown[]) => mockStartNativeMonitoringDevice(...args),
   stopNativeMonitoringDevice: (...args: unknown[]) => mockStopNativeMonitoringDevice(...args),
+  subscribeToNativeEnrollmentStages: (...args: unknown[]) => mockSubscribeToNativeEnrollmentStages(...args),
 }));
 
 beforeEach(() => {
@@ -104,18 +108,18 @@ beforeEach(() => {
   mockGetClinicHandshakeToken.mockResolvedValue("handshake-token");
   mockGetLocalNotificationPermissionStatus.mockResolvedValue("granted");
   mockRequestLocalNotificationPermission.mockResolvedValue("granted");
-  mockEnsureSupervisorActionTicket.mockResolvedValue({
-    action: "decommission",
+  mockEnsureSupervisorActionTicket.mockImplementation(async (_profile: unknown, deviceId: string, action: string) => ({
+    action,
     counter: 1,
-    deviceId: "CG-ESP32-A100",
+    deviceId,
     expiresAt: Date.now() + 60_000,
     institutionId: "institution-1",
     issuedAt: Date.now(),
     mac: "admin-ticket-mac",
     operatorId: "firebase-u1",
-    ticketId: "admin-ticket",
+    ticketId: `admin-ticket-${action}-${deviceId}`,
     v: 1,
-  });
+  }));
   mockEnsureDeviceActionTicket.mockImplementation(async (deviceId: string, action: string) => ({
     action,
     counter: 1,
@@ -147,6 +151,27 @@ beforeEach(() => {
   mockDeleteDeviceRuntimeConfig.mockResolvedValue(undefined);
   mockGetDeviceRuntimeConfig.mockResolvedValue(null);
   mockGetNativeMonitoringServiceStatuses.mockResolvedValue({});
+  mockStartNativeEnrollment.mockResolvedValue({
+    bleName: "ColdGuard_A100",
+    deviceId: "CG-ESP32-A100",
+    diagnostics: {
+      attemptsByStageJson: "{}",
+      detail: "Enrollment completed successfully.",
+      deviceId: "CG-ESP32-A100",
+      failureStage: null,
+      rawErrorMessage: null,
+      runtimeBaseUrl: "http://192.168.4.1",
+      ssid: "ColdGuard_A100",
+      timelineJson: "[]",
+    },
+    firmwareVersion: "fw-1.0.0",
+    macAddress: "AA:BB:CC:DD:EE:01",
+    protocolVersion: 1,
+    runtimeBaseUrl: "http://192.168.4.1",
+    smokeTestPassed: true,
+    softApPassword: "pass-1",
+    softApSsid: "ColdGuard_A100",
+  });
   mockStartNativeMonitoringDevice.mockResolvedValue({
     "CG-ESP32-A100": {
       deviceId: "CG-ESP32-A100",
@@ -156,6 +181,7 @@ beforeEach(() => {
     },
   });
   mockStopNativeMonitoringDevice.mockResolvedValue({});
+  mockSubscribeToNativeEnrollmentStages.mockReturnValue({ remove: jest.fn() });
   mockUpsertDeviceRuntimeConfig.mockImplementation(async (deviceId: string, patch: Record<string, unknown>) => ({
     activeRuntimeBaseUrl: patch.activeRuntimeBaseUrl ?? null,
     activeTransport: patch.activeTransport ?? null,
@@ -285,6 +311,85 @@ test("enrollment uses a single BLE session instead of scanning twice", async () 
       nickname: "Test device",
     }),
   );
+});
+
+test("uses the native android enrollment bridge and persists temporary softap metadata", async () => {
+  const reactNative = jest.requireActual("react-native");
+  const previousOs = reactNative.Platform.OS;
+  const previousRequestMultiple = reactNative.PermissionsAndroid.requestMultiple;
+  const remove = jest.fn();
+  const onProgress = jest.fn();
+  mockSubscribeToNativeEnrollmentStages.mockImplementation((listener: (event: unknown) => void) => {
+    listener({
+      attempt: 1,
+      detail: "Opening Bluetooth link to the device.",
+      deviceId: "CG-ESP32-A100",
+      elapsedMs: 125,
+      stage: "connecting_ble",
+      stageLabel: "Connecting over Bluetooth",
+    });
+    return { remove };
+  });
+
+  Object.defineProperty(reactNative.Platform, "OS", {
+    configurable: true,
+    value: "android",
+  });
+  reactNative.PermissionsAndroid.requestMultiple = jest.fn(async () => ({
+    "android.permission.BLUETOOTH_CONNECT": "granted",
+    "android.permission.BLUETOOTH_SCAN": "granted",
+    "android.permission.NEARBY_WIFI_DEVICES": "granted",
+  }));
+
+  try {
+    await enrollColdGuardDevice({
+      nickname: "Cold Room Alpha",
+      onProgress,
+      profile: {
+        firebaseUid: "firebase-u1",
+        displayName: "Yaw Boateng",
+        email: "yaw@example.com",
+        institutionId: "institution-1",
+        institutionName: "Korle-Bu Teaching Hospital",
+        staffId: "KB1002",
+        role: "Supervisor",
+        lastUpdatedAt: 1,
+      },
+      qrPayload: "coldguard://device/CG-ESP32-A100?claim=claim-alpha-100&v=1",
+    });
+  } finally {
+    Object.defineProperty(reactNative.Platform, "OS", {
+      configurable: true,
+      value: previousOs,
+    });
+    reactNative.PermissionsAndroid.requestMultiple = previousRequestMultiple;
+  }
+
+  expect(mockStartNativeEnrollment).toHaveBeenCalledWith(
+    expect.objectContaining({
+      actionTicketJson: expect.stringContaining("\"action\":\"enroll\""),
+      bootstrapToken: "claim-alpha-100",
+      connectActionTicketJson: expect.stringContaining("\"action\":\"connect\""),
+      deviceId: "CG-ESP32-A100",
+      nickname: "Cold Room Alpha",
+    }),
+  );
+  expect(mockUpsertDeviceRuntimeConfig).toHaveBeenCalledWith(
+    "CG-ESP32-A100",
+    expect.objectContaining({
+      lastRuntimeError: null,
+      softApPassword: "pass-1",
+      softApRuntimeBaseUrl: "http://192.168.4.1",
+      softApSsid: "ColdGuard_A100",
+    }),
+  );
+  expect(onProgress).toHaveBeenCalledWith(
+    expect.objectContaining({
+      stage: "connecting_ble",
+      stageLabel: "Connecting over Bluetooth",
+    }),
+  );
+  expect(remove).toHaveBeenCalledTimes(1);
 });
 
 test("starts native monitoring with facility and softap recovery context", async () => {

@@ -496,7 +496,7 @@ export const issueConnectionGrant = mutation({
 
 export const issueSupervisorActionTicket = mutation({
   args: {
-    action: v.union(v.literal("decommission"), v.literal("enroll"), v.literal("reassign"), v.literal("wifi_provision")),
+    action: v.union(v.literal("connect"), v.literal("decommission"), v.literal("enroll"), v.literal("reassign"), v.literal("wifi_provision")),
     deviceId: v.string(),
   },
   handler: async (ctx, args) => {
@@ -507,7 +507,7 @@ export const issueSupervisorActionTicket = mutation({
       .withIndex("by_device_id", (q: any) => q.eq("deviceId", args.deviceId))
       .unique();
 
-    if (args.action === "enroll") {
+    if (args.action === "enroll" || args.action === "connect") {
       ensureSupervisorAdminGrantTargetOwnership(device, user.institutionId);
     } else {
       if (!device || device.institutionId !== user.institutionId || device.status !== "active") {

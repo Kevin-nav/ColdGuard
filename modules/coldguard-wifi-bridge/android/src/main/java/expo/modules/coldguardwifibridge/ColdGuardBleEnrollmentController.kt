@@ -24,6 +24,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.UUID
@@ -32,67 +35,163 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.random.Random
 
-data class ColdGuardBleWifiTicket(
-  val password: String,
-  val runtimeBaseUrl: String,
-  val ssid: String,
-)
+class ColdGuardBleEnrollmentController(
+  private val context: Context,
+  private val wifiSessionController: ColdGuardWifiSessionController,
+  private val onStage: (ColdGuardEnrollmentProgress) -> Unit,
+) {
+  suspend fun enroll(request: ColdGuardEnrollmentRequest): ColdGuardEnrollmentResult = withContext(Dispatchers.IO) {
+    val trace = EnrollmentTrace(request.deviceId, onStage)
+    var session: ColdGuardBleGattSession? = null
+    var runtimeBaseUrl: String? = null
+    var softApSsid: String? = null
+    var softApPassword: String? = null
 
-class ColdGuardBleRecoveryController(private val context: Context) {
-  suspend fun requestWifiTicket(options: MonitoringOptions): ColdGuardBleWifiTicket = withContext(Dispatchers.IO) {
-    ensureBlePermissions()
-    val handshakeToken = options.handshakeToken?.takeIf { it.isNotBlank() }
-      ?: throw IllegalStateException("BLE_RECOVERY_HANDSHAKE_TOKEN_MISSING")
-    val actionTicketJson = options.connectActionTicketJson?.takeIf { it.isNotBlank() }
-      ?: throw IllegalStateException("BLE_RECOVERY_CONNECT_TICKET_MISSING")
-    val actionTicket = try {
-      JSONObject(actionTicketJson)
-    } catch (_: Exception) {
-      throw IllegalStateException("BLE_RECOVERY_CONNECT_TICKET_INVALID")
-    }
-
-    val device = scanForDevice(options.deviceId)
-    val session = connect(device)
     try {
-      val hello = session.hello(options.deviceId)
+      trace.emit(ColdGuardEnrollmentStage.VALIDATING_REQUEST, "Checking tokens and enrollment payload.")
+      ensureBlePermissions()
+      val enrollActionTicket = parseJsonTicket(request.actionTicketJson, "ENROLLMENT_ACTION_TICKET_INVALID")
+      val connectActionTicket = parseJsonTicket(request.connectActionTicketJson, "ENROLLMENT_CONNECT_TICKET_INVALID")
+
+      val device = runWithRetries(trace, ColdGuardEnrollmentStage.FINDING_DEVICE, 3) {
+        scanForDevice(request.deviceId)
+      }
+
+      trace.emit(ColdGuardEnrollmentStage.CONNECTING_BLE, "Opening Bluetooth link to the device.")
+      session = ColdGuardBleGattSession.connect(context, device) {
+        trace.emit(ColdGuardEnrollmentStage.DISCOVERING_SERVICES, "Reading Bluetooth services from the device.")
+      }
+
+      trace.emit(ColdGuardEnrollmentStage.ESTABLISHING_SECURE_CHANNEL, "Exchanging secure handshake details.")
+      val hello = session!!.hello(request.deviceId)
+      if (hello.state != "blank" && hello.state != "ready") {
+        throw IllegalStateException("BLE_DEVICE_STATE_MISMATCH")
+      }
+      if (!hello.enrollmentReady) {
+        throw IllegalStateException("ENROLLMENT_NOT_READY")
+      }
+
       val proofTimestamp = createProofTimestamp(hello)
       val handshakeProof = createHandshakeProof(
-        deviceId = options.deviceId,
+        deviceId = request.deviceId,
         deviceNonce = hello.deviceNonce,
-        handshakeToken = handshakeToken,
+        handshakeToken = request.handshakeToken,
         proofTimestamp = proofTimestamp,
       )
 
-      session.sendCommand(
+      trace.emit(ColdGuardEnrollmentStage.COMPLETING_PAIRING, "Submitting the enrollment request to the device.")
+      session!!.sendCommand(
+        command = "enroll.begin",
+        body = JSONObject().apply {
+          put("actionTicket", enrollActionTicket)
+          put("bootstrapToken", request.bootstrapToken)
+          put("deviceId", request.deviceId)
+          put("handshakeProof", handshakeProof)
+          put("handshakeToken", request.handshakeToken)
+          put("institutionId", request.institutionId)
+          put("nickname", request.nickname)
+          put("proofTimestamp", proofTimestamp)
+        },
+      )
+      session!!.sendCommand("enroll.commit", JSONObject())
+
+      trace.emit(ColdGuardEnrollmentStage.REQUESTING_TEMPORARY_SOFTAP, "Requesting a temporary device Wi-Fi session.")
+      session!!.sendCommand(
         command = "grant.verify",
         body = JSONObject().apply {
-          put("actionTicket", actionTicket)
-          put("deviceId", options.deviceId)
+          put("actionTicket", connectActionTicket)
+          put("deviceId", request.deviceId)
           put("handshakeProof", handshakeProof)
           put("proofTimestamp", proofTimestamp)
         },
       )
 
-      val response = session.sendCommand(
-        command = "wifi.ticket.request",
-        body = JSONObject(),
-      )
+      val wifiTicketResponse = session!!.sendCommand("wifi.ticket.request", JSONObject())
+      softApSsid = wifiTicketResponse.optString("ssid").takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("BLE_RECOVERY_WIFI_TICKET_INVALID")
+      softApPassword = wifiTicketResponse.optString("password").takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("BLE_RECOVERY_WIFI_TICKET_INVALID")
+      val testUrl = wifiTicketResponse.optString("testUrl").takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("BLE_RECOVERY_WIFI_TICKET_INVALID")
+      runtimeBaseUrl = normalizeRuntimeBaseUrl(testUrl)
 
-      val ssid = response.optString("ssid")
-      val password = response.optString("password")
-      val testUrl = response.optString("testUrl")
-      if (ssid.isBlank() || password.isBlank() || testUrl.isBlank()) {
-        throw IllegalStateException("BLE_RECOVERY_WIFI_TICKET_INVALID")
+      trace.emit(
+        ColdGuardEnrollmentStage.CONNECTING_SOFTAP,
+        "The phone will briefly switch to the device Wi-Fi to verify setup.",
+      )
+      runWithRetries(trace, ColdGuardEnrollmentStage.CONNECTING_SOFTAP, 2) {
+        wifiSessionController.connect(softApSsid!!, softApPassword!!, bindProcess = true)
       }
 
-      ColdGuardBleWifiTicket(
-        password = password,
-        runtimeBaseUrl = normalizeRuntimeBaseUrl(testUrl),
-        ssid = ssid,
+      trace.emit(ColdGuardEnrollmentStage.VERIFYING_RUNTIME, "Checking the device runtime endpoint over the temporary Wi-Fi link.")
+      runWithRetries(trace, ColdGuardEnrollmentStage.VERIFYING_RUNTIME, 2) {
+        fetchRuntimeSnapshot(runtimeBaseUrl!!)
+      }
+
+      trace.emit(ColdGuardEnrollmentStage.CLEANING_UP, "Releasing temporary setup resources.")
+      trace.emit(ColdGuardEnrollmentStage.COMPLETED, "Device pairing and Wi-Fi smoke test completed.")
+
+      ColdGuardEnrollmentResult(
+        bleName = hello.bleName,
+        deviceId = hello.deviceId,
+        diagnostics = trace.buildDiagnostics(
+          detail = "Enrollment completed successfully.",
+          failureStage = null,
+          rawErrorMessage = null,
+          runtimeBaseUrl = runtimeBaseUrl,
+          ssid = softApSsid,
+        ),
+        firmwareVersion = hello.firmwareVersion,
+        macAddress = hello.macAddress,
+        protocolVersion = hello.protocolVersion.toDouble(),
+        runtimeBaseUrl = runtimeBaseUrl,
+        smokeTestPassed = true,
+        softApPassword = softApPassword,
+        softApSsid = softApSsid,
       )
+    } catch (error: Exception) {
+      trace.emit(
+        ColdGuardEnrollmentStage.FAILED,
+        error.message ?: "Native enrollment failed.",
+      )
+      throw error
     } finally {
-      session.close()
+      try {
+        wifiSessionController.release(bindProcess = true)
+      } catch (_: Exception) {
+      }
+      try {
+        session?.close()
+      } catch (_: Exception) {
+      }
+    }
+  }
+
+  private fun ensureBlePermissions() {
+    val requiredPermissions = buildList {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        add(Manifest.permission.BLUETOOTH_CONNECT)
+        add(Manifest.permission.BLUETOOTH_SCAN)
+      } else {
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+      }
+    }
+
+    val denied = requiredPermissions.any { permission ->
+      ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
+    }
+    if (denied) {
+      throw IllegalStateException("BLE_PERMISSION_REQUIRED")
+    }
+  }
+
+  private fun parseJsonTicket(value: String, errorCode: String): JSONObject {
+    return try {
+      JSONObject(value)
+    } catch (_: Exception) {
+      throw IllegalStateException(errorCode)
     }
   }
 
@@ -134,7 +233,6 @@ class ColdGuardBleRecoveryController(private val context: Context) {
             continuation.resumeWithException(IllegalStateException("BLE_SCAN_FAILED_$errorCode"))
           }
         }
-
         val settings = ScanSettings.Builder()
           .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
           .build()
@@ -146,10 +244,6 @@ class ColdGuardBleRecoveryController(private val context: Context) {
         }
       }
     }
-  }
-
-  private suspend fun connect(device: BluetoothDevice): ColdGuardBleGattSession {
-    return ColdGuardBleGattSession.connect(context, device)
   }
 
   private fun createProofTimestamp(hello: BleHelloResponse): Long {
@@ -213,31 +307,103 @@ class ColdGuardBleRecoveryController(private val context: Context) {
     return null
   }
 
-  private fun ensureBlePermissions() {
-    val requiredPermissions = buildList {
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        add(Manifest.permission.BLUETOOTH_CONNECT)
-        add(Manifest.permission.BLUETOOTH_SCAN)
-      } else {
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
-      }
+  private suspend fun fetchRuntimeSnapshot(runtimeBaseUrl: String): Map<String, String> {
+    val network = wifiSessionController.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
+    val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
+    val failures = mutableListOf<String>()
+    val statusJson = try {
+      fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network)
+    } catch (error: IOException) {
+      failures += "/api/v1/runtime/status: ${error.message ?: "request failed"}"
+      null
     }
 
-    val denied = requiredPermissions.any { permission ->
-      ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
+    if (statusJson == null) {
+      throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
     }
-    if (denied) {
-      throw IllegalStateException("BLE_PERMISSION_REQUIRED")
+
+    try {
+      val resolvedAlertsJson =
+        if (statusJson.contains("\"alerts\"")) {
+          statusJson
+        } else {
+          fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network)
+        }
+
+      return mapOf(
+        "alertsJson" to resolvedAlertsJson,
+        "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
+        "statusJson" to statusJson,
+      )
+    } catch (error: IOException) {
+      failures += "/api/v1/runtime/alerts: ${error.message ?: "request failed"}"
     }
+
+    if (failures.isNotEmpty()) {
+      throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
+    }
+
+    throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")
+  }
+
+  private suspend fun fetchJson(url: String, network: android.net.Network): String = withContext(Dispatchers.IO) {
+    val connection = (network.openConnection(URL(url)) as HttpURLConnection).apply {
+      requestMethod = "GET"
+      connectTimeout = 10_000
+      readTimeout = 10_000
+    }
+
+    try {
+      val responseCode = connection.responseCode
+      val body = readResponseBody(connection, responseCode)
+      if (responseCode in 200..299) {
+        return@withContext body
+      }
+
+      throw IOException("HTTP $responseCode ${body.ifBlank { "<empty body>" }}")
+    } finally {
+      connection.disconnect()
+    }
+  }
+
+  private fun readResponseBody(connection: HttpURLConnection, responseCode: Int): String {
+    val stream = if (responseCode in 200..299) {
+      connection.inputStream
+    } else {
+      connection.errorStream ?: connection.inputStream
+    }
+    return stream?.bufferedReader()?.use { it.readText() } ?: ""
   }
 
   private fun normalizeRuntimeBaseUrl(value: String): String {
     return try {
-      val url = java.net.URL(value)
+      val url = URL(value)
       "${url.protocol}://${url.host}${if (url.port >= 0) ":${url.port}" else ""}"
     } catch (_: Exception) {
       value.trimEnd('/')
     }
+  }
+
+  private suspend fun <T> runWithRetries(
+    trace: EnrollmentTrace,
+    stage: ColdGuardEnrollmentStage,
+    maxAttempts: Int,
+    block: suspend () -> T,
+  ): T {
+    var lastError: Exception? = null
+    for (attempt in 1..maxAttempts) {
+      trace.emit(stage, "Attempt $attempt of $maxAttempts.")
+      try {
+        return block()
+      } catch (error: Exception) {
+        lastError = error
+        if (attempt >= maxAttempts) {
+          break
+        }
+        delay(750L)
+      }
+    }
+    throw lastError ?: IllegalStateException("${stage.wireValue.uppercase(Locale.US)}_FAILED")
   }
 
   companion object {
@@ -295,11 +461,68 @@ class ColdGuardBleRecoveryController(private val context: Context) {
     }
   }
 
+  private class EnrollmentTrace(
+    private val deviceId: String,
+    private val onStage: (ColdGuardEnrollmentProgress) -> Unit,
+  ) {
+    private val startedAtMs = System.currentTimeMillis()
+    private val attemptsByStage = linkedMapOf<String, Int>()
+    private val timeline = mutableListOf<Map<String, Any?>>()
+
+    fun emit(stage: ColdGuardEnrollmentStage, detail: String?) {
+      val nextAttempt = (attemptsByStage[stage.wireValue] ?: 0) + 1
+      attemptsByStage[stage.wireValue] = nextAttempt
+      val elapsedMs = System.currentTimeMillis() - startedAtMs
+      val event = ColdGuardEnrollmentProgress(
+        attempt = nextAttempt,
+        detail = detail,
+        deviceId = deviceId,
+        elapsedMs = elapsedMs,
+        stage = stage,
+      )
+      timeline += mapOf(
+        "attempt" to nextAttempt,
+        "detail" to detail,
+        "elapsedMs" to elapsedMs.toDouble(),
+        "stage" to stage.wireValue,
+        "stageLabel" to stage.label,
+      )
+      Log.d(LOG_TAG, "[${stage.wireValue}] attempt=$nextAttempt elapsedMs=$elapsedMs detail=${detail ?: ""}")
+      onStage(event)
+    }
+
+    fun buildDiagnostics(
+      detail: String?,
+      failureStage: ColdGuardEnrollmentStage?,
+      rawErrorMessage: String?,
+      runtimeBaseUrl: String?,
+      ssid: String?,
+    ): ColdGuardEnrollmentDiagnostics {
+      val (attemptsJson, timelineJson) = diagnosticsJsonMap(attemptsByStage, timeline)
+      return ColdGuardEnrollmentDiagnostics(
+        attemptsByStageJson = attemptsJson,
+        detail = detail,
+        deviceId = deviceId,
+        failureStage = failureStage,
+        rawErrorMessage = rawErrorMessage,
+        runtimeBaseUrl = runtimeBaseUrl,
+        ssid = ssid,
+        timelineJson = timelineJson,
+      )
+    }
+  }
+
   private data class BleHelloResponse(
+    val bleName: String,
     val deviceId: String,
     val deviceNonce: String,
     val deviceTimeMs: Long,
+    val enrollmentReady: Boolean,
+    val firmwareVersion: String,
+    val macAddress: String,
+    val protocolVersion: Int,
     val receivedAtMs: Long,
+    val state: String,
   )
 
   private class ColdGuardBleGattSession(
@@ -309,25 +532,46 @@ class ColdGuardBleRecoveryController(private val context: Context) {
   ) {
     suspend fun hello(expectedDeviceId: String): BleHelloResponse {
       val response = sendCommand("hello", JSONObject())
+      val bleName = response.optString("bleName")
       val deviceId = response.optString("deviceId")
       val deviceNonce = response.optString("deviceNonce")
       val deviceTimeMs = response.optLong("deviceTimeMs", -1L)
-      if (deviceId.isBlank() || deviceNonce.isBlank() || deviceTimeMs <= 0L) {
+      val enrollmentReady = response.optBoolean("enrollmentReady", false)
+      val firmwareVersion = response.optString("firmwareVersion")
+      val macAddress = response.optString("macAddress")
+      val protocolVersion = response.optInt("protocolVersion", 0)
+      val state = response.optString("state")
+      if (
+        bleName.isBlank() ||
+        deviceId.isBlank() ||
+        deviceNonce.isBlank() ||
+        deviceTimeMs <= 0L ||
+        firmwareVersion.isBlank() ||
+        macAddress.isBlank() ||
+        protocolVersion <= 0 ||
+        state.isBlank()
+      ) {
         throw IllegalStateException("BLE_INVALID_HELLO_RESPONSE")
       }
       if (deviceId != expectedDeviceId) {
         throw IllegalStateException("BLE_DEVICE_ID_MISMATCH")
       }
       return BleHelloResponse(
+        bleName = bleName,
         deviceId = deviceId,
         deviceNonce = deviceNonce,
         deviceTimeMs = deviceTimeMs,
+        enrollmentReady = enrollmentReady,
+        firmwareVersion = firmwareVersion,
+        macAddress = macAddress,
+        protocolVersion = protocolVersion,
         receivedAtMs = System.currentTimeMillis(),
+        state = state,
       )
     }
 
     suspend fun sendCommand(command: String, body: JSONObject): JSONObject {
-      val requestId = "req-${System.currentTimeMillis()}-${(100000..999999).random()}"
+      val requestId = "req-${System.currentTimeMillis()}-${Random.nextInt(100000, 999999)}"
       val payload = JSONObject(body.toString()).apply {
         put("command", command)
         put("requestId", requestId)
@@ -416,13 +660,17 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       private const val CONNECT_RETRY_DELAY_MS = 750L
       private const val CONNECT_RETRY_MAX_ATTEMPTS = 3
 
-      suspend fun connect(context: Context, device: BluetoothDevice): ColdGuardBleGattSession {
+      suspend fun connect(
+        context: Context,
+        device: BluetoothDevice,
+        onDiscoveringServices: () -> Unit,
+      ): ColdGuardBleGattSession {
         var lastError: Exception? = null
 
         for (attempt in 1..CONNECT_RETRY_MAX_ATTEMPTS) {
           var gatt: BluetoothGatt? = null
           try {
-            val callback = SessionCallback()
+            val callback = SessionCallback(onDiscoveringServices)
             gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
               device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE)
             } else {
@@ -493,7 +741,9 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       }
     }
 
-    private class SessionCallback : BluetoothGattCallback() {
+    private class SessionCallback(
+      private val onDiscoveringServices: () -> Unit,
+    ) : BluetoothGattCallback() {
       val servicesDiscovered = CompletableDeferred<List<BluetoothGattService>>()
       var pendingDescriptorWrite: CompletableDeferred<Unit>? = null
         private set
@@ -553,6 +803,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
 
         when (newState) {
           BluetoothProfile.STATE_CONNECTED -> {
+            onDiscoveringServices()
             if (!gatt.discoverServices() && !servicesDiscovered.isCompleted) {
               servicesDiscovered.completeExceptionally(IllegalStateException("BLE_DISCOVER_SERVICES_FAILED"))
             }

@@ -16,6 +16,7 @@ class ColdGuardWifiBridgeModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("ColdGuardWifiBridge")
+    Events("onEnrollmentStage")
 
     AsyncFunction("connectToAccessPointAsync") Coroutine { ssid: String, password: String ->
       connectToAccessPoint(ssid, password)
@@ -23,6 +24,10 @@ class ColdGuardWifiBridgeModule : Module() {
 
     AsyncFunction("fetchRuntimeSnapshotAsync") Coroutine { runtimeBaseUrl: String ->
       fetchRuntimeSnapshot(runtimeBaseUrl)
+    }
+
+    AsyncFunction("startEnrollmentAsync") Coroutine { options: Map<String, Any?> ->
+      startEnrollment(options)
     }
 
     AsyncFunction("startMonitoringDeviceAsync") { options: Map<String, Any?> ->
@@ -92,6 +97,21 @@ class ColdGuardWifiBridgeModule : Module() {
     }
 
     throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")
+  }
+
+  private suspend fun startEnrollment(options: Map<String, Any?>): Map<String, Any?> {
+    val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
+    val request = coldGuardEnrollmentRequestFromMap(options)
+    val controller = ColdGuardBleEnrollmentController(
+      context = context,
+      wifiSessionController = wifiSessionController ?: ColdGuardWifiSessionController(context).also {
+        wifiSessionController = it
+      },
+      onStage = { progress ->
+        sendEvent("onEnrollmentStage", progress.toBridgeMap())
+      },
+    )
+    return controller.enroll(request).toBridgeMap()
   }
 
   private fun releaseNetworkBinding() {

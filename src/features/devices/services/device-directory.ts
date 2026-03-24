@@ -213,7 +213,7 @@ export async function ensureDeviceConnectionGrant(deviceId: string) {
 export async function ensureSupervisorActionTicket(
   profile: ProfileSnapshot,
   deviceId: string,
-  action: Exclude<DeviceAction, "connect">,
+  action: Extract<DeviceAction, "connect" | "decommission" | "enroll" | "reassign" | "wifi_provision">,
 ) {
   if (profile.role !== "Supervisor") {
     throw new Error("SUPERVISOR_REQUIRED");

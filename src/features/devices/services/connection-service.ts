@@ -26,12 +26,13 @@ import type {
   CachedDeviceActionTicket,
   ColdGuardConnectionPayload,
   ColdGuardDiscoveredDevice,
+  ColdGuardWifiTicket,
   DeviceRuntimeSnapshot,
   FacilityWifiProvisioning,
-  ColdGuardWifiTicket,
   RuntimeAlertRecord,
   RuntimeTransportMode,
 } from "../types";
+import type { ColdGuardEnrollmentProgressEvent } from "../../../../modules/coldguard-wifi-bridge";
 import { RealColdGuardBleClient } from "./ble-client";
 import {
   claimMockHardwareDevice,
@@ -42,8 +43,10 @@ import {
 import {
   createColdGuardWifiBridge,
   getNativeMonitoringServiceStatuses,
+  startNativeEnrollment,
   startNativeMonitoringDevice,
   stopNativeMonitoringDevice,
+  subscribeToNativeEnrollmentStages,
 } from "./wifi-bridge";
 import { getLocalNotificationPermissionStatus, requestLocalNotificationPermission } from "../../notifications/services/local-notifications";
 import {
@@ -577,6 +580,7 @@ async function connectViaStoredSoftAp(args: {
 
 export async function enrollColdGuardDevice(args: {
   nickname: string;
+  onProgress?: (event: ColdGuardEnrollmentProgressEvent) => void;
   profile: ProfileSnapshot;
   qrPayload: string;
   bleClient?: ColdGuardBleClient;
@@ -589,21 +593,61 @@ export async function enrollColdGuardDevice(args: {
   const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
   const bleClient = args.bleClient ?? realBleClient;
   const actionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "enroll");
-  const enrolledDevice = await bleClient.enrollDevice({
-    actionTicket,
-    bootstrapToken,
-    deviceId,
-    handshakeToken,
-    institutionId: args.profile.institutionId,
-    nickname: args.nickname.trim(),
-  });
+  const nickname = args.nickname.trim() || `ColdGuard ${deviceId.slice(-4).toUpperCase()}`;
+  const enrolledDevice =
+    Platform.OS === "android" && !args.bleClient
+      ? await (async () => {
+          const connectActionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "connect");
+          const progressSubscription = subscribeToNativeEnrollmentStages((event) => {
+            args.onProgress?.(event);
+          });
+
+          try {
+            const result = await startNativeEnrollment({
+              actionTicketJson: JSON.stringify(actionTicket),
+              bootstrapToken,
+              connectActionTicketJson: JSON.stringify(connectActionTicket),
+              deviceId,
+              handshakeToken,
+              institutionId: args.profile.institutionId,
+              nickname,
+            });
+
+            await upsertDeviceRuntimeConfig(deviceId, {
+              lastRuntimeError: null,
+              softApPassword: result.softApPassword,
+              softApRuntimeBaseUrl: result.runtimeBaseUrl,
+              softApSsid: result.softApSsid,
+            });
+
+            return {
+              bleName: result.bleName,
+              bootstrapClaim: bootstrapToken,
+              deviceId: result.deviceId,
+              firmwareVersion: result.firmwareVersion,
+              macAddress: result.macAddress,
+              protocolVersion: result.protocolVersion,
+              state: "enrolled" as const,
+            };
+          } finally {
+            progressSubscription?.remove();
+          }
+        })()
+      : await bleClient.enrollDevice({
+          actionTicket,
+          bootstrapToken,
+          deviceId,
+          handshakeToken,
+          institutionId: args.profile.institutionId,
+          nickname,
+        });
 
   const registeredDevice = await registerEnrolledDevice({
     bleName: enrolledDevice.bleName,
     deviceId: enrolledDevice.deviceId,
     firmwareVersion: enrolledDevice.firmwareVersion,
     macAddress: enrolledDevice.macAddress,
-    nickname: args.nickname.trim() || `ColdGuard ${enrolledDevice.deviceId.slice(-4).toUpperCase()}`,
+    nickname,
     protocolVersion: enrolledDevice.protocolVersion,
   });
 

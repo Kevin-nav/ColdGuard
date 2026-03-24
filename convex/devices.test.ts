@@ -187,6 +187,41 @@ test("issues short-lived supervisor action tickets for enroll", async () => {
   jest.restoreAllMocks();
 });
 
+test("issues short-lived supervisor connect tickets for devices not yet registered", async () => {
+  const now = 1_700_000_000_000;
+  jest.spyOn(Date, "now").mockReturnValue(now);
+
+  const ctx = createMutationCtx({
+    user: {
+      _id: "user-1",
+      displayName: "Supervisor One",
+      firebaseUid: "firebase-user-1",
+      institutionId: "institution-1",
+      role: "Supervisor",
+      staffId: null,
+    },
+  });
+
+  const ticket = await (issueSupervisorActionTicket as any)._handler(ctx, {
+    action: "connect",
+    deviceId: "device-1",
+  });
+
+  expect(ticket).toMatchObject({
+    action: "connect",
+    counter: 1,
+    deviceId: "device-1",
+    expiresAt: now + 5 * 60 * 1000,
+    institutionId: "institution-1",
+    issuedAt: now,
+    operatorId: "firebase-user-1",
+    v: 1,
+  });
+  expect(ticket.mac).toMatch(/^[0-9a-f]{64}$/);
+
+  jest.restoreAllMocks();
+});
+
 test("rejects unauthorized device action ticket issuance for an unassigned nurse", async () => {
   const ctx = createMutationCtx({
     assignmentsByStaff: [],

@@ -21,3 +21,10 @@ test("keeps an unknown raw message available as the developer code", () => {
     userMessage: "Service 6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110 for device ? not found",
   });
 });
+
+test("maps native softap smoke test failures into a user-facing message", () => {
+  expect(presentDeviceError(new Error("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED /api/v1/runtime/status: timeout"), "fallback")).toEqual({
+    developerCode: "WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED /api/v1/runtime/status: timeout",
+    userMessage: "The device paired, but its temporary Wi-Fi link could not be verified.",
+  });
+});

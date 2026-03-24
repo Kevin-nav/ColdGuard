@@ -10,6 +10,7 @@ describe("getColdGuardWifiBridgeModule", () => {
       fetchRuntimeSnapshotAsync: jest.fn(),
       getMonitoringStatusesAsync: jest.fn(),
       releaseNetworkBindingAsync: jest.fn(),
+      startEnrollmentAsync: jest.fn(),
       startMonitoringDeviceAsync: jest.fn(),
       stopMonitoringDeviceAsync: jest.fn(),
     };
@@ -56,6 +57,23 @@ describe("getColdGuardWifiBridgeModule", () => {
 });
 
 describe("ColdGuardWifiBridgeModule.web", () => {
+  test("startEnrollmentAsync throws when the web bridge is unavailable", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require("./ColdGuardWifiBridgeModule.web");
+
+    await expect(
+      module.default().startEnrollmentAsync({
+        actionTicketJson: "{}",
+        bootstrapToken: "bootstrap-token",
+        connectActionTicketJson: "{}",
+        deviceId: "device-123",
+        handshakeToken: "handshake-token",
+        institutionId: "inst-1",
+        nickname: "ColdGuard 0123",
+      }),
+    ).rejects.toThrow("WIFI_BRIDGE_UNAVAILABLE");
+  });
+
   test("stopMonitoringDeviceAsync returns a status map keyed by device id", async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const module = require("./ColdGuardWifiBridgeModule.web");

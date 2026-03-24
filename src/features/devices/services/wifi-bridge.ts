@@ -1,10 +1,14 @@
 import { Platform } from "react-native";
 import getColdGuardWifiBridgeModule from "../../../../modules/coldguard-wifi-bridge";
 import type {
+  ColdGuardEnrollmentProgressEvent,
+  ColdGuardEnrollmentRequest,
+  ColdGuardEnrollmentResult,
   ColdGuardMonitoringServiceOptions,
   ColdGuardMonitoringStatusMap,
   ColdGuardRuntimeFetchResult,
 } from "../../../../modules/coldguard-wifi-bridge";
+import type { EventSubscription } from "expo-modules-core";
 import type { ColdGuardWifiTicket } from "../types";
 
 export type ColdGuardWifiBridge = {
@@ -65,4 +69,24 @@ export async function getNativeMonitoringServiceStatuses(): Promise<ColdGuardMon
     return {};
   }
   return await wifiBridgeModule.getMonitoringStatusesAsync();
+}
+
+export async function startNativeEnrollment(
+  options: ColdGuardEnrollmentRequest,
+): Promise<ColdGuardEnrollmentResult> {
+  const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
+  if (!wifiBridgeModule?.startEnrollmentAsync) {
+    throw new Error("WIFI_BRIDGE_ENROLLMENT_UNAVAILABLE");
+  }
+  return await wifiBridgeModule.startEnrollmentAsync(options);
+}
+
+export function subscribeToNativeEnrollmentStages(
+  listener: (event: ColdGuardEnrollmentProgressEvent) => void,
+): EventSubscription | null {
+  const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
+  if (!wifiBridgeModule?.addListener) {
+    return null;
+  }
+  return wifiBridgeModule.addListener("onEnrollmentStage", listener);
 }

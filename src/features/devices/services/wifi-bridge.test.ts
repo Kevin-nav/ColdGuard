@@ -4,8 +4,10 @@ const mockConnectToAccessPointAsync = jest.fn();
 const mockFetchRuntimeSnapshotAsync = jest.fn();
 const mockGetMonitoringStatusesAsync = jest.fn();
 const mockReleaseNetworkBindingAsync = jest.fn();
+const mockStartEnrollmentAsync = jest.fn();
 const mockStartMonitoringDeviceAsync = jest.fn();
 const mockStopMonitoringDeviceAsync = jest.fn();
+const mockAddListener = jest.fn();
 
 jest.mock("../../../../modules/coldguard-wifi-bridge", () => ({
   __esModule: true,
@@ -14,8 +16,10 @@ jest.mock("../../../../modules/coldguard-wifi-bridge", () => ({
     fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
     getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
     releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
+    startEnrollmentAsync: (...args: unknown[]) => mockStartEnrollmentAsync(...args),
     startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
     stopMonitoringDeviceAsync: (...args: unknown[]) => mockStopMonitoringDeviceAsync(...args),
+    addListener: (...args: unknown[]) => mockAddListener(...args),
   }),
 }));
 
@@ -175,6 +179,107 @@ describe("wifi bridge helpers", () => {
       transport: "facility_wifi",
     });
     expect(mockStopMonitoringDeviceAsync).toHaveBeenCalledWith("device-1");
+  });
+
+  test("starts native enrollment on android and returns the native result", async () => {
+    jest.doMock("react-native", () => ({
+      Platform: { OS: "android" },
+    }));
+    jest.doMock("../../../../modules/coldguard-wifi-bridge", () => ({
+      __esModule: true,
+      default: () => ({
+        addListener: (...args: unknown[]) => mockAddListener(...args),
+        connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
+        fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
+        getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+        releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
+        startEnrollmentAsync: (...args: unknown[]) => mockStartEnrollmentAsync(...args),
+        startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
+        stopMonitoringDeviceAsync: (...args: unknown[]) => mockStopMonitoringDeviceAsync(...args),
+      }),
+    }));
+    mockStartEnrollmentAsync.mockResolvedValue({
+      bleName: "ColdGuard_7BCC",
+      deviceId: "CG-ESP32-5C7BCC",
+      diagnostics: {
+        attemptsByStageJson: "{\"finding_device\":1}",
+        detail: "Enrollment completed successfully.",
+        deviceId: "CG-ESP32-5C7BCC",
+        failureStage: null,
+        rawErrorMessage: null,
+        runtimeBaseUrl: "http://192.168.4.1",
+        ssid: "ColdGuard_7BCC",
+        timelineJson: "[]",
+      },
+      firmwareVersion: "cg-transport-0.1.2",
+      macAddress: "74:24:A8:5C:7B:CC",
+      protocolVersion: 1,
+      runtimeBaseUrl: "http://192.168.4.1",
+      smokeTestPassed: true,
+      softApPassword: "pass-1",
+      softApSsid: "ColdGuard_7BCC",
+    });
+
+    let startNativeEnrollment: typeof import("./wifi-bridge").startNativeEnrollment;
+    jest.isolateModules(() => {
+      ({ startNativeEnrollment } = jest.requireActual("./wifi-bridge"));
+    });
+
+    await expect(
+      startNativeEnrollment!({
+        actionTicketJson: "{\"action\":\"enroll\"}",
+        bootstrapToken: "bootstrap-1",
+        connectActionTicketJson: "{\"action\":\"connect\"}",
+        deviceId: "CG-ESP32-5C7BCC",
+        handshakeToken: "handshake-1",
+        institutionId: "inst-1",
+        nickname: "ColdGuard 7BCC",
+      }),
+    ).resolves.toMatchObject({
+      deviceId: "CG-ESP32-5C7BCC",
+      smokeTestPassed: true,
+      softApSsid: "ColdGuard_7BCC",
+    });
+
+    expect(mockStartEnrollmentAsync).toHaveBeenCalledWith({
+      actionTicketJson: "{\"action\":\"enroll\"}",
+      bootstrapToken: "bootstrap-1",
+      connectActionTicketJson: "{\"action\":\"connect\"}",
+      deviceId: "CG-ESP32-5C7BCC",
+      handshakeToken: "handshake-1",
+      institutionId: "inst-1",
+      nickname: "ColdGuard 7BCC",
+    });
+  });
+
+  test("subscribes to native enrollment stage events on android", async () => {
+    jest.doMock("react-native", () => ({
+      Platform: { OS: "android" },
+    }));
+    jest.doMock("../../../../modules/coldguard-wifi-bridge", () => ({
+      __esModule: true,
+      default: () => ({
+        addListener: (...args: unknown[]) => mockAddListener(...args),
+        connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
+        fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
+        getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+        releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
+        startEnrollmentAsync: (...args: unknown[]) => mockStartEnrollmentAsync(...args),
+        startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
+        stopMonitoringDeviceAsync: (...args: unknown[]) => mockStopMonitoringDeviceAsync(...args),
+      }),
+    }));
+    const subscription = { remove: jest.fn() };
+    mockAddListener.mockReturnValue(subscription);
+
+    let subscribeToNativeEnrollmentStages: typeof import("./wifi-bridge").subscribeToNativeEnrollmentStages;
+    jest.isolateModules(() => {
+      ({ subscribeToNativeEnrollmentStages } = jest.requireActual("./wifi-bridge"));
+    });
+
+    const listener = jest.fn();
+    expect(subscribeToNativeEnrollmentStages!(listener)).toBe(subscription);
+    expect(mockAddListener).toHaveBeenCalledWith("onEnrollmentStage", listener);
   });
 
   test("returns safe empty monitoring state when the bridge is unavailable", async () => {

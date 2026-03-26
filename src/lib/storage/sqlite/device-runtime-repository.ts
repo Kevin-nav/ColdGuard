@@ -1,5 +1,6 @@
 import { initializeSQLite } from "./client";
 import type {
+  DeviceControlRole,
   DeviceRuntimeConfig,
   MonitoringMode,
   RuntimeSessionStatus,
@@ -9,6 +10,7 @@ import type {
 type DeviceRuntimeConfigRow = {
   active_runtime_base_url: string | null;
   active_transport: RuntimeTransportMode | null;
+  control_role: DeviceControlRole | null;
   device_id: string;
   facility_wifi_password: string | null;
   facility_wifi_runtime_base_url: string | null;
@@ -16,6 +18,9 @@ type DeviceRuntimeConfigRow = {
   softap_password: string | null;
   softap_runtime_base_url: string | null;
   softap_ssid: string | null;
+  primary_controller_user_id: string | null;
+  primary_lease_expires_at: number | null;
+  primary_lease_session_id: string | null;
   last_monitor_at: number | null;
   last_monitor_error: string | null;
   last_ping_at: number | null;
@@ -30,6 +35,7 @@ function mapRow(row: DeviceRuntimeConfigRow): DeviceRuntimeConfig {
   return {
     activeRuntimeBaseUrl: row.active_runtime_base_url,
     activeTransport: row.active_transport,
+    controlRole: row.control_role ?? "none",
     deviceId: row.device_id,
     facilityWifiPassword: row.facility_wifi_password,
     facilityWifiRuntimeBaseUrl: row.facility_wifi_runtime_base_url,
@@ -37,6 +43,9 @@ function mapRow(row: DeviceRuntimeConfigRow): DeviceRuntimeConfig {
     softApPassword: row.softap_password,
     softApRuntimeBaseUrl: row.softap_runtime_base_url,
     softApSsid: row.softap_ssid,
+    primaryControllerUserId: row.primary_controller_user_id ?? null,
+    primaryLeaseExpiresAt: row.primary_lease_expires_at ?? null,
+    primaryLeaseSessionId: row.primary_lease_session_id ?? null,
     lastMonitorAt: row.last_monitor_at,
     lastMonitorError: row.last_monitor_error,
     lastPingAt: row.last_ping_at,
@@ -52,9 +61,10 @@ export async function getDeviceRuntimeConfig(deviceId: string): Promise<DeviceRu
   const database = await initializeSQLite();
   const row = await database.getFirstAsync<DeviceRuntimeConfigRow>(
     `
-      SELECT device_id, active_transport, session_status, monitoring_mode, active_runtime_base_url,
+      SELECT device_id, active_transport, control_role, session_status, monitoring_mode, active_runtime_base_url,
              facility_wifi_ssid, facility_wifi_password, facility_wifi_runtime_base_url,
              softap_ssid, softap_password, softap_runtime_base_url,
+             primary_controller_user_id, primary_lease_expires_at, primary_lease_session_id,
              last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
       FROM device_runtime_config
       WHERE device_id = ?
@@ -75,15 +85,17 @@ export async function saveDeviceRuntimeConfig(
     `
       INSERT OR REPLACE INTO device_runtime_config
       (
-        device_id, active_transport, session_status, monitoring_mode, active_runtime_base_url,
+        device_id, active_transport, control_role, session_status, monitoring_mode, active_runtime_base_url,
         facility_wifi_ssid, facility_wifi_password, facility_wifi_runtime_base_url,
         softap_ssid, softap_password, softap_runtime_base_url,
+        primary_controller_user_id, primary_lease_expires_at, primary_lease_session_id,
         last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     args.deviceId,
     args.activeTransport,
+    args.controlRole,
     args.sessionStatus,
     args.monitoringMode,
     args.activeRuntimeBaseUrl,
@@ -93,6 +105,9 @@ export async function saveDeviceRuntimeConfig(
     args.softApSsid,
     args.softApPassword,
     args.softApRuntimeBaseUrl,
+    args.primaryControllerUserId,
+    args.primaryLeaseExpiresAt,
+    args.primaryLeaseSessionId,
     args.lastPingAt,
     args.lastRecoverAt,
     args.lastMonitorAt,
@@ -115,11 +130,16 @@ export async function upsertDeviceRuntimeConfig(
   return await saveDeviceRuntimeConfig({
     activeRuntimeBaseUrl: patch.activeRuntimeBaseUrl ?? existing?.activeRuntimeBaseUrl ?? null,
     activeTransport: patch.activeTransport ?? existing?.activeTransport ?? null,
+    controlRole: patch.controlRole ?? existing?.controlRole ?? "none",
     deviceId,
     facilityWifiPassword: patch.facilityWifiPassword ?? existing?.facilityWifiPassword ?? null,
     facilityWifiRuntimeBaseUrl:
       patch.facilityWifiRuntimeBaseUrl ?? existing?.facilityWifiRuntimeBaseUrl ?? null,
     facilityWifiSsid: patch.facilityWifiSsid ?? existing?.facilityWifiSsid ?? null,
+    primaryControllerUserId:
+      patch.primaryControllerUserId ?? existing?.primaryControllerUserId ?? null,
+    primaryLeaseExpiresAt: patch.primaryLeaseExpiresAt ?? existing?.primaryLeaseExpiresAt ?? null,
+    primaryLeaseSessionId: patch.primaryLeaseSessionId ?? existing?.primaryLeaseSessionId ?? null,
     softApPassword: patch.softApPassword ?? existing?.softApPassword ?? null,
     softApRuntimeBaseUrl: patch.softApRuntimeBaseUrl ?? existing?.softApRuntimeBaseUrl ?? null,
     softApSsid: patch.softApSsid ?? existing?.softApSsid ?? null,
@@ -152,9 +172,10 @@ export async function listMonitoredDeviceRuntimeConfigs(
       : "";
   const rows = await database.getAllAsync<DeviceRuntimeConfigRow>(
     `
-      SELECT device_id, active_transport, session_status, monitoring_mode, active_runtime_base_url,
+      SELECT device_id, active_transport, control_role, session_status, monitoring_mode, active_runtime_base_url,
              facility_wifi_ssid, facility_wifi_password, facility_wifi_runtime_base_url,
              softap_ssid, softap_password, softap_runtime_base_url,
+             primary_controller_user_id, primary_lease_expires_at, primary_lease_session_id,
              last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
       FROM device_runtime_config
       WHERE monitoring_mode = 'foreground_service'${exclusionClause}

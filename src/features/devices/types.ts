@@ -71,6 +71,8 @@ export type RuntimeSessionStatus = "idle" | "connecting" | "connected" | "recove
 
 export type MonitoringMode = "off" | "foreground_service";
 
+export type DeviceControlRole = "none" | "secondary" | "primary";
+
 export type FacilityWifiProvisioning = {
   password: string;
   runtimeBaseUrl: string;
@@ -99,6 +101,7 @@ export type DeviceRuntimeSnapshot = ColdGuardConnectionPayload & {
 export type DeviceRuntimeConfig = {
   activeRuntimeBaseUrl: string | null;
   activeTransport: RuntimeTransportMode | null;
+  controlRole: DeviceControlRole;
   deviceId: string;
   facilityWifiPassword: string | null;
   facilityWifiRuntimeBaseUrl: string | null;
@@ -111,6 +114,9 @@ export type DeviceRuntimeConfig = {
   lastPingAt: number | null;
   lastRecoverAt: number | null;
   lastRuntimeError: string | null;
+  primaryControllerUserId: string | null;
+  primaryLeaseExpiresAt: number | null;
+  primaryLeaseSessionId: string | null;
   monitoringMode: MonitoringMode;
   sessionStatus: RuntimeSessionStatus;
   updatedAt: number;

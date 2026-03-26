@@ -87,6 +87,7 @@ export const SQLITE_TABLE_DEFINITIONS = {
     CREATE TABLE IF NOT EXISTS device_runtime_config (
       device_id TEXT PRIMARY KEY NOT NULL,
       active_transport TEXT,
+      control_role TEXT NOT NULL DEFAULT 'none',
       session_status TEXT NOT NULL DEFAULT 'idle',
       monitoring_mode TEXT NOT NULL DEFAULT 'off',
       active_runtime_base_url TEXT,
@@ -96,6 +97,9 @@ export const SQLITE_TABLE_DEFINITIONS = {
       softap_ssid TEXT,
       softap_password TEXT,
       softap_runtime_base_url TEXT,
+      primary_controller_user_id TEXT,
+      primary_lease_expires_at INTEGER,
+      primary_lease_session_id TEXT,
       last_ping_at INTEGER,
       last_recover_at INTEGER,
       last_monitor_at INTEGER,
@@ -181,6 +185,15 @@ export const SQLITE_LEGACY_COLUMN_MIGRATIONS = {
     payload_json: "ALTER TABLE connection_grants ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'",
     scope_id: "ALTER TABLE connection_grants ADD COLUMN scope_id TEXT NOT NULL DEFAULT ''",
     scope_type: "ALTER TABLE connection_grants ADD COLUMN scope_type TEXT NOT NULL DEFAULT 'device'",
+  },
+  device_runtime_config: {
+    control_role: "ALTER TABLE device_runtime_config ADD COLUMN control_role TEXT NOT NULL DEFAULT 'none'",
+    primary_controller_user_id:
+      "ALTER TABLE device_runtime_config ADD COLUMN primary_controller_user_id TEXT",
+    primary_lease_expires_at:
+      "ALTER TABLE device_runtime_config ADD COLUMN primary_lease_expires_at INTEGER",
+    primary_lease_session_id:
+      "ALTER TABLE device_runtime_config ADD COLUMN primary_lease_session_id TEXT",
   },
 } as const;
 

@@ -665,6 +665,8 @@ export async function enrollColdGuardDevice(args: {
     throw new Error("DEVICE_MANAGEMENT_FORBIDDEN");
   }
 
+  await ensureEnrollmentPermissions();
+
   const handshakeToken = await getRequiredClinicHandshakeToken();
   const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
   const bleClient = args.bleClient ?? realBleClient;
@@ -1321,6 +1323,25 @@ async function ensureBleTransportPermissions() {
   if (denied) {
     throw new Error("BLE_PERMISSION_REQUIRED");
   }
+}
+
+async function ensureNotificationPermission() {
+  if (Platform.OS === "web") {
+    return;
+  }
+
+  const permissionStatus = await getLocalNotificationPermissionStatus();
+  const nextPermissionStatus =
+    permissionStatus === "undetermined" ? await requestLocalNotificationPermission() : permissionStatus;
+  if (nextPermissionStatus !== "granted") {
+    throw new Error(MONITORING_NOTIFICATION_PERMISSION_ERROR);
+  }
+}
+
+async function ensureEnrollmentPermissions() {
+  await ensureNotificationPermission();
+  await ensureBleTransportPermissions();
+  await ensureWifiBridgePermissions();
 }
 
 async function ensureMonitoringTransportPermissions() {

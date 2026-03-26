@@ -474,6 +474,44 @@ test("requests bluetooth permission before native android enrollment", async () 
   expect(mockStartNativeEnrollment).not.toHaveBeenCalled();
 });
 
+test("requests notification permission before enrollment finishes", async () => {
+  const reactNative = jest.requireActual("react-native");
+  const previousOs = reactNative.Platform.OS;
+
+  Object.defineProperty(reactNative.Platform, "OS", {
+    configurable: true,
+    value: "android",
+  });
+  mockGetLocalNotificationPermissionStatus.mockResolvedValueOnce("denied");
+
+  try {
+    await expect(
+      enrollColdGuardDevice({
+        nickname: "Cold Room Alpha",
+        profile: {
+          firebaseUid: "firebase-u1",
+          displayName: "Yaw Boateng",
+          email: "yaw@example.com",
+          institutionId: "institution-1",
+          institutionName: "Korle-Bu Teaching Hospital",
+          staffId: "KB1002",
+          role: "Supervisor",
+          lastUpdatedAt: 1,
+        },
+        qrPayload: "coldguard://device/CG-ESP32-A100?claim=claim-alpha-100&v=1",
+      }),
+    ).rejects.toThrow("Allow notifications to start ColdGuard background monitoring on this device.");
+  } finally {
+    Object.defineProperty(reactNative.Platform, "OS", {
+      configurable: true,
+      value: previousOs,
+    });
+  }
+
+  expect(mockStartNativeEnrollment).not.toHaveBeenCalled();
+  expect(mockStartNativeMonitoringDevice).not.toHaveBeenCalled();
+});
+
 test("starts native monitoring with facility and softap recovery context", async () => {
   mockUpsertDeviceRuntimeConfig.mockResolvedValueOnce({
     activeRuntimeBaseUrl: "http://192.168.4.1",

@@ -418,6 +418,62 @@ test("uses the native android enrollment bridge and persists temporary softap me
   expect(remove).toHaveBeenCalledTimes(1);
 });
 
+test("requests bluetooth permission before native android enrollment", async () => {
+  const reactNative = jest.requireActual("react-native");
+  const previousOs = reactNative.Platform.OS;
+  const previousVersion = reactNative.Platform.Version;
+  const previousRequestMultiple = reactNative.PermissionsAndroid.requestMultiple;
+
+  Object.defineProperty(reactNative.Platform, "OS", {
+    configurable: true,
+    value: "android",
+  });
+  Object.defineProperty(reactNative.Platform, "Version", {
+    configurable: true,
+    value: 33,
+  });
+  reactNative.PermissionsAndroid.requestMultiple = jest
+    .fn()
+    .mockResolvedValueOnce({
+      "android.permission.BLUETOOTH_CONNECT": "denied",
+      "android.permission.BLUETOOTH_SCAN": "granted",
+    })
+    .mockResolvedValueOnce({
+      "android.permission.NEARBY_WIFI_DEVICES": "granted",
+    });
+
+  try {
+    await expect(
+      enrollColdGuardDevice({
+        nickname: "Cold Room Alpha",
+        profile: {
+          firebaseUid: "firebase-u1",
+          displayName: "Yaw Boateng",
+          email: "yaw@example.com",
+          institutionId: "institution-1",
+          institutionName: "Korle-Bu Teaching Hospital",
+          staffId: "KB1002",
+          role: "Supervisor",
+          lastUpdatedAt: 1,
+        },
+        qrPayload: "coldguard://device/CG-ESP32-A100?claim=claim-alpha-100&v=1",
+      }),
+    ).rejects.toThrow("BLE_PERMISSION_REQUIRED");
+  } finally {
+    Object.defineProperty(reactNative.Platform, "OS", {
+      configurable: true,
+      value: previousOs,
+    });
+    Object.defineProperty(reactNative.Platform, "Version", {
+      configurable: true,
+      value: previousVersion,
+    });
+    reactNative.PermissionsAndroid.requestMultiple = previousRequestMultiple;
+  }
+
+  expect(mockStartNativeEnrollment).not.toHaveBeenCalled();
+});
+
 test("starts native monitoring with facility and softap recovery context", async () => {
   mockUpsertDeviceRuntimeConfig.mockResolvedValueOnce({
     activeRuntimeBaseUrl: "http://192.168.4.1",

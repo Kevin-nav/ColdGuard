@@ -673,6 +673,8 @@ export async function enrollColdGuardDevice(args: {
   const enrolledDevice =
     Platform.OS === "android" && !args.bleClient
       ? await (async () => {
+          await ensureBleTransportPermissions();
+          await ensureWifiBridgePermissions();
           const connectActionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "connect");
           const progressSubscription = subscribeToNativeEnrollmentStages((event) => {
             args.onProgress?.(event);

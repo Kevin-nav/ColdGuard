@@ -321,6 +321,205 @@ bool hasVerifiedSession(const DeviceState& state, const String& requiredPermissi
   return state.lastVerifiedPermission == "connect" || state.lastVerifiedPermission == "manage";
 }
 
+bool hasActivePrimaryLease(const DeviceState& state) {
+  if (state.primaryLeaseSessionId.isEmpty() || state.primaryLeaseExpiresAtMs == 0) {
+    return false;
+  }
+  return static_cast<long>(millis() - state.primaryLeaseExpiresAtMs) <= 0;
+}
+
+String buildPrimarySessionRole(const DeviceState& state, const String& sessionId) {
+  if (!hasActivePrimaryLease(state)) {
+    return "none";
+  }
+  if (sessionId.isEmpty()) {
+    return "blocked";
+  }
+  return sessionId == state.primaryLeaseSessionId ? "primary" : "secondary";
+}
+
+String generatePrimaryLeaseSessionId() {
+  return "lease-" + String(millis()) + "-" + String(static_cast<uint32_t>(esp_random()), HEX);
+}
+
+unsigned long resolveLeaseDurationMs(const DeviceState& state, unsigned long requestedLeaseMs) {
+  const unsigned long fallbackLeaseMs =
+    state.primaryLeaseTimeoutMs > 0 ? state.primaryLeaseTimeoutMs : 35000UL;
+  if (requestedLeaseMs == 0) {
+    return fallbackLeaseMs;
+  }
+  if (requestedLeaseMs < 5000UL) {
+    return 5000UL;
+  }
+  if (requestedLeaseMs > 10UL * 60UL * 1000UL) {
+    return 10UL * 60UL * 1000UL;
+  }
+  return requestedLeaseMs;
+}
+
+void applyPrimaryLease(
+  DeviceState* state,
+  const String& controllerUserId,
+  const String& controllerClientId,
+  const String& sessionId,
+  unsigned long leaseDurationMs,
+  unsigned long heartbeatIntervalMs) {
+  state->primaryControllerUserId = controllerUserId;
+  state->primaryControllerClientId = controllerClientId;
+  state->primaryLeaseSessionId = sessionId;
+  state->primaryLeaseHeartbeatIntervalMs = heartbeatIntervalMs > 0 ? heartbeatIntervalMs : 10000UL;
+  state->primaryLeaseTimeoutMs = leaseDurationMs;
+  state->primaryLeaseExpiresAtMs = millis() + leaseDurationMs;
+  state->verifiedSessionUntilMs = millis() + leaseDurationMs;
+  state->lastHeartbeatAtMs = millis();
+}
+
+String buildPrimaryLeaseResponse(const String& command, const String& requestId, const DeviceState& state) {
+  return "{"
+         "\"ok\":true,"
+         "\"command\":\"" + escapeJson(command) + "\","
+         "\"requestId\":\"" + escapeJson(requestId) + "\","
+         "\"primaryControllerUserId\":\"" + escapeJson(state.primaryControllerUserId) + "\","
+         "\"primaryControllerClientId\":\"" + escapeJson(state.primaryControllerClientId) + "\","
+         "\"primaryLeaseSessionId\":\"" + escapeJson(state.primaryLeaseSessionId) + "\","
+         "\"primaryLeaseExpiresAtMs\":" + String(state.primaryLeaseExpiresAtMs) + ","
+         "\"primaryLeaseHeartbeatIntervalMs\":" + String(state.primaryLeaseHeartbeatIntervalMs) + ","
+         "\"primaryLeaseTimeoutMs\":" + String(state.primaryLeaseTimeoutMs) + ","
+         "\"sessionRole\":\"primary\","
+         "\"leaseActive\":" + String(hasActivePrimaryLease(state) ? "true" : "false") +
+         "}";
+}
+
+String handlePrimaryClaim(
+  const String& payload,
+  const String& requestId,
+  DeviceState* state,
+  Preferences& preferences,
+  const BleRecoveryConfig& config) {
+  if (state->enrollmentState != "enrolled") {
+    return buildErrorResponse(state, "primary.claim", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before claiming primary control.");
+  }
+
+  if (!hasVerifiedSession(*state, "connect")) {
+    return buildErrorResponse(state, "primary.claim", requestId, "AUTH_REQUIRED", "Verify the BLE action ticket before claiming primary control.");
+  }
+
+  const String controllerUserId = getJsonString(payload, "controllerUserId");
+  const String controllerClientId = getJsonString(payload, "controllerClientId");
+  String sessionId = getJsonString(payload, "sessionId");
+  const unsigned long requestedLeaseMs = static_cast<unsigned long>(getJsonInt64(payload, "leaseDurationMs", 0));
+  const unsigned long requestedHeartbeatMs = static_cast<unsigned long>(getJsonInt64(payload, "heartbeatIntervalMs", 0));
+
+  if (sessionId.isEmpty()) {
+    sessionId = generatePrimaryLeaseSessionId();
+  }
+
+  if (hasActivePrimaryLease(*state) && state->primaryLeaseSessionId != sessionId) {
+    return buildErrorResponse(state, "primary.claim", requestId, "PRIMARY_LEASE_ACTIVE", "Another phone currently holds BLE primary control.");
+  }
+
+  const unsigned long leaseDurationMs = resolveLeaseDurationMs(*state, requestedLeaseMs);
+  const unsigned long heartbeatIntervalMs = requestedHeartbeatMs > 0 ? requestedHeartbeatMs : state->primaryLeaseHeartbeatIntervalMs;
+
+  applyPrimaryLease(state, controllerUserId, controllerClientId, sessionId, leaseDurationMs, heartbeatIntervalMs);
+  saveDeviceState(preferences, *state);
+
+  return buildPrimaryLeaseResponse("primary.claim", requestId, *state);
+}
+
+String handlePrimaryHeartbeat(
+  const String& payload,
+  const String& requestId,
+  DeviceState* state,
+  Preferences& preferences,
+  const BleRecoveryConfig& config) {
+  if (state->enrollmentState != "enrolled") {
+    return buildErrorResponse(state, "primary.heartbeat", requestId, "DEVICE_NOT_ENROLLED", "Device must be enrolled before renewing primary control.");
+  }
+
+  if (!hasVerifiedSession(*state, "connect")) {
+    return buildErrorResponse(state, "primary.heartbeat", requestId, "AUTH_REQUIRED", "Verify the BLE action ticket before renewing primary control.");
+  }
+
+  const String sessionId = getJsonString(payload, "sessionId");
+  if (sessionId.isEmpty()) {
+    return buildErrorResponse(state, "primary.heartbeat", requestId, "PRIMARY_SESSION_REQUIRED", "A primary session id is required for heartbeat renewal.");
+  }
+
+  if (!hasActivePrimaryLease(*state)) {
+    return buildErrorResponse(state, "primary.heartbeat", requestId, "PRIMARY_LEASE_EXPIRED", "No active primary lease exists to renew.");
+  }
+
+  if (state->primaryLeaseSessionId != sessionId) {
+    return buildErrorResponse(state, "primary.heartbeat", requestId, "PRIMARY_SESSION_MISMATCH", "The heartbeat session does not match the active primary controller.");
+  }
+
+  const unsigned long requestedLeaseMs = static_cast<unsigned long>(getJsonInt64(payload, "leaseDurationMs", 0));
+  const unsigned long requestedHeartbeatMs = static_cast<unsigned long>(getJsonInt64(payload, "heartbeatIntervalMs", 0));
+  const unsigned long leaseDurationMs = resolveLeaseDurationMs(*state, requestedLeaseMs);
+  state->primaryLeaseTimeoutMs = leaseDurationMs;
+  state->primaryLeaseHeartbeatIntervalMs = requestedHeartbeatMs > 0 ? requestedHeartbeatMs : state->primaryLeaseHeartbeatIntervalMs;
+  state->primaryLeaseExpiresAtMs = millis() + leaseDurationMs;
+  state->verifiedSessionUntilMs = millis() + config.verifiedSessionWindowMs;
+  state->lastHeartbeatAtMs = millis();
+  saveDeviceState(preferences, *state);
+
+  return buildPrimaryLeaseResponse("primary.heartbeat", requestId, *state);
+}
+
+String handlePrimaryStatus(
+  const String& payload,
+  const String& requestId,
+  const DeviceState& state) {
+  const String sessionId = getJsonString(payload, "sessionId");
+  return "{"
+         "\"ok\":true,"
+         "\"command\":\"primary.status\","
+         "\"requestId\":\"" + escapeJson(requestId) + "\","
+         "\"leaseActive\":" + String(hasActivePrimaryLease(state) ? "true" : "false") + ","
+         "\"sessionRole\":\"" + buildPrimarySessionRole(state, sessionId) + "\","
+         "\"primaryControllerUserId\":\"" + escapeJson(state.primaryControllerUserId) + "\","
+         "\"primaryControllerClientId\":\"" + escapeJson(state.primaryControllerClientId) + "\","
+         "\"primaryLeaseSessionId\":\"" + escapeJson(state.primaryLeaseSessionId) + "\","
+         "\"primaryLeaseExpiresAtMs\":" + String(state.primaryLeaseExpiresAtMs) + ","
+         "\"primaryLeaseHeartbeatIntervalMs\":" + String(state.primaryLeaseHeartbeatIntervalMs) + ","
+         "\"primaryLeaseTimeoutMs\":" + String(state.primaryLeaseTimeoutMs) + ","
+         "\"accessMode\":\"" + (hasActivePrimaryLease(state) ? String("primary") : String("none")) + "\""
+         "}";
+}
+
+String handleSharedAccessRequest(
+  const String& requestId,
+  DeviceState* state,
+  WebServer& webServer,
+  const BleRecoveryConfig& config) {
+  if (!hasVerifiedSession(*state, "connect")) {
+    return buildErrorResponse(state, "shared.access.request", requestId, "AUTH_REQUIRED", "Verify the BLE action ticket before requesting shared access.");
+  }
+
+  if (!hasActivePrimaryLease(*state)) {
+    return buildErrorResponse(state, "shared.access.request", requestId, "PRIMARY_LEASE_REQUIRED", "Shared SoftAP access is only available while a primary controller is active.");
+  }
+
+  if (!ensureSoftApStarted(webServer, state, config.firmwareVersion)) {
+    return buildErrorResponse(state, "shared.access.request", requestId, "SOFTAP_START_FAILED", "ESP32 could not start its Wi-Fi access point.");
+  }
+
+  state->wifiTicketExpiryMs = millis() + 60000UL;
+
+  return "{"
+         "\"ok\":true,"
+         "\"command\":\"shared.access.request\","
+         "\"requestId\":\"" + escapeJson(requestId) + "\","
+         "\"ssid\":\"" + escapeJson(state->wifiSsid) + "\","
+         "\"password\":\"" + escapeJson(state->wifiPassword) + "\","
+         "\"testUrl\":\"http://192.168.4.1/api/v1/connection-test\","
+         "\"expiresInMs\":60000,"
+         "\"primaryLeaseSessionId\":\"" + escapeJson(state->primaryLeaseSessionId) + "\","
+         "\"sessionRole\":\"secondary\""
+         "}";
+}
+
 String handleEnrollBegin(
   const String& payload,
   const String& requestId,
@@ -755,6 +954,18 @@ String dispatchCommand(
   }
   if (hasCommand(payload, "grant.verify")) {
     return handleGrantVerify(payload, requestId, state, preferences, config);
+  }
+  if (hasCommand(payload, "primary.claim")) {
+    return handlePrimaryClaim(payload, requestId, state, preferences, config);
+  }
+  if (hasCommand(payload, "primary.heartbeat")) {
+    return handlePrimaryHeartbeat(payload, requestId, state, preferences, config);
+  }
+  if (hasCommand(payload, "primary.status")) {
+    return handlePrimaryStatus(payload, requestId, *state);
+  }
+  if (hasCommand(payload, "shared.access.request")) {
+    return handleSharedAccessRequest(requestId, state, webServer, config);
   }
   if (hasCommand(payload, "wifi.ticket.request")) {
     return handleWifiTicketRequest(requestId, state, webServer, config);

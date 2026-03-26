@@ -31,7 +31,13 @@ struct DeviceState {
   String facilityWifiPassword;
   String lastVerifiedPermission;
   String runtimePhase = "idle";
+  String primaryControllerUserId;
+  String primaryControllerClientId;
+  String primaryLeaseSessionId;
   uint32_t grantVersion = 0;
+  unsigned long primaryLeaseExpiresAtMs = 0;
+  unsigned long primaryLeaseHeartbeatIntervalMs = 10000UL;
+  unsigned long primaryLeaseTimeoutMs = 35000UL;
   unsigned long verifiedSessionUntilMs = 0;
   unsigned long wifiTicketExpiryMs = 0;
   unsigned long lastHeartbeatAtMs = 0;
@@ -59,6 +65,7 @@ String buildAdvertisementPayload(const DeviceState& state, uint8_t protocolVersi
 void loadDeviceState(Preferences& preferences, const char* preferencesNamespace, DeviceState* state);
 void saveDeviceState(Preferences& preferences, const DeviceState& state);
 void clearEnrollmentState(DeviceState* state);
+void clearPrimaryLeaseState(DeviceState* state);
 void prepareNewEnrollment(DeviceState* state);
 
 }  // namespace coldguard

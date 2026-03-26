@@ -170,6 +170,12 @@ void loadDeviceState(Preferences& preferences, const char* preferencesNamespace,
   state->deviceNickname = preferences.getString("nickname", "");
   state->handshakeToken = preferences.getString("handshake", "");
   state->lastErrorCode = preferences.getString("last_error", "");
+  state->primaryControllerUserId = preferences.getString("primary_user", "");
+  state->primaryControllerClientId = preferences.getString("primary_client", "");
+  state->primaryLeaseSessionId = preferences.getString("primary_session", "");
+  state->primaryLeaseExpiresAtMs = preferences.getULong("primary_lease_expires", 0);
+  state->primaryLeaseHeartbeatIntervalMs = preferences.getULong("primary_lease_heartbeat", 10000UL);
+  state->primaryLeaseTimeoutMs = preferences.getULong("primary_lease_timeout", 35000UL);
   state->grantVersion = preferences.getUInt("grantVer", 0);
 }
 
@@ -185,6 +191,12 @@ void saveDeviceState(Preferences& preferences, const DeviceState& state) {
   preferences.putString("nickname", state.deviceNickname);
   preferences.putString("handshake", state.handshakeToken);
   preferences.putString("last_error", state.lastErrorCode);
+  preferences.putString("primary_user", state.primaryControllerUserId);
+  preferences.putString("primary_client", state.primaryControllerClientId);
+  preferences.putString("primary_session", state.primaryLeaseSessionId);
+  preferences.putULong("primary_lease_expires", state.primaryLeaseExpiresAtMs);
+  preferences.putULong("primary_lease_heartbeat", state.primaryLeaseHeartbeatIntervalMs);
+  preferences.putULong("primary_lease_timeout", state.primaryLeaseTimeoutMs);
   preferences.putUInt("grantVer", state.grantVersion);
 }
 
@@ -198,6 +210,7 @@ void clearEnrollmentState(DeviceState* state) {
   state->pendingEnrollment = PendingEnrollment{};
   state->verifiedSessionUntilMs = 0;
   state->wifiTicketExpiryMs = 0;
+  clearPrimaryLeaseState(state);
   state->lastHeartbeatAtMs = 0;
   state->lastStationConnectAttemptMs = 0;
   state->lastVerifiedPermission = "";
@@ -206,6 +219,15 @@ void clearEnrollmentState(DeviceState* state) {
   state->facilityWifiPassword = "";
   state->runtimeServerStarted = false;
   state->stationConnected = false;
+}
+
+void clearPrimaryLeaseState(DeviceState* state) {
+  state->primaryControllerUserId = "";
+  state->primaryControllerClientId = "";
+  state->primaryLeaseSessionId = "";
+  state->primaryLeaseExpiresAtMs = 0;
+  state->primaryLeaseHeartbeatIntervalMs = 10000UL;
+  state->primaryLeaseTimeoutMs = 35000UL;
 }
 
 void prepareNewEnrollment(DeviceState* state) {

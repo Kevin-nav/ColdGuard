@@ -81,9 +81,9 @@ function formatAccessLabel(accessRole: DeviceRecord["accessRole"]) {
     case "manager":
       return "Supervisor access";
     case "primary":
-      return "Primary nurse";
+      return "Lead nurse";
     default:
-      return "Viewer nurse";
+      return "Shared-access nurse";
   }
 }
 
@@ -806,19 +806,26 @@ export default function DeviceDetailsScreen() {
         </PanelCard>
       </DashboardSection>
 
-      <DashboardSection title="Assignment" eyebrow="Accountability" description="Primary responsibility and additional viewers for this unit.">
+      <DashboardSection
+        title="Authorized Access"
+        eyebrow="Accountability"
+        description="Lead accountability and shared-access staff for this unit. BLE-primary control is claimed automatically by the nearest authorized phone."
+      >
         <PanelCard>
           <View style={localStyles.metricsGrid}>
-            <MetricRow iconName="person-outline" label="Primary nurse" value={activeDevice.primaryAssigneeName ?? "Not assigned"} />
+            <MetricRow iconName="person-outline" label="Lead nurse" value={activeDevice.primaryAssigneeName ?? "Not assigned"} />
             <MetricRow
               iconName="people-outline"
-              label="Additional viewers"
+              label="Shared-access nurses"
               value={activeDevice.viewerNames.length ? activeDevice.viewerNames.join(", ") : "None"}
             />
           </View>
+          <Text style={styles.helperText}>
+            These assignments control who is authorized to work with this device offline. They do not pin the BLE-primary controller to one phone.
+          </Text>
           {profile.role === "Supervisor" ? (
             <View style={localStyles.assignmentStack}>
-              <Text style={styles.eyebrowText}>Choose primary nurse</Text>
+              <Text style={styles.eyebrowText}>Choose lead nurse</Text>
               <View style={localStyles.assignmentButtons}>
                 {assignableNurses.map((nurse) => (
                   <Pressable
@@ -843,7 +850,7 @@ export default function DeviceDetailsScreen() {
                   </Pressable>
                 ))}
               </View>
-              <Text style={styles.eyebrowText}>Add viewer nurses</Text>
+              <Text style={styles.eyebrowText}>Add shared-access nurses</Text>
               <View style={localStyles.assignmentButtons}>
                 {assignableNurses.map((nurse) => {
                   const selected = viewerStaffIds.includes(nurse.staffId);
@@ -879,7 +886,7 @@ export default function DeviceDetailsScreen() {
                 ]}
               >
                 <Text style={styles.secondaryButtonText}>
-                  {isSavingAssignments ? "Saving..." : "Save assignments"}
+                  {isSavingAssignments ? "Saving..." : "Save authorized staff"}
                 </Text>
               </Pressable>
             </View>

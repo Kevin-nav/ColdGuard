@@ -185,8 +185,13 @@ test("shows supervisor assignment controls", async () => {
   const ui = render(<DeviceDetailsScreen />);
 
   await waitFor(() => expect(ui.getAllByText("Akosua Mensah").length).toBeGreaterThan(0));
-  expect(ui.getByText("Choose primary nurse")).toBeTruthy();
-  expect(ui.getByText("Save assignments")).toBeTruthy();
+  expect(ui.getByText("Choose lead nurse")).toBeTruthy();
+  expect(ui.getByText("Save authorized staff")).toBeTruthy();
+  expect(
+    ui.getByText(
+      "These assignments control who is authorized to work with this device offline. They do not pin the BLE-primary controller to one phone.",
+    ),
+  ).toBeTruthy();
   expect(mockConnectOrRecoverDevice).not.toHaveBeenCalled();
 });
 

@@ -73,12 +73,18 @@ export type ColdGuardWifiBridgeModuleEvents = {
 };
 
 export type ColdGuardMonitoringTransport = "ble_fallback" | "facility_wifi" | "softap";
+export type ColdGuardMonitoringControlRole = "none" | "primary" | "secondary" | "blocked";
 
 export type ColdGuardMonitoringServiceOptions = {
+  controllerClientId?: string | null;
+  controllerUserId?: string | null;
   connectActionTicketJson?: string | null;
   deviceId: string;
   facilityWifiRuntimeBaseUrl?: string | null;
   handshakeToken?: string | null;
+  leaseDurationMs?: number | null;
+  primaryLeaseSessionId?: string | null;
+  heartbeatIntervalMs?: number | null;
   softApPassword?: string | null;
   softApRuntimeBaseUrl?: string | null;
   softApSsid?: string | null;
@@ -86,9 +92,13 @@ export type ColdGuardMonitoringServiceOptions = {
 };
 
 export type ColdGuardMonitoringDeviceStatus = {
+  controlRole?: ColdGuardMonitoringControlRole | null;
   deviceId: string;
   error: string | null;
   isRunning: boolean;
+  primaryControllerUserId?: string | null;
+  primaryLeaseExpiresAt?: number | null;
+  primaryLeaseSessionId?: string | null;
   transport: ColdGuardMonitoringTransport | null;
 };
 

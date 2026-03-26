@@ -39,41 +39,18 @@ data class ColdGuardBleWifiTicket(
   val ssid: String,
 )
 
+data class ColdGuardBlePrimaryLeaseStatus(
+  val controlRole: String,
+  val primaryControllerUserId: String?,
+  val primaryLeaseExpiresAt: Long?,
+  val primaryLeaseHeartbeatIntervalMs: Long?,
+  val primaryLeaseSessionId: String?,
+)
+
 class ColdGuardBleRecoveryController(private val context: Context) {
   suspend fun requestWifiTicket(options: MonitoringOptions): ColdGuardBleWifiTicket = withContext(Dispatchers.IO) {
-    ensureBlePermissions()
-    val handshakeToken = options.handshakeToken?.takeIf { it.isNotBlank() }
-      ?: throw IllegalStateException("BLE_RECOVERY_HANDSHAKE_TOKEN_MISSING")
-    val actionTicketJson = options.connectActionTicketJson?.takeIf { it.isNotBlank() }
-      ?: throw IllegalStateException("BLE_RECOVERY_CONNECT_TICKET_MISSING")
-    val actionTicket = try {
-      JSONObject(actionTicketJson)
-    } catch (_: Exception) {
-      throw IllegalStateException("BLE_RECOVERY_CONNECT_TICKET_INVALID")
-    }
-
-    val device = scanForDevice(options.deviceId)
-    val session = connect(device)
+    val session = openAuthorizedSession(options)
     try {
-      val hello = session.hello(options.deviceId)
-      val proofTimestamp = createProofTimestamp(hello)
-      val handshakeProof = createHandshakeProof(
-        deviceId = options.deviceId,
-        deviceNonce = hello.deviceNonce,
-        handshakeToken = handshakeToken,
-        proofTimestamp = proofTimestamp,
-      )
-
-      session.sendCommand(
-        command = "grant.verify",
-        body = JSONObject().apply {
-          put("actionTicket", actionTicket)
-          put("deviceId", options.deviceId)
-          put("handshakeProof", handshakeProof)
-          put("proofTimestamp", proofTimestamp)
-        },
-      )
-
       val response = session.sendCommand(
         command = "wifi.ticket.request",
         body = JSONObject(),
@@ -638,5 +615,105 @@ class ColdGuardBleRecoveryController(private val context: Context) {
         handleCharacteristicChanged(value)
       }
     }
+  }
+
+  suspend fun claimPrimaryLease(options: MonitoringOptions): ColdGuardBlePrimaryLeaseStatus = withContext(Dispatchers.IO) {
+    val session = openAuthorizedSession(options)
+    try {
+      val response = session.sendCommand(
+        command = "primary.claim",
+        body = JSONObject().apply {
+          put("controllerClientId", options.controllerClientId)
+          put("controllerUserId", options.controllerUserId)
+          put("heartbeatIntervalMs", options.heartbeatIntervalMs)
+          put("leaseDurationMs", options.leaseDurationMs)
+          options.primaryLeaseSessionId?.takeIf { it.isNotBlank() }?.let { put("sessionId", it) }
+        },
+      )
+      return@withContext parsePrimaryLeaseStatus(response)
+    } finally {
+      session.close()
+    }
+  }
+
+  suspend fun heartbeatPrimaryLease(options: MonitoringOptions): ColdGuardBlePrimaryLeaseStatus = withContext(Dispatchers.IO) {
+    val session = openAuthorizedSession(options)
+    try {
+      val sessionId = options.primaryLeaseSessionId?.takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("PRIMARY_LEASE_SESSION_ID_REQUIRED")
+      val response = session.sendCommand(
+        command = "primary.heartbeat",
+        body = JSONObject().apply {
+          put("heartbeatIntervalMs", options.heartbeatIntervalMs)
+          put("leaseDurationMs", options.leaseDurationMs)
+          put("sessionId", sessionId)
+        },
+      )
+      return@withContext parsePrimaryLeaseStatus(response)
+    } finally {
+      session.close()
+    }
+  }
+
+  suspend fun fetchPrimaryStatus(options: MonitoringOptions): ColdGuardBlePrimaryLeaseStatus = withContext(Dispatchers.IO) {
+    val session = openAuthorizedSession(options)
+    try {
+      val response = session.sendCommand(
+        command = "primary.status",
+        body = JSONObject().apply {
+          options.primaryLeaseSessionId?.takeIf { it.isNotBlank() }?.let { put("sessionId", it) }
+        },
+      )
+      return@withContext parsePrimaryLeaseStatus(response)
+    } finally {
+      session.close()
+    }
+  }
+
+  private suspend fun openAuthorizedSession(options: MonitoringOptions): ColdGuardBleGattSession {
+    ensureBlePermissions()
+    val handshakeToken = options.handshakeToken?.takeIf { it.isNotBlank() }
+      ?: throw IllegalStateException("BLE_RECOVERY_HANDSHAKE_TOKEN_MISSING")
+    val actionTicketJson = options.connectActionTicketJson?.takeIf { it.isNotBlank() }
+      ?: throw IllegalStateException("BLE_RECOVERY_CONNECT_TICKET_MISSING")
+    val actionTicket = try {
+      JSONObject(actionTicketJson)
+    } catch (_: Exception) {
+      throw IllegalStateException("BLE_RECOVERY_CONNECT_TICKET_INVALID")
+    }
+
+    val device = scanForDevice(options.deviceId)
+    val session = connect(device)
+    val hello = session.hello(options.deviceId)
+    val proofTimestamp = createProofTimestamp(hello)
+    val handshakeProof = createHandshakeProof(
+      deviceId = options.deviceId,
+      deviceNonce = hello.deviceNonce,
+      handshakeToken = handshakeToken,
+      proofTimestamp = proofTimestamp,
+    )
+
+    session.sendCommand(
+      command = "grant.verify",
+      body = JSONObject().apply {
+        put("actionTicket", actionTicket)
+        put("deviceId", options.deviceId)
+        put("handshakeProof", handshakeProof)
+        put("proofTimestamp", proofTimestamp)
+      },
+    )
+
+    return session
+  }
+
+  private fun parsePrimaryLeaseStatus(response: JSONObject): ColdGuardBlePrimaryLeaseStatus {
+    val role = response.optString("sessionRole", "none").takeIf { it.isNotBlank() } ?: "none"
+    return ColdGuardBlePrimaryLeaseStatus(
+      controlRole = role,
+      primaryControllerUserId = response.optString("primaryControllerUserId").takeIf { it.isNotBlank() },
+      primaryLeaseExpiresAt = response.takeIf { it.has("primaryLeaseExpiresAtMs") }?.optLong("primaryLeaseExpiresAtMs"),
+      primaryLeaseHeartbeatIntervalMs = response.takeIf { it.has("primaryLeaseHeartbeatIntervalMs") }?.optLong("primaryLeaseHeartbeatIntervalMs"),
+      primaryLeaseSessionId = response.optString("primaryLeaseSessionId").takeIf { it.isNotBlank() },
+    )
   }
 }

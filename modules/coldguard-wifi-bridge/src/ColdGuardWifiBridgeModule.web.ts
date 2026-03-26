@@ -37,9 +37,13 @@ function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract
     },
     async stopMonitoringDeviceAsync(deviceId: string) {
       const status: ColdGuardMonitoringDeviceStatus = {
+        controlRole: null,
         deviceId,
         error: null,
         isRunning: false,
+        primaryControllerUserId: null,
+        primaryLeaseExpiresAt: null,
+        primaryLeaseSessionId: null,
         transport: null,
       };
       const statuses: ColdGuardMonitoringStatusMap = {

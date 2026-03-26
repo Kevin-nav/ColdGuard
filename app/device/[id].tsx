@@ -144,6 +144,17 @@ function formatRuntimeAccessModeLabel(
   }
 }
 
+function formatControlRoleLabel(controlRole: DeviceRuntimeConfig["controlRole"] | undefined) {
+  switch (controlRole) {
+    case "primary":
+      return "Primary Bluetooth controller";
+    case "secondary":
+      return "Shared-access only";
+    default:
+      return "Unclaimed";
+  }
+}
+
 export default function DeviceDetailsScreen() {
   const { claim, id, v } = useLocalSearchParams<{ claim?: string; id: string; v?: string }>();
   const { colors } = useTheme();
@@ -206,7 +217,7 @@ export default function DeviceDetailsScreen() {
       } catch (nextError) {
         if (!isMounted) return;
         setAssignableNurses([]);
-          setActionFeedback(presentDeviceError(nextError, "Assignment options could not be loaded."));
+        setActionFeedback(presentDeviceError(nextError, "Assignment options could not be loaded."));
       }
     }
 
@@ -222,12 +233,13 @@ export default function DeviceDetailsScreen() {
     const deviceId = device?.id;
 
     async function loadRuntimeSession() {
-      if (!deviceId) {
+      if (typeof deviceId !== "string") {
         if (isMounted) setRuntimeSession(null);
         return;
       }
+      const activeDeviceId = deviceId;
 
-      const nextSession = await getDeviceRuntimeSession(deviceId);
+      const nextSession = await getDeviceRuntimeSession(activeDeviceId);
       if (!isMounted) return;
 
       setRuntimeSession(nextSession);
@@ -248,31 +260,32 @@ export default function DeviceDetailsScreen() {
 
   useEffect(() => {
     const deviceId = device?.id;
-    if (!deviceId) {
+    if (typeof deviceId !== "string") {
       setHasBootstrappedMonitoring(null);
       return;
     }
+    const activeDeviceId = deviceId;
 
     let isActive = true;
 
     async function bootstrapMonitoringIfNeeded() {
-      const latestSession = await getDeviceRuntimeSession(deviceId);
+      const latestSession = await getDeviceRuntimeSession(activeDeviceId);
       if (!isActive) {
         return;
       }
 
       setRuntimeSession(latestSession);
       if (
-        hasBootstrappedMonitoring === deviceId ||
+        hasBootstrappedMonitoring === activeDeviceId ||
         latestSession?.monitoringMode === "foreground_service"
       ) {
         return;
       }
 
-      setHasBootstrappedMonitoring(deviceId);
+      setHasBootstrappedMonitoring(activeDeviceId);
 
       try {
-        const nextSession = await bootstrapDefaultDeviceMonitoring(deviceId);
+        const nextSession = await bootstrapDefaultDeviceMonitoring(activeDeviceId);
         if (!isActive) {
           return;
         }
@@ -282,7 +295,7 @@ export default function DeviceDetailsScreen() {
         if (!isActive) {
           return;
         }
-        setRuntimeSession(await getDeviceRuntimeSession(deviceId));
+        setRuntimeSession(await getDeviceRuntimeSession(activeDeviceId));
         setActionFeedback((current) =>
           current ?? presentDeviceError(nextError, "Background monitoring could not be started."),
         );
@@ -298,14 +311,15 @@ export default function DeviceDetailsScreen() {
 
   useEffect(() => {
     const deviceId = device?.id;
-    if (!deviceId) {
+    if (typeof deviceId !== "string") {
       return;
     }
+    const activeDeviceId = deviceId;
 
     let isActive = true;
 
     async function refreshRuntimeSession() {
-      const nextSession = await getDeviceRuntimeSession(deviceId);
+      const nextSession = await getDeviceRuntimeSession(activeDeviceId);
       if (!isActive) {
         return;
       }
@@ -636,6 +650,11 @@ export default function DeviceDetailsScreen() {
               value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
             />
             <MetricRow
+              iconName="bluetooth-outline"
+              label="Control role"
+              value={formatControlRoleLabel(runtimeSession?.controlRole)}
+            />
+            <MetricRow
               iconName="git-network-outline"
               label="Access mode"
               value={formatRuntimeAccessModeLabel(lastRuntimeSnapshot?.accessMode)}
@@ -644,6 +663,21 @@ export default function DeviceDetailsScreen() {
           <Text style={styles.helperText}>
             Bluetooth is the primary control path. SoftAP is temporary shared access for short-lived secondary users and should be released when that work is finished.
           </Text>
+          {runtimeSession?.controlRole === "primary" ? (
+            <Text style={styles.helperText}>
+              This phone currently holds the BLE-primary lease and will keep primary control while it remains nearby.
+            </Text>
+          ) : null}
+          {runtimeSession?.controlRole === "secondary" ? (
+            <Text style={styles.helperText}>
+              Another authorized phone currently holds BLE-primary. This phone can only use temporary shared SoftAP access until the primary lease expires.
+            </Text>
+          ) : null}
+          {runtimeSession?.controlRole === "none" ? (
+            <Text style={styles.helperText}>
+              No active BLE-primary controller is recorded for this phone yet. Enable monitoring to let this phone claim control when available.
+            </Text>
+          ) : null}
           {lastRuntimeSnapshot?.accessMode === "temporary_shared_access" ? (
             <Text style={styles.helperText}>
               Temporary SoftAP access is active. Use this for short shared sessions, then leave the shared-access flow so the phone can release the connection.

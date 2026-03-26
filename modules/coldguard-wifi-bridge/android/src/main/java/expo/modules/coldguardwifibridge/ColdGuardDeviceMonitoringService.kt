@@ -93,9 +93,13 @@ class ColdGuardDeviceMonitoringService : Service() {
     }
     updateStatus(
       MonitoringStatus(
+        controlRole = null,
         deviceId = options.deviceId,
         error = null,
         isRunning = true,
+        primaryControllerUserId = options.controllerUserId,
+        primaryLeaseExpiresAt = null,
+        primaryLeaseSessionId = options.primaryLeaseSessionId,
         transport = options.transport,
       )
     )
@@ -192,39 +196,56 @@ class ColdGuardDeviceMonitoringService : Service() {
     }
 
     try {
-      val resolved = resolveRuntimePoll(currentOptions, revision)
+      val controller = bleRecoveryController ?: throw IllegalStateException("BLE_RECOVERY_UNAVAILABLE")
+      val leaseStatus =
+        if (currentOptions.primaryLeaseSessionId.isNullOrBlank()) {
+          controller.claimPrimaryLease(currentOptions)
+        } else {
+          try {
+            controller.heartbeatPrimaryLease(currentOptions)
+          } catch (error: Exception) {
+            if (error.message?.contains("PRIMARY_LEASE_EXPIRED") == true ||
+              error.message?.contains("PRIMARY_SESSION_MISMATCH") == true) {
+              val status = controller.fetchPrimaryStatus(currentOptions)
+              if (status.controlRole == "none") {
+                controller.claimPrimaryLease(currentOptions)
+              } else {
+                status
+              }
+            } else if (error.message?.contains("PRIMARY_LEASE_ACTIVE") == true) {
+              controller.fetchPrimaryStatus(currentOptions)
+            } else {
+              throw error
+            }
+          }
+        }
+
       if (!isCurrentRevision(currentOptions.deviceId, revision)) {
         return MonitoredPollResult(
           activeAlertCursors = activeAlertCursors.toMutableSet(),
           options = currentOptions,
         )
       }
-      val nextAlertCursors = notifyAlerts(currentOptions.deviceId, resolved.alerts, activeAlertCursors)
-      if (!isCurrentRevision(currentOptions.deviceId, revision)) {
-        return MonitoredPollResult(
-          activeAlertCursors = activeAlertCursors.toMutableSet(),
-          options = currentOptions,
-        )
-      }
-      postHeartbeat(resolved.runtimeBaseUrl, resolved.network)
-      if (!isCurrentRevision(currentOptions.deviceId, revision)) {
-        return MonitoredPollResult(
-          activeAlertCursors = activeAlertCursors.toMutableSet(),
-          options = currentOptions,
-        )
-      }
+
+      val nextOptions = currentOptions.copy(
+        primaryLeaseSessionId = leaseStatus.primaryLeaseSessionId ?: currentOptions.primaryLeaseSessionId,
+      )
       updateStatus(
         MonitoringStatus(
+          controlRole = leaseStatus.controlRole,
           deviceId = currentOptions.deviceId,
           error = null,
           isRunning = true,
-          transport = resolved.transport,
+          primaryControllerUserId = leaseStatus.primaryControllerUserId,
+          primaryLeaseExpiresAt = leaseStatus.primaryLeaseExpiresAt,
+          primaryLeaseSessionId = leaseStatus.primaryLeaseSessionId,
+          transport = currentOptions.transport,
         )
       )
       updateOngoingNotification()
       return MonitoredPollResult(
-        activeAlertCursors = nextAlertCursors,
-        options = resolved.nextOptions,
+        activeAlertCursors = activeAlertCursors.toMutableSet(),
+        options = nextOptions,
       )
     } catch (_: StalePollException) {
       return MonitoredPollResult(
@@ -240,9 +261,13 @@ class ColdGuardDeviceMonitoringService : Service() {
       }
       updateStatus(
         MonitoringStatus(
+          controlRole = null,
           deviceId = currentOptions.deviceId,
           error = error.message ?: "RUNTIME_MONITOR_FAILED",
           isRunning = true,
+          primaryControllerUserId = currentOptions.controllerUserId,
+          primaryLeaseExpiresAt = null,
+          primaryLeaseSessionId = currentOptions.primaryLeaseSessionId,
           transport = currentOptions.transport,
         )
       )
@@ -308,9 +333,13 @@ class ColdGuardDeviceMonitoringService : Service() {
     ensureCurrentRevision(currentOptions.deviceId, revision)
     updateStatus(
       MonitoringStatus(
+        controlRole = null,
         deviceId = currentOptions.deviceId,
         error = null,
         isRunning = true,
+        primaryControllerUserId = currentOptions.controllerUserId,
+        primaryLeaseExpiresAt = null,
+        primaryLeaseSessionId = currentOptions.primaryLeaseSessionId,
         transport = "ble_fallback",
       )
     )
@@ -565,10 +594,15 @@ class ColdGuardDeviceMonitoringService : Service() {
     fun startIntent(context: Context, options: MonitoringOptions): Intent {
       return Intent(context, ColdGuardDeviceMonitoringService::class.java).apply {
         action = ACTION_START
+        putExtra("controllerClientId", options.controllerClientId)
+        putExtra("controllerUserId", options.controllerUserId)
         putExtra("connectActionTicketJson", options.connectActionTicketJson)
         putExtra("deviceId", options.deviceId)
         putExtra("facilityWifiRuntimeBaseUrl", options.facilityWifiRuntimeBaseUrl)
         putExtra("handshakeToken", options.handshakeToken)
+        putExtra("heartbeatIntervalMs", options.heartbeatIntervalMs ?: 0L)
+        putExtra("leaseDurationMs", options.leaseDurationMs ?: 0L)
+        putExtra("primaryLeaseSessionId", options.primaryLeaseSessionId)
         putExtra("softApPassword", options.softApPassword)
         putExtra("softApRuntimeBaseUrl", options.softApRuntimeBaseUrl)
         putExtra("softApSsid", options.softApSsid)
@@ -591,9 +625,13 @@ class ColdGuardDeviceMonitoringService : Service() {
     fun markStarting(deviceId: String, transport: String): Map<String, MonitoringStatus> {
       updateStatus(
         MonitoringStatus(
+          controlRole = null,
           deviceId = deviceId,
           error = null,
           isRunning = true,
+          primaryControllerUserId = null,
+          primaryLeaseExpiresAt = null,
+          primaryLeaseSessionId = null,
           transport = transport,
         )
       )
@@ -608,9 +646,13 @@ class ColdGuardDeviceMonitoringService : Service() {
     fun markNotificationPermissionRequired(deviceId: String, transport: String): Map<String, MonitoringStatus> {
       updateStatus(
         MonitoringStatus(
+          controlRole = null,
           deviceId = deviceId,
           error = "POST_NOTIFICATIONS_PERMISSION_REQUIRED",
           isRunning = false,
+          primaryControllerUserId = null,
+          primaryLeaseExpiresAt = null,
+          primaryLeaseSessionId = null,
           transport = transport,
         )
       )
@@ -645,10 +687,15 @@ class ColdGuardDeviceMonitoringService : Service() {
 }
 
 data class MonitoringOptions(
+  val controllerClientId: String?,
+  val controllerUserId: String?,
   val connectActionTicketJson: String?,
   val deviceId: String,
   val facilityWifiRuntimeBaseUrl: String?,
   val handshakeToken: String?,
+  val heartbeatIntervalMs: Long?,
+  val leaseDurationMs: Long?,
+  val primaryLeaseSessionId: String?,
   val softApPassword: String?,
   val softApRuntimeBaseUrl: String?,
   val softApSsid: String?,
@@ -657,10 +704,15 @@ data class MonitoringOptions(
   companion object {
     fun fromIntent(intent: Intent): MonitoringOptions {
       return MonitoringOptions(
+        controllerClientId = intent.getStringExtra("controllerClientId"),
+        controllerUserId = intent.getStringExtra("controllerUserId"),
         connectActionTicketJson = intent.getStringExtra("connectActionTicketJson"),
         deviceId = intent.getStringExtra("deviceId") ?: throw IllegalStateException("MONITOR_DEVICE_ID_REQUIRED"),
         facilityWifiRuntimeBaseUrl = intent.getStringExtra("facilityWifiRuntimeBaseUrl"),
         handshakeToken = intent.getStringExtra("handshakeToken"),
+        heartbeatIntervalMs = intent.getLongExtra("heartbeatIntervalMs", 0L).takeIf { it > 0L },
+        leaseDurationMs = intent.getLongExtra("leaseDurationMs", 0L).takeIf { it > 0L },
+        primaryLeaseSessionId = intent.getStringExtra("primaryLeaseSessionId"),
         softApPassword = intent.getStringExtra("softApPassword"),
         softApRuntimeBaseUrl = intent.getStringExtra("softApRuntimeBaseUrl"),
         softApSsid = intent.getStringExtra("softApSsid"),
@@ -671,9 +723,13 @@ data class MonitoringOptions(
 }
 
 data class MonitoringStatus(
+  val controlRole: String?,
   val deviceId: String,
   val error: String?,
   val isRunning: Boolean,
+  val primaryControllerUserId: String?,
+  val primaryLeaseExpiresAt: Long?,
+  val primaryLeaseSessionId: String?,
   val transport: String?,
 )
 

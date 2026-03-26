@@ -12,6 +12,10 @@ export type ColdGuardBleCommand =
   | "enroll.commit"
   | "grant.verify"
   | "hello"
+  | "primary.claim"
+  | "primary.heartbeat"
+  | "primary.status"
+  | "shared.access.request"
   | "wifi.provision"
   | "wifi.ticket.request";
 

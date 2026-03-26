@@ -24,6 +24,8 @@ const mockSetSyncJobStatus = jest.fn();
 const mockUpdateDeviceConnectionSyncState = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
 const mockGetClinicHandshakeToken = jest.fn();
+const mockGetOrCreateMonitoringClientId = jest.fn();
+const mockGetProfileSnapshot = jest.fn();
 const mockGetNativeMonitoringServiceStatuses = jest.fn();
 const mockEnsureDeviceActionTicket = jest.fn();
 const mockEnsureSupervisorActionTicket = jest.fn();
@@ -74,6 +76,11 @@ jest.mock("../../../lib/storage/sqlite/sync-job-repository", () => ({
 
 jest.mock("../../../lib/storage/secure-store", () => ({
   getClinicHandshakeToken: () => mockGetClinicHandshakeToken(),
+  getOrCreateMonitoringClientId: () => mockGetOrCreateMonitoringClientId(),
+}));
+
+jest.mock("../../../lib/storage/sqlite/profile-repository", () => ({
+  getProfileSnapshot: () => mockGetProfileSnapshot(),
 }));
 
 jest.mock("../../notifications/services/local-notifications", () => ({
@@ -106,6 +113,17 @@ beforeEach(() => {
   jest.restoreAllMocks();
   resetMockHardwareRegistry();
   mockGetClinicHandshakeToken.mockResolvedValue("handshake-token");
+  mockGetOrCreateMonitoringClientId.mockResolvedValue("client-device-1");
+  mockGetProfileSnapshot.mockResolvedValue({
+    displayName: "Yaw Boateng",
+    email: "yaw@example.com",
+    firebaseUid: "firebase-u1",
+    institutionId: "institution-1",
+    institutionName: "Korle-Bu",
+    lastUpdatedAt: 1,
+    role: "Supervisor",
+    staffId: "KB1001",
+  });
   mockGetLocalNotificationPermissionStatus.mockResolvedValue("granted");
   mockRequestLocalNotificationPermission.mockResolvedValue("granted");
   mockEnsureSupervisorActionTicket.mockImplementation(async (_profile: unknown, deviceId: string, action: string) => ({
@@ -174,9 +192,13 @@ beforeEach(() => {
   });
   mockStartNativeMonitoringDevice.mockResolvedValue({
     "CG-ESP32-A100": {
+      controlRole: "primary",
       deviceId: "CG-ESP32-A100",
       error: null,
       isRunning: true,
+      primaryControllerUserId: "firebase-u1",
+      primaryLeaseExpiresAt: Date.now() + 35_000,
+      primaryLeaseSessionId: "lease-CG-ESP32-A100",
       transport: "softap",
     },
   });
@@ -185,20 +207,24 @@ beforeEach(() => {
   mockUpsertDeviceRuntimeConfig.mockImplementation(async (deviceId: string, patch: Record<string, unknown>) => ({
     activeRuntimeBaseUrl: patch.activeRuntimeBaseUrl ?? null,
     activeTransport: patch.activeTransport ?? null,
+    controlRole: patch.controlRole ?? "none",
     deviceId,
     facilityWifiPassword: patch.facilityWifiPassword ?? null,
     facilityWifiRuntimeBaseUrl: patch.facilityWifiRuntimeBaseUrl ?? null,
     facilityWifiSsid: patch.facilityWifiSsid ?? null,
-    softApPassword: patch.softApPassword ?? null,
-    softApRuntimeBaseUrl: patch.softApRuntimeBaseUrl ?? null,
-    softApSsid: patch.softApSsid ?? null,
     lastMonitorAt: patch.lastMonitorAt ?? null,
     lastMonitorError: patch.lastMonitorError ?? null,
     lastPingAt: patch.lastPingAt ?? null,
     lastRecoverAt: patch.lastRecoverAt ?? null,
     lastRuntimeError: patch.lastRuntimeError ?? null,
     monitoringMode: patch.monitoringMode ?? "off",
+    primaryControllerUserId: patch.primaryControllerUserId ?? null,
+    primaryLeaseExpiresAt: patch.primaryLeaseExpiresAt ?? null,
+    primaryLeaseSessionId: patch.primaryLeaseSessionId ?? null,
     sessionStatus: patch.sessionStatus ?? "idle",
+    softApPassword: patch.softApPassword ?? null,
+    softApRuntimeBaseUrl: patch.softApRuntimeBaseUrl ?? null,
+    softApSsid: patch.softApSsid ?? null,
     updatedAt: Date.now(),
   }));
   mockFetch.mockResolvedValue({
@@ -418,16 +444,22 @@ test("starts native monitoring with facility and softap recovery context", async
   expect(mockGetLocalNotificationPermissionStatus).toHaveBeenCalled();
   expect(mockRequestLocalNotificationPermission).not.toHaveBeenCalled();
   expect(mockEnsureDeviceActionTicket).toHaveBeenCalledWith("CG-ESP32-A100", "connect");
-  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith({
-    connectActionTicketJson: expect.stringContaining("\"ticketId\":\"device-ticket-CG-ESP32-A100\""),
-    deviceId: "CG-ESP32-A100",
-    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
-    handshakeToken: "handshake-token",
-    softApPassword: "A100-wifi",
-    softApRuntimeBaseUrl: "http://192.168.4.1",
-    softApSsid: "ColdGuard_A100",
-    transport: "softap",
-  });
+  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      connectActionTicketJson: expect.stringContaining("\"ticketId\":\"device-ticket-CG-ESP32-A100\""),
+      controllerClientId: "client-device-1",
+      controllerUserId: "firebase-u1",
+      deviceId: "CG-ESP32-A100",
+      facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+      handshakeToken: "handshake-token",
+      heartbeatIntervalMs: 10_000,
+      leaseDurationMs: 35_000,
+      softApPassword: "A100-wifi",
+      softApRuntimeBaseUrl: "http://192.168.4.1",
+      softApSsid: "ColdGuard_A100",
+      transport: "softap",
+    }),
+  );
 });
 
 test("bootstrapDefaultDeviceMonitoring marks the session active before starting native monitoring", async () => {
@@ -448,7 +480,7 @@ test("bootstrapDefaultDeviceMonitoring marks the session active before starting 
   );
 });
 
-test("starts monitoring on softap first when facility wifi is configured but not yet proven", async () => {
+test("starts monitoring in ble-primary mode when facility wifi is configured but not yet proven", async () => {
   mockUpsertDeviceRuntimeConfig.mockResolvedValueOnce({
     activeRuntimeBaseUrl: null,
     activeTransport: null,
@@ -473,9 +505,11 @@ test("starts monitoring on softap first when facility wifi is configured but not
 
   expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
     expect.objectContaining({
+      controllerClientId: "client-device-1",
+      controllerUserId: "firebase-u1",
       facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
       softApRuntimeBaseUrl: "http://192.168.4.1",
-      transport: "softap",
+      transport: "ble_fallback",
     }),
   );
 });

@@ -44,6 +44,14 @@ type GenericBleResponse = {
   [key: string]: unknown;
 };
 
+export type BlePrimaryLeaseStatus = {
+  controlRole: "blocked" | "none" | "primary" | "secondary";
+  primaryControllerUserId: string | null;
+  primaryLeaseExpiresAt: number | null;
+  primaryLeaseHeartbeatIntervalMs: number | null;
+  primaryLeaseSessionId: string | null;
+};
+
 const SCAN_TIMEOUT_MS = 12_000;
 const SCAN_RETRY_DELAY_MS = 1_500;
 const SCAN_RETRY_MAX_ATTEMPTS = 3;
@@ -179,6 +187,40 @@ function getBleManager() {
     bleManager = new BleManager();
   }
   return bleManager;
+}
+
+function parsePrimaryLeaseStatus(response: GenericBleResponse): BlePrimaryLeaseStatus {
+  const sessionRole = response.sessionRole;
+  const normalizedRole =
+    sessionRole === "primary" || sessionRole === "secondary" || sessionRole === "blocked" || sessionRole === "none"
+      ? sessionRole
+      : "none";
+  const expiresAt = response.primaryLeaseExpiresAtMs;
+  const heartbeatInterval = response.primaryLeaseHeartbeatIntervalMs;
+
+  return {
+    controlRole: normalizedRole,
+    primaryControllerUserId:
+      typeof response.primaryControllerUserId === "string" && response.primaryControllerUserId.length > 0
+        ? response.primaryControllerUserId
+        : null,
+    primaryLeaseExpiresAt:
+      typeof expiresAt === "number" && Number.isFinite(expiresAt)
+        ? expiresAt
+        : typeof expiresAt === "string" && Number.isFinite(Number(expiresAt))
+          ? Number(expiresAt)
+          : null,
+    primaryLeaseHeartbeatIntervalMs:
+      typeof heartbeatInterval === "number" && Number.isFinite(heartbeatInterval)
+        ? heartbeatInterval
+        : typeof heartbeatInterval === "string" && Number.isFinite(Number(heartbeatInterval))
+          ? Number(heartbeatInterval)
+          : null,
+    primaryLeaseSessionId:
+      typeof response.primaryLeaseSessionId === "string" && response.primaryLeaseSessionId.length > 0
+        ? response.primaryLeaseSessionId
+        : null,
+  };
 }
 
 function resetBleManager() {
@@ -355,6 +397,151 @@ export class RealColdGuardBleClient {
 
       const response = await sendCommand("wifi.ticket.request", {});
       return parseWifiTicketResponse(response);
+    } finally {
+      close();
+      await device.cancelConnection().catch(() => undefined);
+    }
+  }
+
+  async requestSharedAccess(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+  }): Promise<ColdGuardWifiTicket> {
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
+
+    try {
+      const proofTimestamp = createProofTimestamp(hello);
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
+      await sendCommand("grant.verify", {
+        actionTicket: args.actionTicket,
+        deviceId: args.deviceId,
+        handshakeProof,
+        proofTimestamp,
+      });
+
+      const response = await sendCommand("shared.access.request", {});
+      return parseWifiTicketResponse(response);
+    } finally {
+      close();
+      await device.cancelConnection().catch(() => undefined);
+    }
+  }
+
+  async claimPrimaryLease(args: {
+    actionTicket: CachedDeviceActionTicket;
+    controllerClientId: string;
+    controllerUserId: string;
+    deviceId: string;
+    handshakeToken: string;
+    heartbeatIntervalMs?: number;
+    leaseDurationMs?: number;
+    sessionId?: string | null;
+  }): Promise<BlePrimaryLeaseStatus> {
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
+
+    try {
+      const proofTimestamp = createProofTimestamp(hello);
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
+      await sendCommand("grant.verify", {
+        actionTicket: args.actionTicket,
+        deviceId: args.deviceId,
+        handshakeProof,
+        proofTimestamp,
+      });
+
+      const response = await sendCommand("primary.claim", {
+        controllerClientId: args.controllerClientId,
+        controllerUserId: args.controllerUserId,
+        heartbeatIntervalMs: args.heartbeatIntervalMs,
+        leaseDurationMs: args.leaseDurationMs,
+        sessionId: args.sessionId ?? undefined,
+      });
+      return parsePrimaryLeaseStatus(response);
+    } finally {
+      close();
+      await device.cancelConnection().catch(() => undefined);
+    }
+  }
+
+  async heartbeatPrimaryLease(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+    heartbeatIntervalMs?: number;
+    leaseDurationMs?: number;
+    sessionId: string;
+  }): Promise<BlePrimaryLeaseStatus> {
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
+
+    try {
+      const proofTimestamp = createProofTimestamp(hello);
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
+      await sendCommand("grant.verify", {
+        actionTicket: args.actionTicket,
+        deviceId: args.deviceId,
+        handshakeProof,
+        proofTimestamp,
+      });
+
+      const response = await sendCommand("primary.heartbeat", {
+        heartbeatIntervalMs: args.heartbeatIntervalMs,
+        leaseDurationMs: args.leaseDurationMs,
+        sessionId: args.sessionId,
+      });
+      return parsePrimaryLeaseStatus(response);
+    } finally {
+      close();
+      await device.cancelConnection().catch(() => undefined);
+    }
+  }
+
+  async getPrimaryLeaseStatus(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+    sessionId?: string | null;
+  }): Promise<BlePrimaryLeaseStatus> {
+    const { close, device, hello, sendCommand } = await connectAndHello(args.deviceId);
+
+    try {
+      const proofTimestamp = createProofTimestamp(hello);
+      const handshakeProof = await createHandshakeProof({
+        deviceId: args.deviceId,
+        deviceNonce: hello.deviceNonce,
+        handshakeToken: args.handshakeToken,
+        proofTimestamp,
+      });
+
+      await sendCommand("grant.verify", {
+        actionTicket: args.actionTicket,
+        deviceId: args.deviceId,
+        handshakeProof,
+        proofTimestamp,
+      });
+
+      const response = await sendCommand("primary.status", {
+        sessionId: args.sessionId ?? undefined,
+      });
+      return parsePrimaryLeaseStatus(response);
     } finally {
       close();
       await device.cancelConnection().catch(() => undefined);

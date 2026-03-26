@@ -121,9 +121,14 @@ class ColdGuardWifiBridgeModule : Module() {
   private fun startMonitoringDevice(options: Map<String, Any?>): Map<String, Any?> {
     val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
     val connectActionTicketJson = options["connectActionTicketJson"] as? String
+    val controllerClientId = options["controllerClientId"] as? String
+    val controllerUserId = options["controllerUserId"] as? String
     val deviceId = options["deviceId"] as? String ?: throw IllegalStateException("MONITOR_DEVICE_ID_REQUIRED")
     val facilityWifiRuntimeBaseUrl = options["facilityWifiRuntimeBaseUrl"] as? String
     val handshakeToken = options["handshakeToken"] as? String
+    val heartbeatIntervalMs = (options["heartbeatIntervalMs"] as? Number)?.toLong()
+    val leaseDurationMs = (options["leaseDurationMs"] as? Number)?.toLong()
+    val primaryLeaseSessionId = options["primaryLeaseSessionId"] as? String
     val transport = options["transport"] as? String ?: "softap"
     val softApSsid = options["softApSsid"] as? String
     val softApPassword = options["softApPassword"] as? String
@@ -138,10 +143,15 @@ class ColdGuardWifiBridgeModule : Module() {
     val intent = ColdGuardDeviceMonitoringService.startIntent(
       context,
       MonitoringOptions(
+        controllerClientId = controllerClientId,
+        controllerUserId = controllerUserId,
         connectActionTicketJson = connectActionTicketJson,
         deviceId = deviceId,
         facilityWifiRuntimeBaseUrl = facilityWifiRuntimeBaseUrl,
         handshakeToken = handshakeToken,
+        heartbeatIntervalMs = heartbeatIntervalMs,
+        leaseDurationMs = leaseDurationMs,
+        primaryLeaseSessionId = primaryLeaseSessionId,
         softApPassword = softApPassword,
         softApRuntimeBaseUrl = softApRuntimeBaseUrl,
         softApSsid = softApSsid,

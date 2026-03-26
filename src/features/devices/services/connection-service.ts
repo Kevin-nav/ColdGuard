@@ -15,7 +15,8 @@ import {
   upsertDeviceRuntimeConfig,
 } from "../../../lib/storage/sqlite/device-runtime-repository";
 import type { ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
-import { getClinicHandshakeToken } from "../../../lib/storage/secure-store";
+import { getProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
+import { getClinicHandshakeToken, getOrCreateMonitoringClientId } from "../../../lib/storage/secure-store";
 import {
   deleteSyncJob,
   enqueueSyncJob,
@@ -24,6 +25,8 @@ import {
 } from "../../../lib/storage/sqlite/sync-job-repository";
 import type {
   CachedDeviceActionTicket,
+  DeviceControlRole,
+  DeviceRuntimeConfig,
   ColdGuardConnectionPayload,
   ColdGuardDiscoveredDevice,
   ColdGuardWifiTicket,
@@ -81,20 +84,32 @@ const DEVICE_CONNECTION_SYNC_JOB_TYPE = "device_connection_test_reconciliation";
 const MONITORING_NOTIFICATION_PERMISSION_ERROR =
   "Allow notifications to start ColdGuard background monitoring on this device.";
 const FACILITY_WIFI_PROOF_WINDOW_MS = 15 * 60 * 1000;
+const PRIMARY_LEASE_HEARTBEAT_INTERVAL_MS = 10_000;
+const PRIMARY_LEASE_DURATION_MS = 35_000;
 
 function getMonitoringStatusForDevice(
   statuses: Record<
     string,
     {
+      controlRole?: DeviceControlRole | "blocked" | null;
       deviceId: string;
       error: string | null;
       isRunning: boolean;
+      primaryControllerUserId?: string | null;
+      primaryLeaseExpiresAt?: number | null;
+      primaryLeaseSessionId?: string | null;
       transport: RuntimeTransportMode | null;
     }
   >,
   deviceId: string,
 ) {
   return statuses[deviceId] ?? null;
+}
+
+function normalizeMonitoringControlRole(
+  value: DeviceControlRole | "blocked" | null | undefined,
+): DeviceControlRole {
+  return value === "primary" || value === "secondary" ? value : "none";
 }
 
 export interface ColdGuardBleClient {
@@ -112,6 +127,27 @@ export interface ColdGuardBleClient {
     deviceId: string;
     handshakeToken: string;
   }): Promise<ColdGuardWifiTicket>;
+  requestSharedAccess?(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+  }): Promise<ColdGuardWifiTicket>;
+  claimPrimaryLease?(args: {
+    actionTicket: CachedDeviceActionTicket;
+    controllerClientId: string;
+    controllerUserId: string;
+    deviceId: string;
+    handshakeToken: string;
+    heartbeatIntervalMs?: number;
+    leaseDurationMs?: number;
+    sessionId?: string | null;
+  }): Promise<{
+    controlRole: "blocked" | "none" | "primary" | "secondary";
+    primaryControllerUserId: string | null;
+    primaryLeaseExpiresAt: number | null;
+    primaryLeaseHeartbeatIntervalMs: number | null;
+    primaryLeaseSessionId: string | null;
+  }>;
   provisionWifi(args: {
     actionTicket: CachedDeviceActionTicket;
     deviceId: string;
@@ -195,6 +231,38 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
       password: `${args.deviceId.slice(-4)}-wifi`,
       ssid: `ColdGuard_${args.deviceId.slice(-4)}`,
       testUrl: "http://192.168.4.1/api/v1/connection-test",
+    };
+  }
+
+  async requestSharedAccess(args: {
+    actionTicket: CachedDeviceActionTicket;
+    deviceId: string;
+    handshakeToken: string;
+  }) {
+    return await this.requestWifiTicket(args);
+  }
+
+  async claimPrimaryLease(args: {
+    actionTicket: CachedDeviceActionTicket;
+    controllerClientId: string;
+    controllerUserId: string;
+    deviceId: string;
+    handshakeToken: string;
+    heartbeatIntervalMs?: number;
+    leaseDurationMs?: number;
+    sessionId?: string | null;
+  }) {
+    if (!args.handshakeToken || !args.actionTicket.mac) {
+      throw new Error("DEVICE_CONNECTION_AUTH_FAILED");
+    }
+
+    await delay(120);
+    return {
+      controlRole: "primary" as const,
+      primaryControllerUserId: args.controllerUserId,
+      primaryLeaseExpiresAt: Date.now() + (args.leaseDurationMs ?? 35_000),
+      primaryLeaseHeartbeatIntervalMs: args.heartbeatIntervalMs ?? 10_000,
+      primaryLeaseSessionId: args.sessionId ?? `lease-${args.deviceId}`,
     };
   }
 
@@ -475,16 +543,24 @@ async function connectViaSoftAp(args: {
   await ensureWifiBridgePermissions();
   const handshakeToken = await getRequiredClinicHandshakeToken();
   const actionTicket = await ensureDeviceActionTicket(args.deviceId, "connect");
+  const runtimeConfig = await getDeviceRuntimeConfig(args.deviceId);
 
   await args.bleClient.discoverDevice({
     deviceId: args.deviceId,
     expectedState: "enrolled",
   });
-  const ticket = await args.bleClient.requestWifiTicket({
-    actionTicket,
-    deviceId: args.deviceId,
-    handshakeToken,
-  });
+  const ticket =
+    runtimeConfig?.controlRole === "secondary" && args.bleClient.requestSharedAccess
+      ? await args.bleClient.requestSharedAccess({
+          actionTicket,
+          deviceId: args.deviceId,
+          handshakeToken,
+        })
+      : await args.bleClient.requestWifiTicket({
+          actionTicket,
+          deviceId: args.deviceId,
+          handshakeToken,
+        });
   const network = await args.wifiBridge.connect(ticket);
   const runtimeBaseUrl = normalizeRuntimeBaseUrl(ticket.testUrl);
 
@@ -814,7 +890,7 @@ export async function provisionFacilityWifi(args: {
   return provisioning;
 }
 
-export async function startDeviceMonitoring(deviceId: string) {
+export async function startDeviceMonitoring(deviceId: string): Promise<DeviceRuntimeConfig> {
   if (Platform.OS !== "web") {
     const permissionStatus = await getLocalNotificationPermissionStatus();
     const nextPermissionStatus =
@@ -826,10 +902,13 @@ export async function startDeviceMonitoring(deviceId: string) {
 
   await ensureMonitoringTransportPermissions();
 
-  const [handshakeToken, connectActionTicket, config] = await Promise.all([
+  const [handshakeToken, connectActionTicket, profile, controllerClientId, config] = await Promise.all([
     getRequiredClinicHandshakeToken(),
     ensureDeviceActionTicket(deviceId, "connect"),
+    getProfileSnapshot(),
+    getOrCreateMonitoringClientId(),
     upsertDeviceRuntimeConfig(deviceId, {
+      controlRole: "none",
       lastMonitorAt: Date.now(),
       lastMonitorError: null,
       monitoringMode: "foreground_service",
@@ -839,20 +918,19 @@ export async function startDeviceMonitoring(deviceId: string) {
   const softApRuntimeBaseUrl =
     config.softApRuntimeBaseUrl ??
     (config.activeTransport === "softap" ? config.activeRuntimeBaseUrl : null);
-  const monitoringTransport =
-    config.activeTransport === "facility_wifi" && facilityWifiRuntimeBaseUrl
-      ? "facility_wifi"
-      : softApRuntimeBaseUrl
-        ? "softap"
-        : facilityWifiRuntimeBaseUrl
-          ? "facility_wifi"
-          : "ble_fallback";
+  const monitoringTransport = config.activeTransport ?? "ble_fallback";
+  const controllerUserId = profile?.firebaseUid ?? "offline-user";
 
   const serviceStatuses = await startNativeMonitoringDevice({
+    controllerClientId,
+    controllerUserId,
     connectActionTicketJson: JSON.stringify(connectActionTicket),
     deviceId,
     facilityWifiRuntimeBaseUrl,
     handshakeToken,
+    heartbeatIntervalMs: PRIMARY_LEASE_HEARTBEAT_INTERVAL_MS,
+    leaseDurationMs: PRIMARY_LEASE_DURATION_MS,
+    primaryLeaseSessionId: config.primaryLeaseSessionId,
     softApPassword: config.softApPassword,
     softApRuntimeBaseUrl,
     softApSsid: config.softApSsid,
@@ -864,25 +942,30 @@ export async function startDeviceMonitoring(deviceId: string) {
   }
 
   return await upsertDeviceRuntimeConfig(deviceId, {
+    controlRole: normalizeMonitoringControlRole(serviceStatus?.controlRole),
     activeTransport: serviceStatus?.transport ?? config.activeTransport,
     lastMonitorAt: Date.now(),
     lastMonitorError: serviceStatus?.error ?? null,
     monitoringMode: serviceStatus?.isRunning ? "foreground_service" : "off",
+    primaryControllerUserId: serviceStatus?.primaryControllerUserId ?? config.primaryControllerUserId,
+    primaryLeaseExpiresAt: serviceStatus?.primaryLeaseExpiresAt ?? config.primaryLeaseExpiresAt,
+    primaryLeaseSessionId: serviceStatus?.primaryLeaseSessionId ?? config.primaryLeaseSessionId,
   });
 }
 
-export async function stopDeviceMonitoring(deviceId: string) {
+export async function stopDeviceMonitoring(deviceId: string): Promise<DeviceRuntimeConfig> {
   const serviceStatuses = await stopNativeMonitoringDevice(deviceId);
   const serviceStatus = getMonitoringStatusForDevice(serviceStatuses, deviceId);
 
   return await upsertDeviceRuntimeConfig(deviceId, {
+    controlRole: "none",
     lastMonitorAt: Date.now(),
     lastMonitorError: serviceStatus?.error ?? null,
     monitoringMode: "off",
   });
 }
 
-export async function getDeviceRuntimeSession(deviceId: string) {
+export async function getDeviceRuntimeSession(deviceId: string): Promise<DeviceRuntimeConfig | null> {
   const [config, serviceStatuses] = await Promise.all([
     getDeviceRuntimeConfig(deviceId),
     getNativeMonitoringServiceStatuses(),
@@ -897,8 +980,12 @@ export async function getDeviceRuntimeSession(deviceId: string) {
     return {
       ...config,
       activeTransport: serviceStatus.transport ?? config.activeTransport,
+      controlRole: normalizeMonitoringControlRole(serviceStatus.controlRole) ?? config.controlRole,
       lastMonitorError: serviceStatus.error ?? config.lastMonitorError,
       monitoringMode: "foreground_service",
+      primaryControllerUserId: serviceStatus.primaryControllerUserId ?? config.primaryControllerUserId,
+      primaryLeaseExpiresAt: serviceStatus.primaryLeaseExpiresAt ?? config.primaryLeaseExpiresAt,
+      primaryLeaseSessionId: serviceStatus.primaryLeaseSessionId ?? config.primaryLeaseSessionId,
     };
   }
 
@@ -1169,8 +1256,9 @@ async function getRequiredClinicHandshakeToken() {
   return handshakeToken;
 }
 
-export async function bootstrapDefaultDeviceMonitoring(deviceId: string) {
+export async function bootstrapDefaultDeviceMonitoring(deviceId: string): Promise<DeviceRuntimeConfig> {
   await upsertDeviceRuntimeConfig(deviceId, {
+    controlRole: "none",
     lastMonitorError: null,
     lastRuntimeError: null,
     monitoringMode: "foreground_service",

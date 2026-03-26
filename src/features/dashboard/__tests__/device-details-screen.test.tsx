@@ -104,20 +104,24 @@ beforeEach(() => {
   mockBootstrapDefaultDeviceMonitoring.mockResolvedValue({
     activeRuntimeBaseUrl: "http://192.168.4.1",
     activeTransport: "softap",
+    controlRole: "primary",
     deviceId: "device-1",
     facilityWifiPassword: null,
     facilityWifiRuntimeBaseUrl: null,
     facilityWifiSsid: null,
-    softApPassword: "softap-secret",
-    softApRuntimeBaseUrl: "http://192.168.4.1",
-    softApSsid: "ColdGuard_A100",
     lastMonitorAt: Date.now(),
     lastMonitorError: null,
     lastPingAt: null,
     lastRecoverAt: Date.now(),
     lastRuntimeError: null,
     monitoringMode: "foreground_service",
+    primaryControllerUserId: "u1",
+    primaryLeaseExpiresAt: Date.now() + 35_000,
+    primaryLeaseSessionId: "lease-device-1",
     sessionStatus: "connecting",
+    softApPassword: "softap-secret",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
     updatedAt: 1,
   });
   mockConnectOrRecoverDevice.mockResolvedValue({
@@ -129,20 +133,24 @@ beforeEach(() => {
   mockGetDeviceRuntimeSession.mockResolvedValue({
     activeRuntimeBaseUrl: "http://192.168.4.1",
     activeTransport: "softap",
+    controlRole: "secondary",
     deviceId: "device-1",
     facilityWifiPassword: null,
     facilityWifiRuntimeBaseUrl: null,
     facilityWifiSsid: null,
-    softApPassword: "softap-secret",
-    softApRuntimeBaseUrl: "http://192.168.4.1",
-    softApSsid: "ColdGuard_A100",
     lastMonitorAt: null,
     lastMonitorError: null,
     lastPingAt: null,
     lastRecoverAt: null,
     lastRuntimeError: null,
     monitoringMode: "off",
+    primaryControllerUserId: "u9",
+    primaryLeaseExpiresAt: Date.now() + 35_000,
+    primaryLeaseSessionId: "lease-device-9",
     sessionStatus: "connected",
+    softApPassword: "softap-secret",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
     transport: "softap",
     updatedAt: 1,
   });
@@ -221,6 +229,12 @@ test("shows pending for an idle connection status", async () => {
   expect(ui.getByText("Disable monitoring")).toBeTruthy();
   expect(ui.getByText("Save facility Wi-Fi")).toBeTruthy();
   expect(ui.getByText("Not established")).toBeTruthy();
+  expect(ui.getByText("Primary Bluetooth controller")).toBeTruthy();
+  expect(
+    ui.getByText(
+      "This phone currently holds the BLE-primary lease and will keep primary control while it remains nearby.",
+    ),
+  ).toBeTruthy();
 });
 
 test("shows a monitoring permission error instead of pretending monitoring was enabled", async () => {

@@ -3,7 +3,11 @@ import { listMonitoredDeviceRuntimeConfigs } from "../../../lib/storage/sqlite/d
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { useDashboardBootstrap } from "../../dashboard/providers/dashboard-bootstrap";
 import { ensureLocalProfileForUser } from "../../dashboard/services/profile-hydration";
-import { pollMonitoredDeviceRuntime, startDeviceMonitoring } from "../../devices/services/connection-service";
+import {
+  pollMonitoredDeviceRuntime,
+  requestColdLaunchPermissions,
+  startDeviceMonitoring,
+} from "../../devices/services/connection-service";
 import { getNativeMonitoringServiceStatuses } from "../../devices/services/wifi-bridge";
 import { useNetworkStatus } from "../../network/network-status";
 import {
@@ -101,6 +105,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     configureLocalNotificationHandler();
+    void requestColdLaunchPermissions().catch(() => undefined);
     void getLocalNotificationPermissionStatus()
       .then(setPermissionStatus)
       .catch(() => setPermissionStatus("undetermined"));

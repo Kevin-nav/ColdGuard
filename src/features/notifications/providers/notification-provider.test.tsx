@@ -8,6 +8,7 @@ const mockUseNetworkStatus = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockListMonitoredDeviceRuntimeConfigs = jest.fn();
 const mockPollMonitoredDeviceRuntime = jest.fn();
+const mockRequestColdLaunchPermissions = jest.fn();
 const mockStartDeviceMonitoring = jest.fn();
 const mockGetNativeMonitoringServiceStatuses = jest.fn();
 const mockSyncNotificationInbox = jest.fn();
@@ -41,6 +42,7 @@ jest.mock("../../../lib/storage/sqlite/device-runtime-repository", () => ({
 
 jest.mock("../../devices/services/connection-service", () => ({
   pollMonitoredDeviceRuntime: (...args: unknown[]) => mockPollMonitoredDeviceRuntime(...args),
+  requestColdLaunchPermissions: (...args: unknown[]) => mockRequestColdLaunchPermissions(...args),
   startDeviceMonitoring: (...args: unknown[]) => mockStartDeviceMonitoring(...args),
 }));
 
@@ -92,6 +94,7 @@ beforeEach(() => {
     institutionName: "Korle-Bu Teaching Hospital",
   });
   mockGetLocalNotificationPermissionStatus.mockResolvedValue("granted");
+  mockRequestColdLaunchPermissions.mockResolvedValue(undefined);
   mockGetNativeMonitoringServiceStatuses.mockResolvedValue({
     "device-1": {
       deviceId: "device-1",
@@ -155,6 +158,7 @@ test("skips JS polling for devices already owned by the native monitoring servic
 
   await waitFor(() => expect(ui.getByText("ready")).toBeTruthy());
 
+  expect(mockRequestColdLaunchPermissions).toHaveBeenCalledTimes(1);
   expect(mockGetNativeMonitoringServiceStatuses).toHaveBeenCalled();
   expect(mockStartDeviceMonitoring).toHaveBeenCalledWith("device-2");
   expect(mockListMonitoredDeviceRuntimeConfigs).toHaveBeenCalledWith({
@@ -169,6 +173,21 @@ test("skips JS polling for devices already owned by the native monitoring servic
     },
     { isOnline: true },
   );
+});
+
+test("continues booting when cold-launch permission preflight fails", async () => {
+  mockRequestColdLaunchPermissions.mockRejectedValueOnce(new Error("BLE_PERMISSION_REQUIRED"));
+
+  const ui = render(
+    <NotificationProvider>
+      <Consumer />
+    </NotificationProvider>,
+  );
+
+  await waitFor(() => expect(ui.getByText("ready")).toBeTruthy());
+
+  expect(mockRequestColdLaunchPermissions).toHaveBeenCalledTimes(1);
+  expect(mockSyncNotificationInbox).toHaveBeenCalled();
 });
 
 test("does not sync notifications when the hydrated profile is missing institution id", async () => {

@@ -736,6 +736,19 @@ export async function enrollColdGuardDevice(args: {
   return registeredDevice;
 }
 
+export async function requestColdLaunchPermissions() {
+  if (Platform.OS !== "android") {
+    return;
+  }
+
+  try {
+    await ensureEnrollmentPermissions();
+  } catch {
+    // Cold-launch permission preflight is best-effort. Enrollment and monitoring
+    // remain the hard gates if the user declines here.
+  }
+}
+
 export async function connectOrRecoverDevice(args: {
   deviceId: string;
   bleClient?: ColdGuardBleClient;

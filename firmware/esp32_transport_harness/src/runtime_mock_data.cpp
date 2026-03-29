@@ -4,26 +4,47 @@ namespace coldguard {
 
 namespace {
 
+struct RuntimeSimulationPhase {
+  int batteryLevel;
+  bool doorOpen;
+  const char* doorSeverity;
+  const char* statusLabel;
+  float temperatureC;
+  bool temperatureCritical;
+};
+
+constexpr unsigned long kPhaseDurationMs = 20UL * 1000UL;
+
+RuntimeSimulationPhase currentSimulationPhase() {
+  static const RuntimeSimulationPhase kPhases[] = {
+      {98, false, "warning", "stable", 4.2f, false},
+      {95, false, "warning", "warming", 4.7f, false},
+      {92, true, "critical", "door-open", 4.4f, false},
+      {88, false, "warning", "battery-low", 5.3f, true},
+      {96, false, "warning", "recovering", 4.1f, false},
+  };
+
+  const size_t phaseIndex = (millis() / kPhaseDurationMs) % (sizeof(kPhases) / sizeof(kPhases[0]));
+  return kPhases[phaseIndex];
+}
+
 float currentMockTemperature() {
-  const unsigned long nowMs = millis();
-  return 4.2f + static_cast<float>((nowMs / 1000UL) % 5) * 0.1f;
+  return currentSimulationPhase().temperatureC;
 }
 
 int currentMockBatteryLevel() {
-  const unsigned long nowMs = millis();
-  return 87 + static_cast<int>((nowMs / 5000UL) % 7);
+  return currentSimulationPhase().batteryLevel;
 }
 
 bool currentMockDoorOpen() {
-  const unsigned long nowMs = millis();
-  return ((nowMs / 15000UL) % 2) == 1;
+  return currentSimulationPhase().doorOpen;
 }
 
 String deriveMarketStatus(float temp, int batteryLevel, bool doorOpen) {
-  if (temp >= 5.0f) {
+  if (temp >= 5.2f) {
     return "alert";
   }
-  if (temp >= 4.5f || doorOpen || batteryLevel < 90) {
+  if (temp >= 4.5f || doorOpen || batteryLevel < 92) {
     return "warning";
   }
   return "safe";
@@ -41,9 +62,10 @@ String deriveAccessMode(const DeviceState& state) {
 
 String buildStatusText(const DeviceState& state, const String& accessMode, const String& mktStatus) {
   const String deviceLabel = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
+  const RuntimeSimulationPhase phase = currentSimulationPhase();
 
   if (accessMode == "bluetooth_primary") {
-    return deviceLabel + " is paired for primary Bluetooth control.";
+    return deviceLabel + " is paired for primary Bluetooth control and " + phase.statusLabel + " runtime checks.";
   }
   if (accessMode == "temporary_shared_access") {
     return deviceLabel +
@@ -86,17 +108,18 @@ RuntimeSnapshot buildRuntimeSnapshot(const DeviceState& state, const String& run
 }
 
 String buildRuntimeAlertsJson(const RuntimeSnapshot& snapshot, unsigned long nowMs) {
+  const RuntimeSimulationPhase phase = currentSimulationPhase();
   String alerts = "[";
   bool first = true;
 
   if (snapshot.currentTempC >= 4.5f) {
     alerts += "{"
-              "\"cursor\":\"temperature-warning\","
+              "\"cursor\":\"temperature-runtime\","
               "\"incidentType\":\"temperature\","
-              "\"severity\":\"warning\","
+              "\"severity\":\"" + String(phase.temperatureCritical ? "critical" : "warning") + "\","
               "\"status\":\"open\","
               "\"title\":\"Temperature excursion in progress\","
-              "\"body\":\"Runtime polling detected a warming trend.\","
+              "\"body\":\"Firmware runtime simulation reported a temperature drift.\","
               "\"triggeredAt\":" + String(nowMs) +
               "}";
     first = false;
@@ -109,16 +132,16 @@ String buildRuntimeAlertsJson(const RuntimeSnapshot& snapshot, unsigned long now
     alerts += "{"
               "\"cursor\":\"door-open\","
               "\"incidentType\":\"door_open\","
-              "\"severity\":\"warning\","
+              "\"severity\":\"" + String(phase.doorSeverity) + "\","
               "\"status\":\"open\","
               "\"title\":\"Door is still open\","
-              "\"body\":\"Runtime polling detected an open door state.\","
+              "\"body\":\"Firmware runtime simulation reported an open door state.\","
               "\"triggeredAt\":" + String(nowMs) +
               "}";
     first = false;
   }
 
-  if (snapshot.batteryLevel < 90) {
+  if (snapshot.batteryLevel < 92) {
     if (!first) {
       alerts += ",";
     }
@@ -128,7 +151,7 @@ String buildRuntimeAlertsJson(const RuntimeSnapshot& snapshot, unsigned long now
               "\"severity\":\"warning\","
               "\"status\":\"open\","
               "\"title\":\"Battery is trending low\","
-              "\"body\":\"Runtime polling detected reduced battery headroom.\","
+              "\"body\":\"Firmware runtime simulation reported reduced battery headroom.\","
               "\"triggeredAt\":" + String(nowMs) +
               "}";
   }

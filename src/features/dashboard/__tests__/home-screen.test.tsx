@@ -10,6 +10,7 @@ const mockUseNotificationInbox = jest.fn();
 
 jest.mock("expo-router", () => ({
   router: { push: (path: string) => mockPush(path) },
+  useFocusEffect: jest.fn(),
 }));
 
 jest.mock("../../../../src/features/dashboard/providers/dashboard-bootstrap", () => ({
@@ -126,5 +127,7 @@ test("renders the dashboard with system overview, incidents, and devices", async
     expect(ui.queryByText("Recent incidents")).toBeTruthy();
     expect(ui.queryByText("Temperature excursion critical")).toBeTruthy();
   });
+
+  expect(ui.getByTestId("dashboard-scroll-view").props.refreshControl).toBeTruthy();
 });
 

@@ -3,6 +3,7 @@ import DevicesScreen from "../../../../app/(tabs)/devices";
 
 jest.mock("expo-router", () => ({
   router: { push: jest.fn() },
+  useFocusEffect: jest.fn(),
 }));
 
 
@@ -87,6 +88,7 @@ test("renders the dedicated devices workspace", async () => {
 
   await waitFor(() => expect(ui.getByText("Devices")).toBeTruthy());
   expect(ui.getByTestId("devices-scroll-view")).toBeTruthy();
+  expect(ui.getByTestId("devices-scroll-view").props.refreshControl).toBeTruthy();
   expect(ui.getByText("Cold Room Alpha")).toBeTruthy();
   expect(ui.getByText(/Nurse access/)).toBeTruthy();
 });

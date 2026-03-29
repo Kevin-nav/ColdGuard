@@ -1,6 +1,6 @@
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useMemo } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
 import { DeviceCard } from "../../src/features/dashboard/components/device-card";
@@ -17,9 +17,18 @@ import { AnimatedEntry } from "../../src/components/animated-entry";
 export default function HomeScreen() {
   const { colors } = useTheme();
   const shared = useMemo(() => createSharedStyles(colors), [colors]);
-  const { alertCount, devices, error, isLoading, profile, safeCount, warningCount } =
+  const { alertCount, devices, error, isLoading, isRefreshing, profile, refreshDevices, safeCount, warningCount } =
     useDashboardContext();
   const { activeIncidents, markRead } = useNotificationInbox();
+
+  useFocusEffect(
+    useMemo(
+      () => () => {
+        void refreshDevices();
+      },
+      [refreshDevices],
+    ),
+  );
 
   if (error) {
     return (
@@ -41,7 +50,11 @@ export default function HomeScreen() {
   }
 
   return (
-    <DashboardPage scroll testID="dashboard-scroll-view">
+    <DashboardPage
+      refreshControl={<RefreshControl onRefresh={() => void refreshDevices()} refreshing={isRefreshing} />}
+      scroll
+      testID="dashboard-scroll-view"
+    >
       <AnimatedEntry delay={0}>
         <View style={localStyles.greetingContainer}>
           <Text style={shared.heading}>Welcome back, {profile.displayName.split(" ")[0]}</Text>

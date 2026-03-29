@@ -32,6 +32,7 @@ const mockEnsureSupervisorActionTicket = jest.fn();
 const mockDeleteDeviceRuntimeConfig = jest.fn();
 const mockGetDeviceRuntimeConfig = jest.fn();
 const mockRegisterEnrolledDevice = jest.fn();
+const mockSyncVisibleDevices = jest.fn();
 const mockDecommissionManagedDevice = jest.fn();
 const mockRecordDeviceConnectionTest = jest.fn();
 const mockStartNativeEnrollment = jest.fn();
@@ -92,6 +93,7 @@ jest.mock("./device-directory", () => ({
   ensureDeviceActionTicket: (...args: unknown[]) => mockEnsureDeviceActionTicket(...args),
   ensureSupervisorActionTicket: (...args: unknown[]) => mockEnsureSupervisorActionTicket(...args),
   registerEnrolledDevice: (...args: unknown[]) => mockRegisterEnrolledDevice(...args),
+  syncVisibleDevices: (...args: unknown[]) => mockSyncVisibleDevices(...args),
   decommissionManagedDevice: (...args: unknown[]) => mockDecommissionManagedDevice(...args),
   recordDeviceConnectionTest: (...args: unknown[]) => mockRecordDeviceConnectionTest(...args),
 }));
@@ -154,6 +156,7 @@ beforeEach(() => {
     deviceId: "CG-ESP32-A100",
     nickname: "Cold Room Alpha",
   });
+  mockSyncVisibleDevices.mockResolvedValue([]);
   mockGetDeviceById.mockResolvedValue({
     id: "CG-ESP32-A100",
     institutionId: "institution-1",
@@ -283,6 +286,12 @@ test("enrolls a blank mock device and registers it", async () => {
       bleName: "ColdGuard_A100",
       deviceId: "CG-ESP32-A100",
       nickname: "Cold Room Alpha",
+    }),
+  );
+  expect(mockSyncVisibleDevices).toHaveBeenCalledWith(
+    expect.objectContaining({
+      institutionId: "institution-1",
+      role: "Supervisor",
     }),
   );
   expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
@@ -608,6 +617,39 @@ test("starts monitoring in ble-primary mode when facility wifi is configured but
   );
 });
 
+test("keeps ble-primary startup transport when facility wifi was previously active but is no longer proven", async () => {
+  jest.spyOn(Date, "now").mockReturnValue(2_000_000);
+  mockUpsertDeviceRuntimeConfig.mockResolvedValueOnce({
+    activeRuntimeBaseUrl: "http://10.0.0.22",
+    activeTransport: "facility_wifi",
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    lastMonitorAt: null,
+    lastMonitorError: null,
+    lastPingAt: 2_000_000 - (15 * 60 * 1000) - 1,
+    lastRecoverAt: null,
+    lastRuntimeError: null,
+    monitoringMode: "foreground_service",
+    sessionStatus: "idle",
+    updatedAt: 2_000_000,
+  });
+
+  await startDeviceMonitoring("CG-ESP32-A100");
+
+  expect(mockStartNativeMonitoringDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+      softApRuntimeBaseUrl: "http://192.168.4.1",
+      transport: "ble_fallback",
+    }),
+  );
+});
+
 test("requests notification permission before starting background monitoring", async () => {
   mockGetLocalNotificationPermissionStatus.mockResolvedValueOnce("undetermined");
 
@@ -781,6 +823,56 @@ test("merges per-device native monitoring status into the runtime session", asyn
       activeTransport: "softap",
       lastMonitorError: "RECOVERING_SOFTAP",
       monitoringMode: "foreground_service",
+    }),
+  );
+});
+
+test("preserves ble-primary ownership visibility even when runtime transport is degraded", async () => {
+  mockGetDeviceRuntimeConfig.mockResolvedValue({
+    activeRuntimeBaseUrl: null,
+    activeTransport: null,
+    controlRole: "none",
+    deviceId: "CG-ESP32-A100",
+    facilityWifiPassword: "facility-pass",
+    facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
+    facilityWifiSsid: "HospitalNet",
+    lastMonitorAt: 1,
+    lastMonitorError: null,
+    lastPingAt: null,
+    lastRecoverAt: null,
+    lastRuntimeError: "FACILITY_WIFI_UNAVAILABLE",
+    monitoringMode: "foreground_service",
+    primaryControllerUserId: null,
+    primaryLeaseExpiresAt: null,
+    primaryLeaseSessionId: null,
+    sessionStatus: "recovering",
+    softApPassword: "A100-wifi",
+    softApRuntimeBaseUrl: "http://192.168.4.1",
+    softApSsid: "ColdGuard_A100",
+    updatedAt: 1,
+  });
+  mockGetNativeMonitoringServiceStatuses.mockResolvedValue({
+    "CG-ESP32-A100": {
+      controlRole: "primary",
+      deviceId: "CG-ESP32-A100",
+      error: "BLE_ONLY_DEGRADED_MONITORING",
+      isRunning: true,
+      primaryControllerUserId: "firebase-u1",
+      primaryLeaseExpiresAt: 99_999,
+      primaryLeaseSessionId: "lease-CG-ESP32-A100",
+      transport: "ble_fallback",
+    },
+  });
+
+  await expect(getDeviceRuntimeSession("CG-ESP32-A100")).resolves.toEqual(
+    expect.objectContaining({
+      activeTransport: "ble_fallback",
+      controlRole: "primary",
+      lastMonitorError: "BLE_ONLY_DEGRADED_MONITORING",
+      monitoringMode: "foreground_service",
+      primaryControllerUserId: "firebase-u1",
+      primaryLeaseExpiresAt: 99_999,
+      primaryLeaseSessionId: "lease-CG-ESP32-A100",
     }),
   );
 });

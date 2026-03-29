@@ -1,6 +1,6 @@
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
 import { DeviceCard } from "../../src/features/dashboard/components/device-card";
@@ -13,10 +13,19 @@ import { useTheme } from "../../src/theme/theme-provider";
 export default function DevicesScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createSharedStyles(colors), [colors]);
-  const { devices, error, isLoading, profile } = useDashboardContext();
+  const { devices, error, isLoading, isRefreshing, profile, refreshDevices } = useDashboardContext();
   const [nickname, setNickname] = useState("");
   const [qrPayload, setQrPayload] = useState("");
   const [message, setMessage] = useState<string | null>(null);
+
+  useFocusEffect(
+    useMemo(
+      () => () => {
+        void refreshDevices();
+      },
+      [refreshDevices],
+    ),
+  );
 
   if (error) {
     return (
@@ -60,7 +69,11 @@ export default function DevicesScreen() {
   }
 
   return (
-    <DashboardPage scroll testID="devices-scroll-view">
+    <DashboardPage
+      refreshControl={<RefreshControl onRefresh={() => void refreshDevices()} refreshing={isRefreshing} />}
+      scroll
+      testID="devices-scroll-view"
+    >
       <DashboardSection
         description={
           profile.role === "Supervisor"

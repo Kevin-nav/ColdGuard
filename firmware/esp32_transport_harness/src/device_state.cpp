@@ -51,6 +51,32 @@ String generateWifiPassword() {
   return password;
 }
 
+bool isUiWorkflowTransient(const String& workflowState) {
+  return workflowState == "pairing_success" ||
+         workflowState == "pairing_failed" ||
+         workflowState == "decommission_success";
+}
+
+String deriveSteadyUiWorkflow(const DeviceState& state) {
+  if (state.runtimePhase == "facility-wifi-failed" || state.lastErrorCode == "FACILITY_WIFI_CONNECT_FAILED") {
+    return "wifi_failed";
+  }
+  if (state.runtimePhase == "facility-wifi-connecting" ||
+      state.runtimePhase == "facility-wifi-provisioning") {
+    return "wifi_setup";
+  }
+  if (state.runtimePhase == "facility-wifi-retrying") {
+    return "wifi_retry";
+  }
+  if (state.enrollmentState == "enrolled") {
+    return "paired_idle";
+  }
+  if (state.enrollmentReady) {
+    return "token_ready";
+  }
+  return "blank_idle";
+}
+
 }  // namespace
 
 String formatMacAddress(uint64_t mac) {
@@ -200,6 +226,50 @@ void saveDeviceState(Preferences& preferences, const DeviceState& state) {
   preferences.putUInt("grantVer", state.grantVersion);
 }
 
+void setDeviceUiWorkflow(
+  DeviceState* state,
+  const String& workflowState,
+  const String& detail,
+  const String& errorCode,
+  unsigned long visibleForMs) {
+  if (state == nullptr) {
+    return;
+  }
+
+  state->uiWorkflowState = workflowState;
+  state->uiWorkflowDetail = detail;
+  state->uiWorkflowErrorCode = errorCode;
+  state->uiWorkflowChangedAtMs = millis();
+  state->uiWorkflowVisibleUntilMs = visibleForMs > 0 ? millis() + visibleForMs : 0;
+}
+
+void syncDeviceUiWorkflow(DeviceState* state) {
+  if (state == nullptr) {
+    return;
+  }
+
+  const unsigned long nowMs = millis();
+  if (isUiWorkflowTransient(state->uiWorkflowState) &&
+      state->uiWorkflowVisibleUntilMs > 0 &&
+      static_cast<long>(nowMs - state->uiWorkflowVisibleUntilMs) <= 0) {
+    return;
+  }
+
+  const String nextWorkflow = deriveSteadyUiWorkflow(*state);
+  if (state->uiWorkflowState == nextWorkflow &&
+      state->uiWorkflowDetail.isEmpty() &&
+      state->uiWorkflowErrorCode.isEmpty() &&
+      state->uiWorkflowVisibleUntilMs == 0) {
+    return;
+  }
+
+  state->uiWorkflowState = nextWorkflow;
+  state->uiWorkflowDetail = "";
+  state->uiWorkflowErrorCode = "";
+  state->uiWorkflowVisibleUntilMs = 0;
+  state->uiWorkflowChangedAtMs = nowMs;
+}
+
 void clearEnrollmentState(DeviceState* state) {
   state->enrollmentState = "blank";
   state->institutionId = "";
@@ -219,6 +289,7 @@ void clearEnrollmentState(DeviceState* state) {
   state->facilityWifiPassword = "";
   state->runtimeServerStarted = false;
   state->stationConnected = false;
+  syncDeviceUiWorkflow(state);
 }
 
 void clearPrimaryLeaseState(DeviceState* state) {
@@ -234,6 +305,7 @@ void prepareNewEnrollment(DeviceState* state) {
   clearEnrollmentState(state);
   state->bootstrapToken = generateBootstrapToken();
   state->enrollmentReady = true;
+  setDeviceUiWorkflow(state, "token_ready");
 }
 
 }  // namespace coldguard

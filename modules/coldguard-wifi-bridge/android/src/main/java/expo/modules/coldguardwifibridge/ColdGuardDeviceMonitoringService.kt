@@ -230,22 +230,59 @@ class ColdGuardDeviceMonitoringService : Service() {
       val nextOptions = currentOptions.copy(
         primaryLeaseSessionId = leaseStatus.primaryLeaseSessionId ?: currentOptions.primaryLeaseSessionId,
       )
+      val runtimePoll = try {
+        resolveRuntimePoll(nextOptions, revision)
+      } catch (error: StalePollException) {
+        throw error
+      } catch (_: Exception) {
+        null
+      }
+
+      if (runtimePoll != null) {
+        ensureCurrentRevision(currentOptions.deviceId, revision)
+        postHeartbeat(runtimePoll.runtimeBaseUrl, runtimePoll.network)
+        val nextAlertCursors = notifyAlerts(
+          currentOptions.deviceId,
+          runtimePoll.alerts,
+          activeAlertCursors,
+        )
+        updateStatus(
+          MonitoringStatus(
+            controlRole = leaseStatus.controlRole,
+            deviceId = currentOptions.deviceId,
+            error = null,
+            isRunning = true,
+            primaryControllerUserId = leaseStatus.primaryControllerUserId,
+            primaryLeaseExpiresAt = leaseStatus.primaryLeaseExpiresAt,
+            primaryLeaseSessionId = leaseStatus.primaryLeaseSessionId,
+            transport = runtimePoll.transport,
+          )
+        )
+        updateOngoingNotification()
+        return MonitoredPollResult(
+          activeAlertCursors = nextAlertCursors,
+          options = runtimePoll.nextOptions.copy(
+            primaryLeaseSessionId = leaseStatus.primaryLeaseSessionId ?: runtimePoll.nextOptions.primaryLeaseSessionId,
+          ),
+        )
+      }
+
       updateStatus(
         MonitoringStatus(
           controlRole = leaseStatus.controlRole,
           deviceId = currentOptions.deviceId,
-          error = null,
+          error = "BLE_ONLY_DEGRADED_MONITORING",
           isRunning = true,
           primaryControllerUserId = leaseStatus.primaryControllerUserId,
           primaryLeaseExpiresAt = leaseStatus.primaryLeaseExpiresAt,
           primaryLeaseSessionId = leaseStatus.primaryLeaseSessionId,
-          transport = currentOptions.transport,
+          transport = "ble_fallback",
         )
       )
       updateOngoingNotification()
       return MonitoredPollResult(
         activeAlertCursors = activeAlertCursors.toMutableSet(),
-        options = nextOptions,
+        options = nextOptions.copy(transport = "ble_fallback"),
       )
     } catch (_: StalePollException) {
       return MonitoredPollResult(

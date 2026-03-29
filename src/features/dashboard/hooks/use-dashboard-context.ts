@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuthSession } from "../../auth/providers/auth-provider";
 import { type DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
 import { type ProfileSnapshot } from "../../../lib/storage/sqlite/profile-repository";
@@ -11,6 +11,7 @@ type DashboardContextState = {
   devices: DeviceRecord[];
   error: string | null;
   isLoading: boolean;
+  isRefreshing: boolean;
   profile: ProfileSnapshot | null;
   refreshDevices: () => Promise<void>;
   safeCount: number;
@@ -24,32 +25,32 @@ export function useDashboardContext(): DashboardContextState {
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [screenError, setScreenError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [refreshNonce, setRefreshNonce] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    async function loadDashboardContext() {
+  const loadDashboardContext = useCallback(
+    async (mode: "initial" | "refresh" = "initial") => {
       if (bootstrapError) {
-        if (isMounted) {
-          setScreenError(bootstrapError);
-          setIsLoading(false);
-        }
+        setScreenError(bootstrapError);
+        setIsLoading(false);
+        setIsRefreshing(false);
         return;
       }
 
       if (!isReady) return;
 
       if (!user?.uid) {
-        if (isMounted) {
-          setProfile(null);
-          setDevices([]);
-          setIsLoading(false);
-        }
+        setProfile(null);
+        setDevices([]);
+        setIsLoading(false);
+        setIsRefreshing(false);
         return;
       }
 
-      setIsLoading(true);
+      if (mode === "refresh") {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
       setScreenError(null);
 
       try {
@@ -59,32 +60,38 @@ export function useDashboardContext(): DashboardContextState {
           displayName: user.displayName,
         });
 
-        if (!isMounted) return;
         setProfile(nextProfile);
 
         if (!nextProfile?.institutionName) {
           setDevices([]);
-          setIsLoading(false);
           return;
         }
 
         const nextDevices = await syncVisibleDevices(nextProfile);
-        if (!isMounted) return;
         setDevices(nextDevices);
       } catch (error) {
-        if (!isMounted) return;
         setScreenError(error instanceof Error ? error.message : "Dashboard data could not be loaded.");
       } finally {
-        if (isMounted) setIsLoading(false);
+        setIsLoading(false);
+        setIsRefreshing(false);
       }
-    }
+    },
+    [bootstrapError, isReady, user?.displayName, user?.email, user?.uid],
+  );
 
-    void loadDashboardContext();
+  useEffect(() => {
+    let isMounted = true;
+    void (async () => {
+      await loadDashboardContext("initial");
+      if (!isMounted) {
+        return;
+      }
+    })();
 
     return () => {
       isMounted = false;
     };
-  }, [bootstrapError, isReady, refreshNonce, user?.displayName, user?.email, user?.uid]);
+  }, [loadDashboardContext]);
 
   const counts = useMemo(
     () => ({
@@ -100,10 +107,9 @@ export function useDashboardContext(): DashboardContextState {
     devices,
     error: screenError,
     isLoading,
+    isRefreshing,
     profile,
-    refreshDevices: async () => {
-      setRefreshNonce((current) => current + 1);
-    },
+    refreshDevices: async () => await loadDashboardContext("refresh"),
     safeCount: counts.safeCount,
     warningCount: counts.warningCount,
   };

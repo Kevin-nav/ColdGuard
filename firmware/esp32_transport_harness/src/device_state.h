@@ -31,6 +31,9 @@ struct DeviceState {
   String facilityWifiPassword;
   String lastVerifiedPermission;
   String runtimePhase = "idle";
+  String uiWorkflowState = "blank_idle";
+  String uiWorkflowDetail;
+  String uiWorkflowErrorCode;
   String primaryControllerUserId;
   String primaryControllerClientId;
   String primaryLeaseSessionId;
@@ -43,6 +46,8 @@ struct DeviceState {
   unsigned long lastHeartbeatAtMs = 0;
   unsigned long lastStationConnectAttemptMs = 0;
   unsigned long runtimePhaseChangedAtMs = 0;
+  unsigned long uiWorkflowChangedAtMs = 0;
+  unsigned long uiWorkflowVisibleUntilMs = 0;
   unsigned long stationConnectDeadlineMs = 0;
   uint64_t lastDeviceNonceIssuedAtMs = 0;
   bool accessPointStarted = false;
@@ -64,6 +69,13 @@ uint64_t currentDeviceTimeMs();
 String buildAdvertisementPayload(const DeviceState& state, uint8_t protocolVersion);
 void loadDeviceState(Preferences& preferences, const char* preferencesNamespace, DeviceState* state);
 void saveDeviceState(Preferences& preferences, const DeviceState& state);
+void setDeviceUiWorkflow(
+  DeviceState* state,
+  const String& workflowState,
+  const String& detail = "",
+  const String& errorCode = "",
+  unsigned long visibleForMs = 0);
+void syncDeviceUiWorkflow(DeviceState* state);
 void clearEnrollmentState(DeviceState* state);
 void clearPrimaryLeaseState(DeviceState* state);
 void prepareNewEnrollment(DeviceState* state);

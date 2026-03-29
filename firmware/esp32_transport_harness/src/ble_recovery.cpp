@@ -289,6 +289,20 @@ String buildErrorResponse(
          "}";
 }
 
+String buildWorkflowErrorResponse(
+  DeviceState* state,
+  const String& workflowState,
+  const String& command,
+  const String& requestId,
+  const String& errorCode,
+  const String& message,
+  unsigned long visibleForMs = 0) {
+  if (state != nullptr) {
+    setDeviceUiWorkflow(state, workflowState, message, errorCode, visibleForMs);
+  }
+  return buildErrorResponse(state, command, requestId, errorCode, message);
+}
+
 String buildHelloResponse(DeviceState* state, const String& requestId, const BleRecoveryConfig& config) {
   const uint64_t efuseMac = ESP.getEfuseMac();
   const uint64_t deviceTimeMs = currentDeviceTimeMs();
@@ -559,22 +573,47 @@ String handleEnrollBegin(
 
   if (incomingDeviceId != state->deviceId || incomingBootstrapToken != state->bootstrapToken) {
     debugBleRecovery("enroll.begin rejected: bootstrap/device mismatch");
-    return buildErrorResponse(state, "enroll.begin", requestId, "ENROLLMENT_BOOTSTRAP_INVALID", "Bootstrap token or device id did not match.");
+    return buildWorkflowErrorResponse(
+      state,
+      "pairing_failed",
+      "enroll.begin",
+      requestId,
+      "ENROLLMENT_BOOTSTRAP_INVALID",
+      "Bootstrap token or device id did not match.");
   }
 
   if (incomingInstitutionId.isEmpty()) {
     debugBleRecovery("enroll.begin rejected: institution missing");
-    return buildErrorResponse(state, "enroll.begin", requestId, "INSTITUTION_REQUIRED", "Institution id is required for enrollment.");
+    return buildWorkflowErrorResponse(
+      state,
+      "pairing_failed",
+      "enroll.begin",
+      requestId,
+      "INSTITUTION_REQUIRED",
+      "Institution id is required for enrollment.");
   }
 
   if (incomingHandshakeToken.isEmpty()) {
     debugBleRecovery("enroll.begin rejected: handshake token missing");
-    return buildErrorResponse(state, "enroll.begin", requestId, "HANDSHAKE_TOKEN_REQUIRED", "Handshake token is required for enrollment.");
+    return buildWorkflowErrorResponse(
+      state,
+      "pairing_failed",
+      "enroll.begin",
+      requestId,
+      "HANDSHAKE_TOKEN_REQUIRED",
+      "Handshake token is required for enrollment.");
   }
 
+  setDeviceUiWorkflow(state, "secure_verification", "Checking secure pairing");
   if (!verifyHandshakeProofWithToken(incomingHandshakeToken, *state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
     debugBleRecovery("enroll.begin rejected: handshake proof invalid");
-    return buildErrorResponse(state, "enroll.begin", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+    return buildWorkflowErrorResponse(
+      state,
+      "pairing_failed",
+      "enroll.begin",
+      requestId,
+      "HANDSHAKE_PROOF_INVALID",
+      "Handshake proof did not validate.");
   }
   debugBleRecovery("enroll.begin handshake proof passed");
 
@@ -589,7 +628,13 @@ String handleEnrollBegin(
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
     debugBleRecovery("enroll.begin rejected: action ticket invalid");
-    return buildErrorResponse(state, "enroll.begin", requestId, "ENROLLMENT_TICKET_INVALID", "Supervisor enrollment action ticket verification failed.");
+    return buildWorkflowErrorResponse(
+      state,
+      "pairing_failed",
+      "enroll.begin",
+      requestId,
+      "ENROLLMENT_TICKET_INVALID",
+      "Supervisor enrollment action ticket verification failed.");
   }
   debugBleRecovery("enroll.begin action ticket passed");
 
@@ -598,6 +643,7 @@ String handleEnrollBegin(
   state->pendingEnrollment.nickname = incomingNickname;
   state->pendingEnrollment.handshakeToken = incomingHandshakeToken;
   state->pendingEnrollment.grantVersion = nextGrantVersion;
+  setDeviceUiWorkflow(state, "saving_enrollment", "Saving device setup");
   debugBleRecovery("enroll.begin completed: pending state staged");
 
   return "{"
@@ -618,9 +664,16 @@ String handleEnrollCommit(
   debugBleRecovery("enter enroll.commit requestId=" + requestId);
   if (!state->pendingEnrollment.active) {
     debugBleRecovery("enroll.commit rejected: no pending enrollment");
-    return buildErrorResponse(state, "enroll.commit", requestId, "NO_PENDING_ENROLLMENT", "Call enroll.begin before enroll.commit.");
+    return buildWorkflowErrorResponse(
+      state,
+      "pairing_failed",
+      "enroll.commit",
+      requestId,
+      "NO_PENDING_ENROLLMENT",
+      "Call enroll.begin before enroll.commit.");
   }
 
+  setDeviceUiWorkflow(state, "saving_enrollment", "Saving device setup");
   state->enrollmentState = "enrolled";
   state->enrollmentReady = false;
   state->institutionId = state->pendingEnrollment.institutionId;
@@ -633,6 +686,7 @@ String handleEnrollCommit(
   if (deferredActions != nullptr) {
     deferredActions->restartAdvertising = true;
   }
+  setDeviceUiWorkflow(state, "pairing_success", "Pairing complete", "", 3000UL);
   debugBleRecovery("enroll.commit completed: advertising restart deferred until after response");
 
   return "{"
@@ -797,10 +851,17 @@ String handleDecommission(
   const String handshakeProof = getJsonString(payload, "handshakeProof");
   const long long proofTimestamp = getJsonInt64(payload, "proofTimestamp", 0);
 
+  setDeviceUiWorkflow(state, "decommissioning", "Clearing device setup");
   uint32_t nextGrantVersion = 0;
   if (!verifyHandshakeProof(*state, handshakeProof, proofTimestamp, config.proofWindowMs)) {
     debugBleRecovery("device.decommission rejected: handshake proof invalid");
-    return buildErrorResponse(state, "device.decommission", requestId, "HANDSHAKE_PROOF_INVALID", "Handshake proof did not validate.");
+    return buildWorkflowErrorResponse(
+      state,
+      "paired_idle",
+      "device.decommission",
+      requestId,
+      "HANDSHAKE_PROOF_INVALID",
+      "Handshake proof did not validate.");
   }
 
   if (!verifyActionTicket(
@@ -813,17 +874,30 @@ String handleDecommission(
         config.actionTicketMasterKey,
         &nextGrantVersion)) {
     debugBleRecovery("device.decommission rejected: action ticket invalid");
-    return buildErrorResponse(state, "device.decommission", requestId, "ACTION_TICKET_INVALID", "Supervisor decommission action ticket verification failed.");
+    return buildWorkflowErrorResponse(
+      state,
+      "paired_idle",
+      "device.decommission",
+      requestId,
+      "ACTION_TICKET_INVALID",
+      "Supervisor decommission action ticket verification failed.");
   }
 
   if (nextGrantVersion < state->grantVersion) {
     debugBleRecovery("device.decommission rejected: stale grant");
-    return buildErrorResponse(state, "device.decommission", requestId, "GRANT_STALE", "Supervisor grant is stale or rotated.");
+    return buildWorkflowErrorResponse(
+      state,
+      "paired_idle",
+      "device.decommission",
+      requestId,
+      "GRANT_STALE",
+      "Supervisor grant is stale or rotated.");
   }
 
   debugBleRecovery("device.decommission clearing enrollment state");
   stopSoftAp(webServer, state);
   clearEnrollmentState(state);
+  setDeviceUiWorkflow(state, "decommission_success", "Device cleared", "", 3000UL);
   saveDeviceState(preferences, *state);
   if (deferredActions != nullptr) {
     deferredActions->restartAdvertising = true;

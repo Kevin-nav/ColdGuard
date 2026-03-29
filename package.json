@@ -11,6 +11,9 @@
     "ios:dev-client": "expo run:ios",
     "web": "expo start --web",
     "test": "jest --runInBand",
+    "test:native:android": "node scripts/run-android-native-tests.mjs",
+    "test:firmware:compile": "node scripts/run-firmware-compile.mjs",
+    "test:device-stack": "npm run test:native:android && npm run test:firmware:compile",
     "lint": "expo lint"
   },
   "dependencies": {

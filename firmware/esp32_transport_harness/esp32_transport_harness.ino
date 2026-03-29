@@ -132,6 +132,9 @@ class ServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* server) override {
     (void)server;
     Serial.println("[BLE_DEBUG] central connected");
+    if (deviceState.enrollmentReady && deviceState.enrollmentState == "blank") {
+      coldguard::setDeviceUiWorkflow(&deviceState, "waiting_for_phone");
+    }
   }
 
   void onDisconnect(BLEServer* server) override {
@@ -142,6 +145,7 @@ class ServerCallbacks : public BLEServerCallbacks {
       Serial.println("[BLE_DEBUG] central disconnected; resuming advertising");
     }
     pendingAdvertisingRefreshOnDisconnect = false;
+    coldguard::syncDeviceUiWorkflow(&deviceState);
     coldguard::restartAdvertising(advertising, deviceState, kServiceUuid, kProtocolVersion);
   }
 };
@@ -219,10 +223,12 @@ void setup() {
   Serial.println(String("Enrollment Link: ") + coldguard::buildEnrollmentLink(deviceState));
   Serial.println(String("BLE Name: ") + deviceState.bleName);
   Serial.println(String("MAC: ") + deviceState.macAddress);
+  Serial.println(String("UI Workflow: ") + deviceState.uiWorkflowState);
 }
 
 void loop() {
   coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
+  coldguard::syncDeviceUiWorkflow(&deviceState);
   coldguard::tickDeviceUi(&deviceState, preferences, webServer, advertising);
   if (deviceState.accessPointStarted || deviceState.stationConnected) {
     webServer.handleClient();

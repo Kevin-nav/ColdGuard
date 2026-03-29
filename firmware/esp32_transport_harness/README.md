@@ -5,8 +5,12 @@ Use `esp32_transport_harness.ino` as the local firmware target for ColdGuard BLE
 Setup notes:
 - the device prints `Device ID` and a ready-to-scan `Enrollment Link` to Serial on boot
 - the raw `Bootstrap Token` remains redacted unless you explicitly enable verbose secret logging
-- pairing now requires the device to be put into `New enrollment` mode from the on-device LCD menu first
+- pairing now requires the device to be put into `Pair new device` mode from the on-device OLED menu first
 - the QR payload must use the current enrollment link for that menu session, not a shared default token
+- accepted pairing entry links are limited to:
+  - `https://coldguard.org/device/<deviceId>?claim=<bootstrapToken>&v=1`
+  - `coldguard://device/<deviceId>?claim=<bootstrapToken>&v=1`
+- the local `http://192.168.4.1/...` URL is not a pairing QR or pairing entry link; it is only used after BLE handoff for SoftAP/runtime access
 - local recovery commands now expect backend-issued `actionTicket` payloads instead of ES256 `grantToken` strings
 - the harness currently verifies those tickets with a shared harness master key and should be treated as transitional until per-device secret provisioning is added
 - the sketch is split into `src/device_state.*`, `src/action_ticket.*`, `src/ble_recovery.*`, `src/device_ui.*`, and `src/wifi_runtime.*` so production recovery logic can evolve without growing one monolithic `.ino`
@@ -27,7 +31,7 @@ Current local control behavior:
 - nav hold returns home or backs out of the current flow
 - select tap opens the menu from home, selects the current menu item, or advances detail pages
 - select hold confirms actions on confirm screens
-- `New enrollment`, `Clear Wi-Fi`, and `Factory reset` use explicit confirm screens
+- `Pair new device`, `Clear Wi-Fi`, and `Unpair device` use explicit confirm screens
 - the touch timing still uses roughly `200ms` debounce and `700ms` hold detection, but it is applied per touch role instead of one shared sensor path
 
 Current OLED and LED behavior:
@@ -57,10 +61,11 @@ Bench validation checklist:
 2. Confirm the OLED boots to a readable `OLED ready` frame and the home screen stays readable during runtime transitions.
 3. Confirm nav tap moves the menu cursor and detail pages, while nav hold returns home or backs out cleanly.
 4. Confirm select tap opens the menu from home and activates the current menu item.
-5. Confirm `New enrollment`, `Clear Wi-Fi`, and `Factory reset` each show a confirm screen before executing.
+5. Confirm `Pair new device`, `Clear Wi-Fi`, and `Unpair device` each show a confirm screen before executing.
 6. Confirm the OLED highlight, detail layout, and confirm prompt are readable on the SH1106 panel without flicker.
 7. Confirm the LED heartbeat, menu solid-on mode, enrollment-ready double pulse, pending transition pattern, and error triple-blink behave as expected.
-8. Run `New enrollment` and confirm OLED, LED overlay, `[UI]` screen/input/confirm logs, bootstrap token, and full enrollment link all update together.
+8. Run `Pair new device` and confirm OLED, LED overlay, `[UI]` screen/input/confirm logs, bootstrap token, and full enrollment link all update together.
+9. Run `Unpair device` and confirm the harness returns to blank state and requires a freshly issued pairing link before re-pairing.
 9. If the board inverts the built-in LED or needs touch threshold tuning, record the adjustment before wider flashing.
 
 For the full contract and test flow, see `docs/runbooks/esp32-transport-harness.md`.

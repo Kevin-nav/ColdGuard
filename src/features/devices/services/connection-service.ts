@@ -59,6 +59,7 @@ import {
   ensureSupervisorActionTicket,
   recordDeviceConnectionTest,
   registerEnrolledDevice,
+  syncVisibleDevices,
 } from "./device-directory";
 
 export type ConnectionTestPayload = DeviceRuntimeSnapshot;
@@ -731,6 +732,8 @@ export async function enrollColdGuardDevice(args: {
     protocolVersion: enrolledDevice.protocolVersion,
   });
 
+  await syncVisibleDevices(args.profile);
+
   await bootstrapDefaultDeviceMonitoring(enrolledDevice.deviceId);
 
   return registeredDevice;
@@ -935,7 +938,11 @@ export async function startDeviceMonitoring(deviceId: string): Promise<DeviceRun
   const softApRuntimeBaseUrl =
     config.softApRuntimeBaseUrl ??
     (config.activeTransport === "softap" ? config.activeRuntimeBaseUrl : null);
-  const monitoringTransport = config.activeTransport ?? "ble_fallback";
+  const monitoringTransport = hasProvenFacilityWifiPath(config)
+    ? "facility_wifi"
+    : config.activeTransport === "softap" && softApRuntimeBaseUrl
+      ? "softap"
+      : "ble_fallback";
   const controllerUserId = profile?.firebaseUid ?? "offline-user";
 
   const serviceStatuses = await startNativeMonitoringDevice({

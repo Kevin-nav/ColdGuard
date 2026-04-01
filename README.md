@@ -1,32 +1,45 @@
-# ColdGuard Mobile App
+# ColdGuard
 
-Expo React Native app for cold-chain monitoring workflows with Firebase authentication and Convex backend services.
+ColdGuard is a cold-chain monitoring platform built around an Expo React Native mobile app, a Convex backend, an Android native transport bridge, and ESP32 firmware for nearby enrollment and runtime monitoring.
+
+## Start Here
+
+- System overview: `docs/system-overview.md`
+- Firmware transport harness: `firmware/esp32_transport_harness/README.md`
+- Firmware contract and bench flow: `docs/runbooks/esp32-transport-harness.md`
+
+## What The App Does
+
+The current app supports:
+
+- Firebase authentication and Convex-backed user bootstrap
+- institution linking and local profile caching
+- supervisor-led device enrollment and assignment
+- secure BLE-first device authorization
+- Wi-Fi / SoftAP runtime connection tests and monitoring
+- Android foreground monitoring with BLE-primary lease ownership
+- incident inbox, local notifications, and push registration
+- SQLite-backed offline caching for devices, runtime state, and notification actions
+
+## Architecture Summary
+
+ColdGuard currently uses this split:
+
+- Firebase Auth: user identity
+- Convex: institutions, users, devices, assignments, tickets, incidents, and audit history
+- SecureStore: local secrets such as the clinic handshake token
+- SQLite: local cache for profile, device, monitoring, and notification state
+- BLE: discovery, secure control, and monitoring ownership
+- Wi-Fi / SoftAP: runtime status, alerts, heartbeats, and connection testing
+
+For the full explanation of how those pieces fit together, read `docs/system-overview.md`.
 
 ## Setup
 
-1. Install dependencies:
-   - `npm install`
-2. Create `.env.local` using `.env.example`.
-3. Ensure Convex project is initialized and run:
-   - `npx convex dev --once`
-4. Seed demo institutions and nurse credentials:
-   - `npx convex run seeds:seedDemoInstitutions`
-
-## Demo Institution Seeds
-
-After seeding, the onboarding flow has both QR and credential-based institution linking available.
-
-- `Korle-Bu Teaching Hospital`
-  - QR code: `coldguard://institution/korlebu-demo`
-  - Staff IDs: `KB1001`, `KB1002`
-- `Tamale Central Hospital`
-  - QR code: `coldguard://institution/tamale-demo`
-  - Staff IDs: `TM2001`, `TM2002`
-- `Ho Municipal Clinic`
-  - QR code: `coldguard://institution/ho-demo`
-  - Staff IDs: `HO3001`, `HO3002`
-
-Passcodes are seeded in `convex/seeds.ts` for local/demo onboarding.
+1. Install dependencies with `npm install`.
+2. Create `.env.local` from `.env.example`.
+3. Initialize Convex and run `npx convex dev --once`.
+4. Seed local demo data with `npx convex run seeds:seedDemoInstitutions`.
 
 ## Environment Variables
 
@@ -45,30 +58,35 @@ Required values are listed in `.env.example`:
 
 ## Scripts
 
-- `npm start` - start Expo dev server
-- `npm run android` - run Android build
-- `npm run ios` - run iOS build
-- `npm test` - run Jest tests
-- `npm run lint` - run Expo lint
+- `npm start`: start Expo dev server
+- `npm run start:dev-client`: start Expo for a development client build
+- `npm run android`: run Android build
+- `npm run ios`: run iOS build
+- `npm test`: run Jest tests
+- `npm run test:native:android`: run Android native bridge tests
+- `npm run test:firmware:compile`: compile the firmware target
+- `npm run test:device-stack`: run native Android tests and firmware compile
+- `npm run lint`: run lint checks
 
-## Current Milestone
+## Demo Institution Seeds
 
-Milestone 1 (Auth + Onboarding) implementation in progress.
-See:
-- `docs/plans/2026-03-04-coldguard-app-design.md`
-- `docs/plans/2026-03-04-coldguard-m1-auth-onboarding.md`
-- `docs/plans/2026-03-06-auth-institution-linking-design.md`
-- `docs/plans/2026-03-06-auth-institution-linking-plan.md`
-- `docs/plans/2026-03-06-token-first-dashboard-design.md`
-- `docs/plans/2026-03-06-token-first-dashboard-implementation.md`
-- `docs/runbooks/m1-auth-onboarding-qa.md`
+After seeding, the onboarding flow includes both QR institution selection and credential-based linking.
 
-## Dashboard UI Maintenance
+- `Korle-Bu Teaching Hospital`
+  - QR code: `coldguard://institution/korlebu-demo`
+  - Staff IDs: `KB1001`, `KB1002`
+- `Tamale Central Hospital`
+  - QR code: `coldguard://institution/tamale-demo`
+  - Staff IDs: `TM2001`, `TM2002`
+- `Ho Municipal Clinic`
+  - QR code: `coldguard://institution/ho-demo`
+  - Staff IDs: `HO3001`, `HO3002`
 
-The dashboard shell now follows a token-first, component-first structure:
+Passcodes are defined in `convex/seeds.ts` for local/demo onboarding.
 
-- raw design values live in `src/theme/tokens.ts`
-- shared token-backed styles live in `src/theme/shared-styles.ts`
-- reusable dashboard primitives live in `src/features/dashboard/components`
+## Repo Notes
 
-When changing the dashboard look and layout, update tokens and shared primitives first. Avoid adding page-local card, badge, section-header, or spacing treatments inside route files unless the pattern is truly one-off.
+- The main mobile app lives at the repo root.
+- `modules/coldguard-wifi-bridge/` contains the native Expo module used for Android transport and monitoring.
+- `firmware/` contains the ESP32 development target and profile guidance.
+- `coldguard-web/` contains the public/legal Next.js site, not the primary monitoring client.

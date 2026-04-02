@@ -8,6 +8,7 @@ import { getConvexClient } from "../../../lib/convex/client";
 import {
   getDeviceById,
   saveDeviceConnectionSnapshot,
+  upsertLocalQuickConnectDevice,
   updateDeviceConnectionSyncState,
   updateDeviceConnectionTestStatus,
 } from "../../../lib/storage/sqlite/device-repository";
@@ -1139,6 +1140,119 @@ export async function requestColdLaunchPermissions() {
   } catch {
     // Cold-launch permission preflight is best-effort. Enrollment and monitoring
     // remain the hard gates if the user declines here.
+  }
+}
+
+export async function quickConnectColdGuardDevice(args: {
+  deviceId: string;
+  nickname?: string;
+  password: string;
+  profile: ProfileSnapshot;
+  ssid: string;
+  wifiBridge?: ColdGuardWifiBridge;
+}) {
+  const deviceId = args.deviceId.trim();
+  const ssid = args.ssid.trim();
+  const password = args.password.trim();
+
+  if (!deviceId) {
+    throw new Error("DEVICE_ID_REQUIRED");
+  }
+
+  if (!ssid) {
+    throw new Error("SOFTAP_SSID_REQUIRED");
+  }
+
+  if (!password) {
+    throw new Error("SOFTAP_PASSWORD_REQUIRED");
+  }
+
+  await ensureWifiBridgePermissions();
+  const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
+  const runtimeBaseUrl = "http://192.168.4.1";
+  const network = await wifiBridge.connect({
+    expiresAt: Date.now() + 60_000,
+    password,
+    ssid,
+    testUrl: `${runtimeBaseUrl}/api/v1/connection-test`,
+  });
+
+  try {
+    const snapshotFromBridge = await tryFetchRuntimeSnapshotFromBridge({
+      localIp: network.localIp,
+      runtimeBaseUrl,
+      ssid,
+      transport: "softap",
+      wifiBridge,
+    });
+    const snapshot = snapshotFromBridge
+      ? snapshotFromBridge
+      : await fetchAndBuildRuntimeSnapshot({
+          localIp: network.localIp,
+          runtimeBaseUrl,
+          ssid,
+          transport: "softap",
+        });
+
+    await upsertLocalQuickConnectDevice({
+      currentTempC: snapshot.currentTempC,
+      deviceId,
+      firmwareVersion: snapshot.firmwareVersion,
+      institutionId: args.profile.institutionId,
+      institutionName: args.profile.institutionName,
+      lastSeenAt: snapshot.lastSeenAt,
+      latestSequence: snapshot.latestSequence,
+      macAddress: snapshot.macAddress || deviceId,
+      mktStatus: snapshot.mktStatus,
+      nickname: args.nickname?.trim() || deviceId,
+      recordedAt: snapshot.recordedAt,
+      rtcIso: snapshot.rtcIso,
+      timeSource: snapshot.timeSource,
+    });
+
+    await upsertDeviceRuntimeConfig(deviceId, {
+      activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+      activeTransport: "softap",
+      lastPingAt: snapshot.receivedAt,
+      lastRecoverAt: snapshot.receivedAt,
+      lastRuntimeError: null,
+      sessionStatus: "connected",
+      softApPassword: password,
+      softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+      softApSsid: ssid,
+    });
+
+    await saveDeviceConnectionSnapshot(deviceId, {
+      currentTempC: snapshot.currentTempC,
+      lastConnectionTestAt: snapshot.receivedAt,
+      lastConnectionTestStatus: "success",
+      lastSeenAt: snapshot.lastSeenAt,
+      macAddress: snapshot.macAddress,
+      mktStatus: snapshot.mktStatus,
+      recordedAt: snapshot.recordedAt,
+      rtcIso: snapshot.rtcIso,
+      sdCardMounted: false,
+      sequence: snapshot.latestSequence,
+      timeSource: snapshot.timeSource,
+    });
+
+    await syncTelemetryHistoryAfterSnapshot({
+      deviceId,
+      snapshot,
+      wifiBridge,
+    }).catch((error) => {
+      console.warn("Failed to sync quick-connect telemetry history.", {
+        deviceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+
+    return {
+      deviceId,
+      snapshot,
+    };
+  } finally {
+    await wifiBridge.release().catch(() => undefined);
   }
 }
 

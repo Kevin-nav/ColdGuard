@@ -6,6 +6,7 @@ import {
   enrollColdGuardDevice,
   getDeviceRuntimeSession,
   parseDeviceQrPayload,
+  quickConnectColdGuardDevice,
   retryPendingDeviceConnectionAuditSync,
   runColdGuardConnectionTest,
   startDeviceMonitoring,
@@ -23,6 +24,7 @@ const mockListPendingSyncJobs = jest.fn();
 const mockGetReadingsAfterSequenceForDevice = jest.fn();
 const mockSaveDeviceConnectionSnapshot = jest.fn();
 const mockSaveReadings = jest.fn();
+const mockUpsertLocalQuickConnectDevice = jest.fn();
 const mockSetSyncJobStatus = jest.fn();
 const mockUpdateDeviceConnectionSyncState = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
@@ -76,6 +78,7 @@ jest.mock("../../../lib/storage/sqlite/connection-grant-repository", () => ({
 jest.mock("../../../lib/storage/sqlite/device-repository", () => ({
   getDeviceById: (...args: unknown[]) => mockGetDeviceById(...args),
   saveDeviceConnectionSnapshot: (...args: unknown[]) => mockSaveDeviceConnectionSnapshot(...args),
+  upsertLocalQuickConnectDevice: (...args: unknown[]) => mockUpsertLocalQuickConnectDevice(...args),
   updateDeviceConnectionSyncState: (...args: unknown[]) => mockUpdateDeviceConnectionSyncState(...args),
   updateDeviceConnectionTestStatus: (...args: unknown[]) => mockUpdateDeviceConnectionTestStatus(...args),
 }));
@@ -193,6 +196,7 @@ beforeEach(() => {
   });
   mockRecordDeviceConnectionTest.mockResolvedValue(undefined);
   mockSaveDeviceConnectionSnapshot.mockResolvedValue(undefined);
+  mockUpsertLocalQuickConnectDevice.mockResolvedValue(undefined);
   mockUpdateDeviceConnectionSyncState.mockResolvedValue(undefined);
   mockWifiBridgeRelease.mockResolvedValue(undefined);
   mockEnqueueSyncJob.mockResolvedValue("sync-job-1");
@@ -293,6 +297,130 @@ test("rejects invalid device qr payloads", () => {
   expect(() => parseDeviceQrPayload("coldguard://institution/not-a-device")).toThrow(
     "INVALID_DEVICE_QR_PAYLOAD",
   );
+});
+
+test("quick connects over manual softap credentials and persists local runtime state", async () => {
+  mockFetch.mockClear();
+  mockGetReadingsAfterSequenceForDevice.mockResolvedValueOnce([
+    {
+      currentTempC: 4.7,
+      deviceId: "CG-ESP32-A100",
+      id: "CG-ESP32-A100:42",
+      institutionName: "Korle-Bu",
+      mktStatus: "safe",
+      recordedAt: 1_000_000,
+      rtcIso: "2026-04-01T00:00:00.000Z",
+      sequence: 42,
+      timeSource: "rtc",
+    },
+  ]);
+  mockGetReadingsAfterSequenceForDevice.mockResolvedValueOnce([]);
+
+  const result = await quickConnectColdGuardDevice({
+    deviceId: "CG-ESP32-A100",
+    nickname: "Cold Room Alpha",
+    password: "demo-pass-1",
+    profile: {
+      displayName: "Yaw Boateng",
+      email: "yaw@example.com",
+      firebaseUid: "firebase-u1",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu",
+      lastUpdatedAt: 1,
+      role: "Supervisor",
+      staffId: "KB1001",
+    },
+    ssid: "ColdGuard_A100",
+    wifiBridge: {
+      connect: async () => ({
+        localIp: "192.168.4.2",
+        ssid: "ColdGuard_A100",
+      }),
+      fetchRuntimeSnapshot: async () => ({
+        alertsJson: "{\"alerts\":[]}",
+        historyJson: "{\"hasMore\":false,\"nextSequence\":42,\"rows\":[]}",
+        runtimeBaseUrl: "http://192.168.4.1",
+        statusJson:
+          "{\"currentTempC\":4.7,\"deviceId\":\"CG-ESP32-A100\",\"firmwareVersion\":\"fw-1.0.0\",\"latestSequence\":42,\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"nickname\":\"Cold Room Alpha\",\"recordedAt\":1000000,\"rtcIso\":\"2026-04-01T00:00:00.000Z\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Quick connect ready.\",\"timeSource\":\"rtc\"}",
+      }),
+      release: async () => mockWifiBridgeRelease(),
+    },
+  });
+
+  expect(result).toEqual(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      snapshot: expect.objectContaining({
+        runtimeBaseUrl: "http://192.168.4.1",
+        transport: "softap",
+      }),
+    }),
+  );
+  expect(mockUpsertLocalQuickConnectDevice).toHaveBeenCalledWith(
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      firmwareVersion: "fw-1.0.0",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu",
+      nickname: "Cold Room Alpha",
+    }),
+  );
+  expect(mockUpsertDeviceRuntimeConfig).toHaveBeenCalledWith(
+    "CG-ESP32-A100",
+    expect.objectContaining({
+      activeTransport: "softap",
+      softApPassword: "demo-pass-1",
+      softApSsid: "ColdGuard_A100",
+    }),
+  );
+  expect(mockSaveDeviceConnectionSnapshot).toHaveBeenCalledWith(
+    "CG-ESP32-A100",
+    expect.objectContaining({
+      currentTempC: 4.7,
+      lastConnectionTestStatus: "success",
+      sequence: 42,
+    }),
+  );
+  expect(mockConvexMutation).toHaveBeenCalledWith(
+    expect.anything(),
+    expect.objectContaining({
+      deviceId: "CG-ESP32-A100",
+      readings: [
+        expect.objectContaining({
+          sequence: 42,
+          vaccineTempC: 4.7,
+        }),
+      ],
+    }),
+  );
+  expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
+});
+
+test("rejects quick connect when the device id is missing", async () => {
+  await expect(
+    quickConnectColdGuardDevice({
+      deviceId: "   ",
+      password: "demo-pass-1",
+      profile: {
+        displayName: "Yaw Boateng",
+        email: "yaw@example.com",
+        firebaseUid: "firebase-u1",
+        institutionId: "institution-1",
+        institutionName: "Korle-Bu",
+        lastUpdatedAt: 1,
+        role: "Supervisor",
+        staffId: "KB1001",
+      },
+      ssid: "ColdGuard_A100",
+      wifiBridge: {
+        connect: async () => ({
+          localIp: "192.168.4.2",
+          ssid: "ColdGuard_A100",
+        }),
+        release: async () => undefined,
+      },
+    }),
+  ).rejects.toThrow("DEVICE_ID_REQUIRED");
 });
 
 test("enrolls a blank mock device and registers it", async () => {

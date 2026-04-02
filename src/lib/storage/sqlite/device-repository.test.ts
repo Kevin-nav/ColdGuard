@@ -3,6 +3,7 @@ import {
   getDevicesForInstitution,
   replaceCachedDevicesForInstitution,
   saveDevicesForInstitution,
+  upsertLocalQuickConnectDevice,
   updateDeviceConnectionSyncState,
   updateDeviceConnectionTestStatus,
 } from "./device-repository";
@@ -45,10 +46,10 @@ test("saves legacy seeded devices for an institution", async () => {
   expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
     1,
-    "DELETE FROM devices WHERE institution_id = ?",
+    "DELETE FROM devices WHERE institution_id = ? AND local_access_mode != 'quick_connect'",
     "Korle-Bu Teaching Hospital",
   );
-  expect(mockRunAsync.mock.calls[1][0]).toContain("INSERT INTO devices");
+  expect(mockRunAsync.mock.calls[1][0]).toContain("INSERT OR REPLACE INTO devices");
 });
 
 test("replaces cached backend-backed devices for an institution", async () => {
@@ -89,7 +90,7 @@ test("replaces cached backend-backed devices for an institution", async () => {
   expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
   expect(mockRunAsync).toHaveBeenNthCalledWith(
     1,
-    "DELETE FROM devices WHERE institution_id = ?",
+    "DELETE FROM devices WHERE institution_id = ? AND local_access_mode != 'quick_connect'",
     "institution-1",
   );
 });
@@ -134,7 +135,9 @@ test("propagates insert failures from the transaction helper", async () => {
   ).rejects.toThrow("insert failed");
 
   expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
-  expect(mockRunAsync.mock.calls[0][0]).toBe("DELETE FROM devices WHERE institution_id = ?");
+  expect(mockRunAsync.mock.calls[0][0]).toBe(
+    "DELETE FROM devices WHERE institution_id = ? AND local_access_mode != 'quick_connect'",
+  );
 });
 
 test("loads devices by institution id and queries legacy empty-string rows", async () => {
@@ -155,6 +158,7 @@ test("loads devices by institution id and queries legacy empty-string rows", asy
       viewer_names_json: "[\"Mariam Fuseini\"]",
       current_temp_c: 4.5,
       mkt_status: "safe",
+      local_access_mode: "managed",
       latest_sequence: 1,
       recorded_at: 1000,
       rtc_iso: "2026-04-01T00:00:00.000Z",
@@ -186,6 +190,7 @@ test("loads devices by institution id and queries legacy empty-string rows", asy
     "institution-1",
     "institution-1",
   );
+  expect(mockGetAllAsync.mock.calls[0][0]).toContain("local_access_mode = 'quick_connect'");
 });
 
 test("loads a single device by id", async () => {
@@ -203,14 +208,15 @@ test("loads a single device by id", async () => {
     primary_assignee_name: null,
     primary_assignee_staff_id: null,
     viewer_names_json: "[]",
-      current_temp_c: 4.5,
-      mkt_status: "safe",
-      latest_sequence: 1,
-      recorded_at: 1000,
-      rtc_iso: "2026-04-01T00:00:00.000Z",
-      time_source: "rtc",
-      sd_card_mounted: 0,
-      last_seen_at: 1000,
+    local_access_mode: "managed",
+    current_temp_c: 4.5,
+    mkt_status: "safe",
+    latest_sequence: 1,
+    recorded_at: 1000,
+    rtc_iso: "2026-04-01T00:00:00.000Z",
+    time_source: "rtc",
+    sd_card_mounted: 0,
+    last_seen_at: 1000,
     last_connection_test_at: null,
     last_connection_test_status: null,
     last_connection_sync_status: "idle",
@@ -244,6 +250,7 @@ test("loads a single device by id with legacy institution normalization when ins
     primary_assignee_name: null,
     primary_assignee_staff_id: null,
     viewer_names_json: "[]",
+    local_access_mode: "quick_connect",
     current_temp_c: 4.5,
     mkt_status: "safe",
     latest_sequence: 1,
@@ -264,8 +271,8 @@ test("loads a single device by id with legacy institution normalization when ins
 
   expect(mockGetFirstAsync).toHaveBeenCalledWith(
     expect.stringContaining("COALESCE(NULLIF(institution_id, ''), ?) AS institution_id"),
-    "institution-1",
     "d1",
+    "institution-1",
   );
 });
 
@@ -300,5 +307,92 @@ test("updates cached connection sync status", async () => {
     "record_connection_test",
     "convex unavailable",
     "device-1",
+  );
+});
+
+test("upserts a local quick-connect device into the shared cache", async () => {
+  mockGetFirstAsync
+    .mockResolvedValueOnce(null)
+    .mockResolvedValueOnce({
+      id: "CG-ESP32-A100",
+      institution_id: "institution-1",
+      institution_name: "Korle-Bu Teaching Hospital",
+      nickname: "Demo Cold Room",
+      mac_address: "CG-ESP32-A100",
+      firmware_version: "quick-connect",
+      protocol_version: 1,
+      device_status: "enrolled",
+      grant_version: 1,
+      access_role: "viewer",
+      local_access_mode: "quick_connect",
+      primary_assignee_name: null,
+      primary_assignee_staff_id: null,
+      viewer_names_json: "[]",
+      current_temp_c: 0,
+      mkt_status: "safe",
+      latest_sequence: 0,
+      recorded_at: 5000,
+      rtc_iso: null,
+      time_source: "unknown",
+      sd_card_mounted: 0,
+      last_seen_at: 5000,
+      last_connection_test_at: null,
+      last_connection_test_status: "idle",
+      last_connection_sync_status: "idle",
+      last_connection_sync_updated_at: null,
+      last_connection_sync_failure_stage: null,
+      last_connection_sync_error: null,
+    });
+
+  await expect(
+    upsertLocalQuickConnectDevice({
+      deviceId: "CG-ESP32-A100",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      lastSeenAt: 5000,
+      latestSequence: 0,
+      nickname: "Demo Cold Room",
+      recordedAt: 5000,
+    }),
+  ).resolves.toEqual(
+    expect.objectContaining({
+      id: "CG-ESP32-A100",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      localAccessMode: "quick_connect",
+      nickname: "Demo Cold Room",
+    }),
+  );
+
+  expect(mockRunAsync).toHaveBeenCalledWith(
+    expect.stringContaining("INSERT OR REPLACE INTO devices"),
+    "CG-ESP32-A100",
+    "institution-1",
+    "Korle-Bu Teaching Hospital",
+    "Demo Cold Room",
+    "CG-ESP32-A100",
+    "quick-connect",
+    1,
+    "enrolled",
+    1,
+    "viewer",
+    "quick_connect",
+    null,
+    null,
+    "[]",
+    0,
+    "safe",
+    0,
+    5000,
+    null,
+    "unknown",
+    0,
+    5000,
+    null,
+    "idle",
+    "idle",
+    null,
+    null,
+    null,
   );
 });

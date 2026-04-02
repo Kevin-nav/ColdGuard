@@ -73,6 +73,28 @@ export async function getRecentReadingsForInstitution(
   return rows.map(mapReadingRow);
 }
 
+export async function getRecentReadingsForDevice(
+  deviceId: string,
+  limit = 12,
+): Promise<ReadingRecord[]> {
+  const database = await initializeSQLite();
+  const rows = await database.getAllAsync<ReadingRow>(
+    `
+      SELECT
+        id, institution_name, device_id, sequence, recorded_at, rtc_iso, time_source, current_temp_c, mkt_status,
+        sd_card_mounted
+      FROM readings
+      WHERE device_id = ?
+      ORDER BY recorded_at DESC, sequence DESC
+      LIMIT ?
+    `,
+    deviceId,
+    limit,
+  );
+
+  return rows.map(mapReadingRow);
+}
+
 export async function getReadingsAfterSequenceForDevice(
   deviceId: string,
   afterSequence: number,

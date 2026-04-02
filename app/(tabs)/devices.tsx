@@ -8,6 +8,7 @@ import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
 import { useRefreshOnTabFocus } from "../../src/features/dashboard/hooks/use-refresh-on-tab-focus";
 import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
+import { quickConnectColdGuardDevice } from "../../src/features/devices/services/quick-connect";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
 
@@ -15,8 +16,12 @@ export default function DevicesScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createSharedStyles(colors), [colors]);
   const { devices, error, isLoading, isRefreshing, profile, refreshDevices } = useDashboardContext();
+  const [deviceId, setDeviceId] = useState("");
   const [nickname, setNickname] = useState("");
+  const [password, setPassword] = useState("");
   const [qrPayload, setQrPayload] = useState("");
+  const [softApSsid, setSoftApSsid] = useState("");
+  const [isQuickConnecting, setIsQuickConnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useRefreshOnTabFocus(refreshDevices);
@@ -38,6 +43,31 @@ export default function DevicesScreen() {
         <ActivityIndicator color={colors.primary} />
       </DashboardPage>
     );
+  }
+
+  async function handleQuickConnect() {
+    if (!profile) {
+      return;
+    }
+
+    setIsQuickConnecting(true);
+    setMessage(null);
+
+    try {
+      const result = await quickConnectColdGuardDevice({
+        deviceId,
+        nickname,
+        password,
+        profile,
+        ssid: softApSsid,
+      });
+      await refreshDevices();
+      router.push(`/device/${result.deviceId}`);
+    } catch (nextError) {
+      setMessage(nextError instanceof Error ? nextError.message : "Quick connect failed.");
+    } finally {
+      setIsQuickConnecting(false);
+    }
   }
 
   function openEnrollmentFlow() {
@@ -87,23 +117,72 @@ export default function DevicesScreen() {
         </PanelCard>
       </DashboardSection>
 
+      <DashboardSection
+        description="Join a nearby device directly with the SoftAP credentials shown on its OLED screen."
+        eyebrow="Quick Connect"
+        title="Open nearby device"
+      >
+        <PanelCard>
+          <Text style={styles.bodyText}>
+            Enter the device ID, SoftAP name, and password shown on the device to open its live local session.
+          </Text>
+          <TextInput
+            autoCapitalize="characters"
+            onChangeText={setDeviceId}
+            placeholder="CG-ESP32-A100"
+            placeholderTextColor={colors.textSecondary}
+            style={styles.input}
+            value={deviceId}
+          />
+          <TextInput
+            onChangeText={setNickname}
+            placeholder="Cold Room Alpha (optional)"
+            placeholderTextColor={colors.textSecondary}
+            style={styles.input}
+            value={nickname}
+          />
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={setSoftApSsid}
+            placeholder="ColdGuard_A100"
+            placeholderTextColor={colors.textSecondary}
+            style={styles.input}
+            value={softApSsid}
+          />
+          <TextInput
+            autoCapitalize="none"
+            onChangeText={setPassword}
+            placeholder="SoftAP password"
+            placeholderTextColor={colors.textSecondary}
+            secureTextEntry
+            style={styles.input}
+            value={password}
+          />
+          <Pressable
+            disabled={isQuickConnecting}
+            onPress={() => void handleQuickConnect()}
+            style={({ pressed }) => [
+              styles.primaryButton,
+              (pressed || isQuickConnecting) && styles.buttonDisabled,
+            ]}
+          >
+            <Text style={styles.primaryButtonText}>
+              {isQuickConnecting ? "Connecting..." : "Quick connect"}
+            </Text>
+          </Pressable>
+        </PanelCard>
+      </DashboardSection>
+
       {profile.role === "Supervisor" ? (
         <DashboardSection
-          description="Use the printed device QR or camera scanner to start the real BLE setup and Wi-Fi handover test."
-          eyebrow="Enrollment"
-          title="Add device"
+          description="Use the older BLE enrollment flow only for advanced setup, service work, or backend-managed pairing."
+          eyebrow="Advanced Setup"
+          title="Enroll device"
         >
           <PanelCard>
             <Text style={styles.bodyText}>
-              Open the supervisor enrollment flow to scan the printed QR or continue from a deep link.
+              The BLE enrollment path is still available, but it is no longer the default pairing workflow.
             </Text>
-            <TextInput
-              onChangeText={setNickname}
-              placeholder="Cold Room Alpha"
-              placeholderTextColor={colors.textSecondary}
-              style={styles.input}
-              value={nickname}
-            />
             <TextInput
               autoCapitalize="none"
               onChangeText={setQrPayload}
@@ -112,18 +191,11 @@ export default function DevicesScreen() {
               style={styles.input}
               value={qrPayload}
             />
-            <Pressable
-              onPress={openEnrollmentFlow}
-              style={({ pressed }) => [
-                styles.primaryButton,
-                pressed && styles.buttonDisabled,
-              ]}
-            >
-              <Text style={styles.primaryButtonText}>Open enrollment flow</Text>
+            <Pressable onPress={openEnrollmentFlow} style={styles.secondaryButton}>
+              <Text style={styles.secondaryButtonText}>Open advanced BLE enrollment</Text>
             </Pressable>
             <Pressable
               onPress={() => {
-                setNickname("");
                 setQrPayload("");
                 router.push("/device/enroll");
               }}

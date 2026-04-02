@@ -151,6 +151,9 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
     "ALTER TABLE devices ADD COLUMN last_connection_test_status TEXT",
   );
   expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE devices ADD COLUMN local_access_mode TEXT NOT NULL DEFAULT 'managed'",
+  );
+  expect(mockExecAsync).toHaveBeenCalledWith(
     "ALTER TABLE devices ADD COLUMN last_connection_sync_status TEXT NOT NULL DEFAULT 'idle'",
   );
   expect(mockExecAsync).toHaveBeenCalledWith(

@@ -206,6 +206,7 @@ export interface ColdGuardWifiBridge {
     rowsJson: string;
     runtimeBaseUrl: string;
   }>;
+  listNearbyColdGuardNetworks?(): Promise<string[]>;
   release(): Promise<void>;
 }
 
@@ -442,6 +443,7 @@ function buildRuntimeSnapshot(args: {
   return {
     accessMode: payloadBase.accessMode,
     currentTempC: typeof payloadBase.currentTempC === "number" ? payloadBase.currentTempC : 0,
+    deviceId: typeof args.response.deviceId === "string" ? args.response.deviceId : undefined,
     firmwareVersion: payloadBase.firmwareVersion,
     latestSequence: typeof payloadBase.latestSequence === "number" ? payloadBase.latestSequence : 0,
     alerts: args.alerts,
@@ -449,6 +451,7 @@ function buildRuntimeSnapshot(args: {
     localIp: args.localIp,
     macAddress: payloadBase.macAddress,
     mktStatus: payloadBase.mktStatus,
+    nickname: typeof args.response.nickname === "string" ? args.response.nickname : null,
     primaryTransport: payloadBase.primaryTransport,
     receivedAt: args.receivedAt,
     recordedAt,
@@ -1144,116 +1147,144 @@ export async function requestColdLaunchPermissions() {
 }
 
 export async function quickConnectColdGuardDevice(args: {
-  deviceId: string;
+  code: string;
   nickname?: string;
-  password: string;
+  onProgress?: (message: string) => void;
   profile: ProfileSnapshot;
-  ssid: string;
   wifiBridge?: ColdGuardWifiBridge;
 }) {
-  const deviceId = args.deviceId.trim();
-  const ssid = args.ssid.trim();
-  const password = args.password.trim();
+  const code = args.code.trim();
+  const password = code;
 
-  if (!deviceId) {
-    throw new Error("DEVICE_ID_REQUIRED");
+  if (!code) {
+    throw new Error("Enter the 8-digit Quick Connect code.");
   }
 
-  if (!ssid) {
-    throw new Error("SOFTAP_SSID_REQUIRED");
-  }
-
-  if (!password) {
-    throw new Error("SOFTAP_PASSWORD_REQUIRED");
+  if (!/^\d{8}$/.test(code)) {
+    throw new Error("Enter the 8-digit Quick Connect code.");
   }
 
   await ensureWifiBridgePermissions();
   const wifiBridge = args.wifiBridge ?? createColdGuardWifiBridge();
-  const runtimeBaseUrl = "http://192.168.4.1";
-  const network = await wifiBridge.connect({
-    expiresAt: Date.now() + 60_000,
-    password,
-    ssid,
-    testUrl: `${runtimeBaseUrl}/api/v1/connection-test`,
-  });
+  if (!wifiBridge.listNearbyColdGuardNetworks) {
+    throw new Error("Quick Connect discovery is unavailable on this device.");
+  }
+  args.onProgress?.("Looking for nearby devices...");
+  const candidateSsids = await wifiBridge.listNearbyColdGuardNetworks();
+  if (candidateSsids.length === 0) {
+    throw new Error("No nearby ColdGuard devices found. Keep the device on the Quick Connect screen and try again.");
+  }
 
-  try {
-    const snapshotFromBridge = await tryFetchRuntimeSnapshotFromBridge({
-      localIp: network.localIp,
-      runtimeBaseUrl,
-      ssid,
-      transport: "softap",
-      wifiBridge,
-    });
-    const snapshot = snapshotFromBridge
-      ? snapshotFromBridge
-      : await fetchAndBuildRuntimeSnapshot({
+  const runtimeBaseUrl = "http://192.168.4.1";
+  const candidateErrors: string[] = [];
+
+  for (const ssid of candidateSsids) {
+    args.onProgress?.(`Connecting to ${ssid}...`);
+
+    try {
+      const network = await wifiBridge.connect({
+        expiresAt: Date.now() + 60_000,
+        password,
+        ssid,
+        testUrl: `${runtimeBaseUrl}/api/v1/connection-test`,
+      });
+
+      try {
+        args.onProgress?.("Reading live data...");
+        const snapshotFromBridge = await tryFetchRuntimeSnapshotFromBridge({
           localIp: network.localIp,
           runtimeBaseUrl,
           ssid,
           transport: "softap",
+          wifiBridge,
+        });
+        const snapshot = snapshotFromBridge
+          ? snapshotFromBridge
+          : await fetchAndBuildRuntimeSnapshot({
+              localIp: network.localIp,
+              runtimeBaseUrl,
+              ssid,
+              transport: "softap",
+            });
+
+        const discoveredDeviceId = snapshot.deviceId?.trim();
+        if (!discoveredDeviceId) {
+          throw new Error("QUICK_CONNECT_DEVICE_ID_MISSING");
+        }
+
+        const discoveredNickname = snapshot.nickname?.trim() || args.nickname?.trim() || discoveredDeviceId;
+        args.onProgress?.("Opening device...");
+
+        await upsertLocalQuickConnectDevice({
+          currentTempC: snapshot.currentTempC,
+          deviceId: discoveredDeviceId,
+          firmwareVersion: snapshot.firmwareVersion,
+          institutionId: args.profile.institutionId,
+          institutionName: args.profile.institutionName,
+          lastSeenAt: snapshot.lastSeenAt,
+          latestSequence: snapshot.latestSequence,
+          macAddress: snapshot.macAddress || discoveredDeviceId,
+          mktStatus: snapshot.mktStatus,
+          nickname: discoveredNickname,
+          recordedAt: snapshot.recordedAt,
+          rtcIso: snapshot.rtcIso,
+          timeSource: snapshot.timeSource,
         });
 
-    await upsertLocalQuickConnectDevice({
-      currentTempC: snapshot.currentTempC,
-      deviceId,
-      firmwareVersion: snapshot.firmwareVersion,
-      institutionId: args.profile.institutionId,
-      institutionName: args.profile.institutionName,
-      lastSeenAt: snapshot.lastSeenAt,
-      latestSequence: snapshot.latestSequence,
-      macAddress: snapshot.macAddress || deviceId,
-      mktStatus: snapshot.mktStatus,
-      nickname: args.nickname?.trim() || deviceId,
-      recordedAt: snapshot.recordedAt,
-      rtcIso: snapshot.rtcIso,
-      timeSource: snapshot.timeSource,
-    });
+        await upsertDeviceRuntimeConfig(discoveredDeviceId, {
+          activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+          activeTransport: "softap",
+          lastPingAt: snapshot.receivedAt,
+          lastRecoverAt: snapshot.receivedAt,
+          lastRuntimeError: null,
+          sessionStatus: "connected",
+          softApPassword: password,
+          softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
+          softApSsid: ssid,
+        });
 
-    await upsertDeviceRuntimeConfig(deviceId, {
-      activeRuntimeBaseUrl: snapshot.runtimeBaseUrl,
-      activeTransport: "softap",
-      lastPingAt: snapshot.receivedAt,
-      lastRecoverAt: snapshot.receivedAt,
-      lastRuntimeError: null,
-      sessionStatus: "connected",
-      softApPassword: password,
-      softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
-      softApSsid: ssid,
-    });
+        await saveDeviceConnectionSnapshot(discoveredDeviceId, {
+          currentTempC: snapshot.currentTempC,
+          lastConnectionTestAt: snapshot.receivedAt,
+          lastConnectionTestStatus: "success",
+          lastSeenAt: snapshot.lastSeenAt,
+          macAddress: snapshot.macAddress,
+          mktStatus: snapshot.mktStatus,
+          recordedAt: snapshot.recordedAt,
+          rtcIso: snapshot.rtcIso,
+          sdCardMounted: false,
+          sequence: snapshot.latestSequence,
+          timeSource: snapshot.timeSource,
+        });
 
-    await saveDeviceConnectionSnapshot(deviceId, {
-      currentTempC: snapshot.currentTempC,
-      lastConnectionTestAt: snapshot.receivedAt,
-      lastConnectionTestStatus: "success",
-      lastSeenAt: snapshot.lastSeenAt,
-      macAddress: snapshot.macAddress,
-      mktStatus: snapshot.mktStatus,
-      recordedAt: snapshot.recordedAt,
-      rtcIso: snapshot.rtcIso,
-      sdCardMounted: false,
-      sequence: snapshot.latestSequence,
-      timeSource: snapshot.timeSource,
-    });
+        await syncTelemetryHistoryAfterSnapshot({
+          deviceId: discoveredDeviceId,
+          snapshot,
+          wifiBridge,
+        }).catch((error) => {
+          console.warn("Failed to sync quick-connect telemetry history.", {
+            deviceId: discoveredDeviceId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
 
-    await syncTelemetryHistoryAfterSnapshot({
-      deviceId,
-      snapshot,
-      wifiBridge,
-    }).catch((error) => {
-      console.warn("Failed to sync quick-connect telemetry history.", {
-        deviceId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-
-    return {
-      deviceId,
-      snapshot,
-    };
-  } finally {
-    await wifiBridge.release().catch(() => undefined);
+        return {
+          deviceId: discoveredDeviceId,
+          snapshot,
+        };
+      } finally {
+        await wifiBridge.release().catch(() => undefined);
+      }
+    } catch (error) {
+      candidateErrors.push(error instanceof Error ? error.message : String(error));
+    }
   }
+
+  if (candidateErrors.some((message) => message === "QUICK_CONNECT_DEVICE_ID_MISSING")) {
+    throw new Error("The nearby device responded, but the app could not identify it. Try again.");
+  }
+
+  throw new Error("That Quick Connect code did not work for nearby devices. Check the 8-digit code and try again.");
 }
 
 export async function connectOrRecoverDevice(args: {

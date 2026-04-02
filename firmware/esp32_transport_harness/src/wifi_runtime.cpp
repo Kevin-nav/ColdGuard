@@ -154,16 +154,6 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
   }
 
   webServer.on("/api/v1/connection-test", HTTP_GET, [state, firmwareVersion, &webServer]() {
-    // For enrolled devices the SoftAP password itself serves as layer-1 auth.
-    // Only block unenrolled (blank) devices that lack a ticket.
-    if (state->enrollmentState != "enrolled" && !hasValidSoftApTicket(state) && !state->stationConnected) {
-      webServer.send(
-        401,
-        "application/json",
-        "{\"ok\":false,\"errorCode\":\"WIFI_TICKET_EXPIRED\",\"message\":\"Wi-Fi ticket expired.\"}");
-      return;
-    }
-
     webServer.send(200, "application/json", buildRuntimeStatusPayload(state, firmwareVersion));
   });
 
@@ -342,13 +332,6 @@ void stopSoftAp(WebServer& webServer, DeviceState* state) {
 }
 
 bool ensureSoftApStarted(WebServer& webServer, DeviceState* state, const char* firmwareVersion) {
-  // For enrolled devices, keep the SoftAP running even when the ticket expires.
-  // The WiFi password itself provides sufficient auth for reconnection.
-  // Only stop the AP for blank/unenrolled devices when the ticket expires.
-  if (state->accessPointStarted && !hasValidSoftApTicket(state) && state->enrollmentState != "enrolled") {
-    stopSoftAp(webServer, state);
-  }
-
   maybeEnsureStationConnected(state);
 
   if (state->accessPointStarted) {
@@ -422,19 +405,14 @@ String currentRuntimeBaseUrl(DeviceState* state) {
 }
 
 void tickWifiRuntime(WebServer& webServer, DeviceState* state, const char* firmwareVersion) {
-  // For enrolled devices, keep the SoftAP running continuously for reconnection.
-  // Only clear the ticket expiry so ticket-gated endpoints return 401 when needed.
-  if (state->accessPointStarted && !hasValidSoftApTicket(state) && state->enrollmentState != "enrolled") {
-    stopSoftAp(webServer, state);
-  } else if (state->accessPointStarted && !hasValidSoftApTicket(state)) {
-    // Let the AP keep running but clear the ticket so fresh BLE auth is needed for new tickets.
+  if (state->accessPointStarted && !hasValidSoftApTicket(state)) {
     state->wifiTicketExpiryMs = 0;
   }
 
   maybeEnsureStationConnected(state);
 
-  // Auto-start the SoftAP for enrolled devices so stored-credential reconnection always works.
-  if (!state->accessPointStarted && state->enrollmentState == "enrolled" && state->wifiPassword.length() >= 8) {
+  // Auto-start the SoftAP by default so manual quick connect is always available.
+  if (!state->accessPointStarted && state->wifiPassword.length() >= 8) {
     ensureSoftApStarted(webServer, state, firmwareVersion);
   }
 

@@ -15,6 +15,7 @@ import { useTheme } from "../../src/theme/theme-provider";
 import { spacing } from "../../src/theme/tokens";
 import type { DeviceRecord } from "../../src/lib/storage/sqlite/device-repository";
 import { listAssignableNurses } from "../../src/features/devices/services/device-directory";
+import { resolveDisplayMktC } from "../../src/features/devices/services/mkt";
 import {
   bootstrapDefaultDeviceMonitoring,
   assignColdGuardDevice,
@@ -30,6 +31,7 @@ import {
 import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
 import { presentDeviceError, type PresentedDeviceError } from "../../src/features/devices/services/error-presenter";
 import type { DeviceAssignmentCandidate, DeviceRuntimeConfig } from "../../src/features/devices/types";
+import { getRecentReadingsForDevice } from "../../src/lib/storage/sqlite/reading-repository";
 
 function getStatusColor(status: DeviceRecord["mktStatus"], colors: ReturnType<typeof useTheme>["colors"]) {
   switch (status) {
@@ -176,6 +178,7 @@ export default function DeviceDetailsScreen() {
   const [viewerStaffIds, setViewerStaffIds] = useState<string[]>([]);
   const [hasBootstrappedMonitoring, setHasBootstrappedMonitoring] = useState<string | null>(null);
   const [lastRuntimeSnapshot, setLastRuntimeSnapshot] = useState<ConnectionTestPayload | null>(null);
+  const [displayMktC, setDisplayMktC] = useState<number | null>(null);
 
   const device = devices.find((entry) => entry.id === id);
   let enrollmentLink = null;
@@ -193,10 +196,10 @@ export default function DeviceDetailsScreen() {
     let isMounted = true;
 
     async function loadAssignmentOptions() {
-      if (!device || profile?.role !== "Supervisor") {
+      if (!device || device.localAccessMode === "quick_connect" || profile?.role !== "Supervisor") {
         if (isMounted) {
           setAssignableNurses([]);
-          setPrimaryStaffId(device?.primaryAssigneeStaffId ?? null);
+          setPrimaryStaffId(device?.localAccessMode === "quick_connect" ? null : device?.primaryAssigneeStaffId ?? null);
           setViewerStaffIds([]);
         }
         return;
@@ -262,6 +265,10 @@ export default function DeviceDetailsScreen() {
     const deviceId = device?.id;
     if (typeof deviceId !== "string") {
       setHasBootstrappedMonitoring(null);
+      return;
+    }
+    if (device?.localAccessMode === "quick_connect") {
+      setHasBootstrappedMonitoring(deviceId);
       return;
     }
     const activeDeviceId = deviceId;
@@ -341,6 +348,35 @@ export default function DeviceDetailsScreen() {
     };
   }, [device?.id, refreshDevices]);
 
+  useEffect(() => {
+    const deviceId = device?.id;
+    if (typeof deviceId !== "string") {
+      setDisplayMktC(null);
+      return;
+    }
+
+    let isActive = true;
+
+    async function loadDisplayMkt() {
+      const readings = await getRecentReadingsForDevice(deviceId, 24);
+      if (!isActive) {
+        return;
+      }
+      setDisplayMktC(
+        resolveDisplayMktC({
+          fallbackTempC: device?.currentTempC ?? null,
+          readings,
+        }),
+      );
+    }
+
+    void loadDisplayMkt();
+
+    return () => {
+      isActive = false;
+    };
+  }, [device?.currentTempC, device?.id]);
+
   if (enrollmentLink) {
     if (Platform.OS === "web") {
       return (
@@ -416,6 +452,7 @@ export default function DeviceDetailsScreen() {
 
   const activeDevice = device;
   const activeProfile = profile;
+  const isQuickConnectDevice = activeDevice.localAccessMode === "quick_connect";
   const statusColor = getStatusColor(activeDevice.mktStatus, colors);
   const statusIcon = getStatusIcon(activeDevice.mktStatus);
 
@@ -591,6 +628,109 @@ export default function DeviceDetailsScreen() {
     setCopyMessage("Developer code copied.");
   }
 
+  if (isQuickConnectDevice) {
+    return (
+      <DashboardPage scroll>
+        <View style={localStyles.headerRow}>
+          <Pressable testID="device-back-button" style={localStyles.iconButton} onPress={handleBackNavigation}>
+            <Ionicons name="chevron-back" size={28} color={colors.textPrimary} />
+          </Pressable>
+          <Text style={[styles.heading, { flex: 1 }]} numberOfLines={1}>
+            {activeDevice.nickname}
+          </Text>
+        </View>
+
+        <DashboardSection
+          title="Device status"
+          eyebrow="Quick Connect"
+          description="The local demo path keeps the important readings first and the technical pieces out of the way."
+        >
+          <PanelCard>
+            <View style={localStyles.statusHeader}>
+              <View style={localStyles.statusLabelGroup}>
+                <Ionicons name="pulse" size={24} color={statusColor} />
+                <Text style={[styles.subheading, { color: statusColor }]}>Temperature status</Text>
+              </View>
+              <Badge
+                backgroundColor={statusColor}
+                iconName={statusIcon}
+                label={activeDevice.mktStatus.toUpperCase()}
+                textColor={colors.textOnPrimary}
+              />
+            </View>
+            <View style={localStyles.divider} />
+            <View style={localStyles.metricsGrid}>
+              <MetricRow
+                iconName="pulse-outline"
+                label="MKT"
+                value={`${(displayMktC ?? activeDevice.currentTempC).toFixed(2)} C`}
+                valueColor={
+                  activeDevice.mktStatus === "alert"
+                    ? colors.danger
+                    : activeDevice.mktStatus === "warning"
+                      ? colors.warning
+                      : colors.success
+                }
+              />
+              <MetricRow
+                iconName="thermometer-outline"
+                label="Raw temperature"
+                value={`${activeDevice.currentTempC.toFixed(2)} C`}
+              />
+              <MetricRow iconName="time-outline" label="Last update" value={formatLastSeenRelative(activeDevice.lastSeenAt)} />
+              <MetricRow
+                iconName="checkmark-circle-outline"
+                label="Connection"
+                value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
+              />
+            </View>
+            {actionFeedback ? <Text style={styles.helperText}>{actionFeedback.userMessage}</Text> : null}
+            {copyMessage ? <Text style={styles.helperText}>{copyMessage}</Text> : null}
+            <View style={localStyles.actionButtons}>
+              <Pressable
+                disabled={isRunningConnectionTest}
+                onPress={() => void handleRunConnectionTest()}
+                style={({ pressed }) => [
+                  styles.primaryButton,
+                  (pressed || isRunningConnectionTest) && styles.buttonDisabled,
+                ]}
+              >
+                <Text style={styles.primaryButtonText}>
+                  {isRunningConnectionTest ? "Refreshing readings..." : "Refresh readings"}
+                </Text>
+              </Pressable>
+              <Pressable
+                disabled={isReconnecting}
+                onPress={() => void handleReconnect()}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  (pressed || isReconnecting) && styles.buttonDisabled,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  {isReconnecting ? "Reconnecting..." : "Reconnect"}
+                </Text>
+              </Pressable>
+            </View>
+          </PanelCard>
+        </DashboardSection>
+
+        <DashboardSection
+          title="Device details"
+          eyebrow="Quick Connect"
+          description="Basic device information for the local session."
+        >
+          <PanelCard>
+            <View style={localStyles.metricsGrid}>
+              <MetricRow iconName="hardware-chip-outline" label="Device ID" value={activeDevice.id} />
+              <MetricRow iconName="business-outline" label="Facility" value={activeDevice.institutionName} />
+            </View>
+          </PanelCard>
+        </DashboardSection>
+      </DashboardPage>
+    );
+  }
+
   return (
     <DashboardPage scroll>
       <View style={localStyles.headerRow}>
@@ -620,65 +760,101 @@ export default function DeviceDetailsScreen() {
           <View style={localStyles.metricsGrid}>
             <MetricRow iconName="timer-outline" label="Last Sync" value={formatLastSeenRelative(activeDevice.lastSeenAt)} />
             <MetricRow iconName="calendar-outline" label="Exact Time" value={formatExactDate(activeDevice.lastSeenAt)} />
-            <MetricRow iconName="shield-checkmark-outline" label="Access" value={formatAccessLabel(activeDevice.accessRole)} />
+            <MetricRow
+              iconName="shield-checkmark-outline"
+              label="Access"
+              value={isQuickConnectDevice ? "Nearby device session" : formatAccessLabel(activeDevice.accessRole)}
+            />
           </View>
         </PanelCard>
       </DashboardSection>
 
-      <DashboardSection title="Connection Tools" eyebrow="Transport" description="Validate the BLE authentication and Wi-Fi handover path.">
+      <DashboardSection
+        title={isQuickConnectDevice ? "Connected Device" : "Connection Tools"}
+        eyebrow={isQuickConnectDevice ? "Local Session" : "Transport"}
+        description={
+          isQuickConnectDevice
+            ? "Refresh or reconnect to this nearby device."
+            : "Validate the BLE authentication and Wi-Fi handover path."
+        }
+      >
         <PanelCard>
           <View style={localStyles.metricsGrid}>
             <MetricRow iconName="radio-outline" label="Firmware" value={activeDevice.firmwareVersion} />
-            <MetricRow
-              iconName="wifi-outline"
-              label="Last test"
-              value={formatExactDate(activeDevice.lastConnectionTestAt)}
-            />
-            <MetricRow
-              iconName="checkmark-done-outline"
-              label="Test status"
-              value={formatConnectionStatus(activeDevice.lastConnectionTestStatus)}
-            />
-            <MetricRow
-              iconName="swap-horizontal-outline"
-              label="Runtime transport"
-              value={formatRuntimeTransportLabel(runtimeSession?.activeTransport ?? null)}
-            />
-            <MetricRow
-              iconName="pulse-outline"
-              label="Session"
-              value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
-            />
-            <MetricRow
-              iconName="bluetooth-outline"
-              label="Control role"
-              value={formatControlRoleLabel(runtimeSession?.controlRole)}
-            />
-            <MetricRow
-              iconName="git-network-outline"
-              label="Access mode"
-              value={formatRuntimeAccessModeLabel(lastRuntimeSnapshot?.accessMode)}
-            />
+            {isQuickConnectDevice ? (
+              <>
+                <MetricRow
+                  iconName="wifi-outline"
+                  label="Connection"
+                  value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
+                />
+                <MetricRow
+                  iconName="checkmark-done-outline"
+                  label="Last refresh"
+                  value={formatExactDate(activeDevice.lastConnectionTestAt ?? activeDevice.lastSeenAt)}
+                />
+                <MetricRow
+                  iconName="shield-checkmark-outline"
+                  label="Access"
+                  value="Quick Connect"
+                />
+              </>
+            ) : (
+              <>
+                <MetricRow
+                  iconName="wifi-outline"
+                  label="Last test"
+                  value={formatExactDate(activeDevice.lastConnectionTestAt)}
+                />
+                <MetricRow
+                  iconName="checkmark-done-outline"
+                  label="Test status"
+                  value={formatConnectionStatus(activeDevice.lastConnectionTestStatus)}
+                />
+                <MetricRow
+                  iconName="swap-horizontal-outline"
+                  label="Runtime transport"
+                  value={formatRuntimeTransportLabel(runtimeSession?.activeTransport ?? null)}
+                />
+                <MetricRow
+                  iconName="pulse-outline"
+                  label="Session"
+                  value={formatRuntimeSessionLabel(runtimeSession?.sessionStatus)}
+                />
+                <MetricRow
+                  iconName="bluetooth-outline"
+                  label="Control role"
+                  value={formatControlRoleLabel(runtimeSession?.controlRole)}
+                />
+                <MetricRow
+                  iconName="git-network-outline"
+                  label="Access mode"
+                  value={formatRuntimeAccessModeLabel(lastRuntimeSnapshot?.accessMode)}
+                />
+              </>
+            )}
           </View>
           <Text style={styles.helperText}>
-            Bluetooth is the primary control path. SoftAP is temporary shared access for short-lived secondary users and should be released when that work is finished.
+            {isQuickConnectDevice
+              ? "This device was opened through Quick Connect. The app keeps the latest readings here and uploads them when it can."
+              : "Bluetooth is the primary control path. SoftAP is temporary shared access for short-lived secondary users and should be released when that work is finished."}
           </Text>
-          {runtimeSession?.controlRole === "primary" ? (
+          {!isQuickConnectDevice && runtimeSession?.controlRole === "primary" ? (
             <Text style={styles.helperText}>
               This phone currently holds the BLE-primary lease and will keep primary control while it remains nearby.
             </Text>
           ) : null}
-          {runtimeSession?.controlRole === "secondary" ? (
+          {!isQuickConnectDevice && runtimeSession?.controlRole === "secondary" ? (
             <Text style={styles.helperText}>
               Another authorized phone currently holds BLE-primary. This phone can only use temporary shared SoftAP access until the primary lease expires.
             </Text>
           ) : null}
-          {runtimeSession?.controlRole === "none" ? (
+          {!isQuickConnectDevice && runtimeSession?.controlRole === "none" ? (
             <Text style={styles.helperText}>
               No active BLE-primary controller is recorded for this phone yet. Enable monitoring to let this phone claim control when available.
             </Text>
           ) : null}
-          {lastRuntimeSnapshot?.accessMode === "temporary_shared_access" ? (
+          {!isQuickConnectDevice && lastRuntimeSnapshot?.accessMode === "temporary_shared_access" ? (
             <Text style={styles.helperText}>
               Temporary SoftAP access is active. Use this for short shared sessions, then leave the shared-access flow so the phone can release the connection.
             </Text>
@@ -693,7 +869,9 @@ export default function DeviceDetailsScreen() {
               ]}
             >
               <Text style={styles.primaryButtonText}>
-                {isRunningConnectionTest ? "Running transport check..." : "Run transport check"}
+                {isRunningConnectionTest
+                  ? isQuickConnectDevice ? "Refreshing readings..." : "Running transport check..."
+                  : isQuickConnectDevice ? "Refresh readings" : "Run transport check"}
               </Text>
             </Pressable>
             <Pressable
@@ -705,59 +883,71 @@ export default function DeviceDetailsScreen() {
               ]}
             >
               <Text style={styles.secondaryButtonText}>
-                {isReconnecting ? "Opening temporary access..." : "Open temporary SoftAP access"}
+                {isReconnecting
+                  ? isQuickConnectDevice ? "Reconnecting..." : "Opening temporary access..."
+                  : isQuickConnectDevice ? "Reconnect" : "Open temporary SoftAP access"}
               </Text>
             </Pressable>
-            <Pressable onPress={() => void handleDiagnostics()} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>Live diagnostics</Text>
-            </Pressable>
+            {!isQuickConnectDevice ? (
+              <Pressable onPress={() => void handleDiagnostics()} style={styles.secondaryButton}>
+                <Text style={styles.secondaryButtonText}>Live diagnostics</Text>
+              </Pressable>
+            ) : null}
+            {!isQuickConnectDevice ? (
+              <Pressable
+                disabled={isTogglingMonitoring}
+                onPress={() => void handleToggleMonitoring()}
+                style={({ pressed }) => [
+                  styles.secondaryButton,
+                  (pressed || isTogglingMonitoring) && styles.buttonDisabled,
+                ]}
+              >
+                <Text style={styles.secondaryButtonText}>
+                  {isTogglingMonitoring
+                    ? "Updating monitoring..."
+                    : runtimeSession?.monitoringMode === "foreground_service"
+                      ? "Disable monitoring"
+                      : "Enable monitoring"}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {!isQuickConnectDevice ? <View style={localStyles.divider} /> : null}
+          {!isQuickConnectDevice ? (
+            <TextInput
+              autoCapitalize="none"
+              onChangeText={setFacilityWifiSsid}
+              placeholder="Facility Wi-Fi SSID"
+              placeholderTextColor={colors.textSecondary}
+              style={styles.input}
+              value={facilityWifiSsid}
+            />
+          ) : null}
+          {!isQuickConnectDevice ? (
+            <TextInput
+              autoCapitalize="none"
+              onChangeText={setFacilityWifiPassword}
+              placeholder="Facility Wi-Fi password"
+              placeholderTextColor={colors.textSecondary}
+              secureTextEntry
+              style={styles.input}
+              value={facilityWifiPassword}
+            />
+          ) : null}
+          {!isQuickConnectDevice ? (
             <Pressable
-              disabled={isTogglingMonitoring}
-              onPress={() => void handleToggleMonitoring()}
+              disabled={isProvisioningWifi}
+              onPress={() => void handleProvisionFacilityWifi()}
               style={({ pressed }) => [
                 styles.secondaryButton,
-                (pressed || isTogglingMonitoring) && styles.buttonDisabled,
+                (pressed || isProvisioningWifi) && styles.buttonDisabled,
               ]}
             >
               <Text style={styles.secondaryButtonText}>
-                {isTogglingMonitoring
-                  ? "Updating monitoring..."
-                  : runtimeSession?.monitoringMode === "foreground_service"
-                    ? "Disable monitoring"
-                    : "Enable monitoring"}
+                {isProvisioningWifi ? "Saving Wi-Fi..." : "Save facility Wi-Fi"}
               </Text>
             </Pressable>
-          </View>
-          <View style={localStyles.divider} />
-          <TextInput
-            autoCapitalize="none"
-            onChangeText={setFacilityWifiSsid}
-            placeholder="Facility Wi-Fi SSID"
-            placeholderTextColor={colors.textSecondary}
-            style={styles.input}
-            value={facilityWifiSsid}
-          />
-          <TextInput
-            autoCapitalize="none"
-            onChangeText={setFacilityWifiPassword}
-            placeholder="Facility Wi-Fi password"
-            placeholderTextColor={colors.textSecondary}
-            secureTextEntry
-            style={styles.input}
-            value={facilityWifiPassword}
-          />
-          <Pressable
-            disabled={isProvisioningWifi}
-            onPress={() => void handleProvisionFacilityWifi()}
-            style={({ pressed }) => [
-              styles.secondaryButton,
-              (pressed || isProvisioningWifi) && styles.buttonDisabled,
-            ]}
-          >
-            <Text style={styles.secondaryButtonText}>
-              {isProvisioningWifi ? "Saving Wi-Fi..." : "Save facility Wi-Fi"}
-            </Text>
-          </Pressable>
+          ) : null}
           {actionFeedback ? <Text style={styles.helperText}>{actionFeedback.userMessage}</Text> : null}
           {actionFeedback?.developerCode ? (
             <View style={localStyles.developerCodeBlock}>
@@ -773,13 +963,21 @@ export default function DeviceDetailsScreen() {
         </PanelCard>
       </DashboardSection>
 
-      <DashboardSection title="Hardware Readings" eyebrow="Telemetry" description="Current sensor measurements.">
+      <DashboardSection
+        title={isQuickConnectDevice ? "Care Readings" : "Hardware Readings"}
+        eyebrow="Telemetry"
+        description={
+          isQuickConnectDevice
+            ? "MKT is shown first for care teams. Raw readings are kept for storage and upload."
+            : "Current sensor measurements."
+        }
+      >
         <PanelCard>
           <View style={localStyles.metricsGrid}>
             <MetricRow
-              iconName="thermometer-outline"
-              label="Internal Temperature"
-              value={`${activeDevice.currentTempC.toFixed(2)} C`}
+              iconName="pulse-outline"
+              label="MKT"
+              value={`${(displayMktC ?? activeDevice.currentTempC).toFixed(2)} C`}
               valueColor={
                 activeDevice.mktStatus === "alert"
                   ? colors.danger
@@ -790,115 +988,136 @@ export default function DeviceDetailsScreen() {
             />
             <View style={localStyles.divider} />
             <MetricRow
-              iconName="layers-outline"
-              label="Latest Sequence"
-              value={`${activeDevice.latestSequence}`}
+              iconName="thermometer-outline"
+              label="Raw Temperature"
+              value={`${activeDevice.currentTempC.toFixed(2)} C`}
             />
-            <View style={localStyles.divider} />
-            <MetricRow
-              iconName="time-outline"
-              label="RTC Timestamp"
-              value={activeDevice.rtcIso ? new Date(activeDevice.rtcIso).toLocaleString() : "Not available"}
-            />
-            <View style={localStyles.divider} />
-            <MetricRow
-              iconName="time-outline"
-              label="Time Source"
-              value={activeDevice.timeSource.toUpperCase()}
-            />
+            {isQuickConnectDevice ? (
+              <>
+                <View style={localStyles.divider} />
+                <MetricRow
+                  iconName="time-outline"
+                  label="Last sample"
+                  value={formatExactDate(activeDevice.recordedAt)}
+                />
+              </>
+            ) : (
+              <>
+                <View style={localStyles.divider} />
+                <MetricRow
+                  iconName="layers-outline"
+                  label="Latest Sequence"
+                  value={`${activeDevice.latestSequence}`}
+                />
+                <View style={localStyles.divider} />
+                <MetricRow
+                  iconName="time-outline"
+                  label="RTC Timestamp"
+                  value={activeDevice.rtcIso ? new Date(activeDevice.rtcIso).toLocaleString() : "Not available"}
+                />
+                <View style={localStyles.divider} />
+                <MetricRow
+                  iconName="time-outline"
+                  label="Time Source"
+                  value={activeDevice.timeSource.toUpperCase()}
+                />
+              </>
+            )}
           </View>
         </PanelCard>
       </DashboardSection>
 
-      <DashboardSection
-        title="Authorized Access"
-        eyebrow="Accountability"
-        description="Lead accountability and shared-access staff for this unit. BLE-primary control is claimed automatically by the nearest authorized phone."
-      >
-        <PanelCard>
-          <View style={localStyles.metricsGrid}>
-            <MetricRow iconName="person-outline" label="Lead nurse" value={activeDevice.primaryAssigneeName ?? "Not assigned"} />
-            <MetricRow
-              iconName="people-outline"
-              label="Shared-access nurses"
-              value={activeDevice.viewerNames.length ? activeDevice.viewerNames.join(", ") : "None"}
-            />
-          </View>
-          <Text style={styles.helperText}>
-            These assignments control who is authorized to work with this device offline. They do not pin the BLE-primary controller to one phone.
-          </Text>
-          {profile.role === "Supervisor" ? (
-            <View style={localStyles.assignmentStack}>
-              <Text style={styles.eyebrowText}>Choose lead nurse</Text>
-              <View style={localStyles.assignmentButtons}>
-                {assignableNurses.map((nurse) => (
-                  <Pressable
-                    key={`primary-${nurse.staffId}`}
-                    onPress={() => setPrimaryStaffId(nurse.staffId)}
-                    style={({ pressed }) => [
-                      localStyles.assignmentChip,
-                      {
-                        backgroundColor:
-                          primaryStaffId === nurse.staffId ? colors.primary : colors.surfaceMuted,
-                      },
-                      pressed && styles.buttonDisabled,
-                    ]}
-                  >
-                    <Text
-                      style={{
-                        color: primaryStaffId === nurse.staffId ? colors.textOnPrimary : colors.textPrimary,
-                      }}
-                    >
-                      {nurse.displayName}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              <Text style={styles.eyebrowText}>Add shared-access nurses</Text>
-              <View style={localStyles.assignmentButtons}>
-                {assignableNurses.map((nurse) => {
-                  const selected = viewerStaffIds.includes(nurse.staffId);
-                  return (
+      {!isQuickConnectDevice ? (
+        <DashboardSection
+          title="Authorized Access"
+          eyebrow="Accountability"
+          description="Lead accountability and shared-access staff for this unit. BLE-primary control is claimed automatically by the nearest authorized phone."
+        >
+          <PanelCard>
+            <View style={localStyles.metricsGrid}>
+              <MetricRow iconName="person-outline" label="Lead nurse" value={activeDevice.primaryAssigneeName ?? "Not assigned"} />
+              <MetricRow
+                iconName="people-outline"
+                label="Shared-access nurses"
+                value={activeDevice.viewerNames.length ? activeDevice.viewerNames.join(", ") : "None"}
+              />
+            </View>
+            <Text style={styles.helperText}>
+              These assignments control who is authorized to work with this device offline. They do not pin the BLE-primary controller to one phone.
+            </Text>
+            {profile.role === "Supervisor" ? (
+              <View style={localStyles.assignmentStack}>
+                <Text style={styles.eyebrowText}>Choose lead nurse</Text>
+                <View style={localStyles.assignmentButtons}>
+                  {assignableNurses.map((nurse) => (
                     <Pressable
-                      key={`viewer-${nurse.staffId}`}
-                      onPress={() =>
-                        setViewerStaffIds((current) =>
-                          selected
-                            ? current.filter((staffId) => staffId !== nurse.staffId)
-                            : [...current, nurse.staffId],
-                        )
-                      }
+                      key={`primary-${nurse.staffId}`}
+                      onPress={() => setPrimaryStaffId(nurse.staffId)}
                       style={({ pressed }) => [
                         localStyles.assignmentChip,
                         {
-                          backgroundColor: selected ? colors.primaryMuted : colors.surfaceMuted,
+                          backgroundColor:
+                            primaryStaffId === nurse.staffId ? colors.primary : colors.surfaceMuted,
                         },
                         pressed && styles.buttonDisabled,
                       ]}
                     >
-                      <Text style={{ color: colors.textPrimary }}>{nurse.displayName}</Text>
+                      <Text
+                        style={{
+                          color: primaryStaffId === nurse.staffId ? colors.textOnPrimary : colors.textPrimary,
+                        }}
+                      >
+                        {nurse.displayName}
+                      </Text>
                     </Pressable>
-                  );
-                })}
+                  ))}
+                </View>
+                <Text style={styles.eyebrowText}>Add shared-access nurses</Text>
+                <View style={localStyles.assignmentButtons}>
+                  {assignableNurses.map((nurse) => {
+                    const selected = viewerStaffIds.includes(nurse.staffId);
+                    return (
+                      <Pressable
+                        key={`viewer-${nurse.staffId}`}
+                        onPress={() =>
+                          setViewerStaffIds((current) =>
+                            selected
+                              ? current.filter((staffId) => staffId !== nurse.staffId)
+                              : [...current, nurse.staffId],
+                          )
+                        }
+                        style={({ pressed }) => [
+                          localStyles.assignmentChip,
+                          {
+                            backgroundColor: selected ? colors.primaryMuted : colors.surfaceMuted,
+                          },
+                          pressed && styles.buttonDisabled,
+                        ]}
+                      >
+                        <Text style={{ color: colors.textPrimary }}>{nurse.displayName}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Pressable
+                  disabled={isSavingAssignments || !primaryStaffId}
+                  onPress={() => void handleSaveAssignments()}
+                  style={({ pressed }) => [
+                    styles.secondaryButton,
+                    (pressed || isSavingAssignments || !primaryStaffId) && styles.buttonDisabled,
+                  ]}
+                >
+                  <Text style={styles.secondaryButtonText}>
+                    {isSavingAssignments ? "Saving..." : "Save authorized staff"}
+                  </Text>
+                </Pressable>
               </View>
-              <Pressable
-                disabled={isSavingAssignments || !primaryStaffId}
-                onPress={() => void handleSaveAssignments()}
-                style={({ pressed }) => [
-                  styles.secondaryButton,
-                  (pressed || isSavingAssignments || !primaryStaffId) && styles.buttonDisabled,
-                ]}
-              >
-                <Text style={styles.secondaryButtonText}>
-                  {isSavingAssignments ? "Saving..." : "Save authorized staff"}
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-        </PanelCard>
-      </DashboardSection>
+            ) : null}
+          </PanelCard>
+        </DashboardSection>
+      ) : null}
 
-      {profile.role === "Supervisor" ? (
+      {profile.role === "Supervisor" && !isQuickConnectDevice ? (
         <DashboardSection title="Supervisor Actions" eyebrow="Lifecycle" description="Decommissioning wipes the enrolled device and invalidates cached grants.">
           <PanelCard>
             <Pressable

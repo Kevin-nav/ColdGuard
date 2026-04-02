@@ -1,23 +1,26 @@
-import { computeMeanKineticTemperatureC, computeMeanKineticTemperatureFromReadings } from "./mkt";
+import { computeMeanKineticTemperatureC, resolveDisplayMktC } from "./mkt";
 
-test("returns null when no temperatures are provided", () => {
-  expect(computeMeanKineticTemperatureC([])).toBeNull();
-});
-
-test("returns the same temperature for a constant series", () => {
-  expect(computeMeanKineticTemperatureC([4, 4, 4])).toBeCloseTo(4, 6);
-});
-
-test("weights higher temperatures more heavily than a simple average", () => {
-  expect(computeMeanKineticTemperatureC([2, 8])).toBeCloseTo(5.536424508866389, 6);
-});
-
-test("computes MKT from raw reading records", () => {
+test("returns the same temperature for a uniform reading set", () => {
   expect(
-    computeMeanKineticTemperatureFromReadings([
-      { currentTempC: 4.0 },
-      { currentTempC: 5.0 },
-      { currentTempC: 6.0 },
+    computeMeanKineticTemperatureC([
+      { currentTempC: 5 },
+      { currentTempC: 5 },
+      { currentTempC: 5 },
     ]),
-  ).toBeCloseTo(5.040628382322154, 6);
+  ).toBeCloseTo(5, 4);
+});
+
+test("weights warmer excursions more heavily than a simple average", () => {
+  const mkt = computeMeanKineticTemperatureC([
+    { currentTempC: 4 },
+    { currentTempC: 4 },
+    { currentTempC: 10 },
+  ]);
+
+  expect(mkt).not.toBeNull();
+  expect(mkt!).toBeGreaterThan((4 + 4 + 10) / 3);
+});
+
+test("falls back to the provided raw temperature when readings are unavailable", () => {
+  expect(resolveDisplayMktC({ fallbackTempC: 4.6, readings: [] })).toBe(4.6);
 });

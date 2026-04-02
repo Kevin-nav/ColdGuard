@@ -28,28 +28,62 @@ type AuthenticatedUser = {
 };
 
 type TelemetryReadingInput = {
+  batteryPercentEstimate?: number;
+  batteryVoltageV?: number;
+  currentMa?: number;
   mktStatus: "safe" | "warning" | "alert";
+  powerMw?: number;
   recordedAt: number;
   rtcIso: string;
   sdCardMounted: boolean;
   sequence: number;
   sensorHealthJson?: string;
+  shuntVoltageMv?: number;
   statusText?: string;
   timeSource: string;
   vaccineTempC: number;
 };
 
-function buildTelemetryReadingPatch(reading: TelemetryReadingInput, updatedAt: number) {
+function buildTelemetrySnapshotPatch(reading: TelemetryReadingInput, updatedAt: number) {
   return {
+    batteryLevel: reading.batteryPercentEstimate,
+    batteryPercentEstimate: reading.batteryPercentEstimate,
     currentTempC: reading.vaccineTempC,
+    batteryVoltageV: reading.batteryVoltageV,
+    currentMa: reading.currentMa,
     lastSeenAt: reading.recordedAt,
     mktStatus: reading.mktStatus,
+    powerMw: reading.powerMw,
     recordedAt: reading.recordedAt,
     rtcIso: reading.rtcIso,
     sdCardMounted: reading.sdCardMounted,
+    shuntVoltageMv: reading.shuntVoltageMv,
     statusText: reading.statusText,
     timeSource: reading.timeSource,
     updatedAt,
+  };
+}
+
+function buildTelemetryReadingPatch(reading: TelemetryReadingInput, updatedAt: number) {
+  return {
+    batteryLevel: reading.batteryPercentEstimate,
+    batteryPercentEstimate: reading.batteryPercentEstimate,
+    batteryVoltageV: reading.batteryVoltageV,
+    currentMa: reading.currentMa,
+    currentTempC: reading.vaccineTempC,
+    lastSeenAt: reading.recordedAt,
+    mktStatus: reading.mktStatus,
+    powerMw: reading.powerMw,
+    recordedAt: reading.recordedAt,
+    rtcIso: reading.rtcIso,
+    sdCardMounted: reading.sdCardMounted,
+    sensorHealthJson: reading.sensorHealthJson,
+    sequence: reading.sequence,
+    shuntVoltageMv: reading.shuntVoltageMv,
+    statusText: reading.statusText,
+    timeSource: reading.timeSource,
+    updatedAt,
+    vaccineTempC: reading.vaccineTempC,
   };
 }
 
@@ -814,12 +848,17 @@ export const ingestDeviceTelemetryBatch = mutation({
     deviceId: v.string(),
     readings: v.array(
       v.object({
+        batteryPercentEstimate: v.optional(v.number()),
+        batteryVoltageV: v.optional(v.number()),
+        currentMa: v.optional(v.number()),
         mktStatus: v.union(v.literal("safe"), v.literal("warning"), v.literal("alert")),
+        powerMw: v.optional(v.number()),
         recordedAt: v.number(),
         rtcIso: v.string(),
         sdCardMounted: v.boolean(),
         sequence: v.number(),
         sensorHealthJson: v.optional(v.string()),
+        shuntVoltageMv: v.optional(v.number()),
         statusText: v.optional(v.string()),
         timeSource: v.string(),
         vaccineTempC: v.number(),
@@ -869,7 +908,7 @@ export const ingestDeviceTelemetryBatch = mutation({
     }
 
     if (newestReading && (device.latestSequence ?? -1) < newestReading.sequence) {
-      const latestPatch = buildTelemetryReadingPatch(newestReading, now);
+      const latestPatch = buildTelemetrySnapshotPatch(newestReading, now);
       await ctx.db.patch(device._id, {
         ...latestPatch,
         latestSequence: newestReading.sequence,

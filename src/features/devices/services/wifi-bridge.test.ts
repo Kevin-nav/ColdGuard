@@ -4,6 +4,7 @@ const mockConnectToAccessPointAsync = jest.fn();
 const mockFetchRuntimeSnapshotAsync = jest.fn();
 const mockFetchRuntimeHistoryAsync = jest.fn();
 const mockGetMonitoringStatusesAsync = jest.fn();
+const mockListNearbyColdGuardNetworksAsync = jest.fn();
 const mockReleaseNetworkBindingAsync = jest.fn();
 const mockStartEnrollmentAsync = jest.fn();
 const mockStartMonitoringDeviceAsync = jest.fn();
@@ -17,6 +18,7 @@ jest.mock("../../../../modules/coldguard-wifi-bridge", () => ({
     fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
     fetchRuntimeHistoryAsync: (...args: unknown[]) => mockFetchRuntimeHistoryAsync(...args),
     getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+    listNearbyColdGuardNetworksAsync: (...args: unknown[]) => mockListNearbyColdGuardNetworksAsync(...args),
     releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
     startEnrollmentAsync: (...args: unknown[]) => mockStartEnrollmentAsync(...args),
     startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
@@ -49,7 +51,7 @@ describe("wifi bridge helpers", () => {
     await expect(
       bridge.connect({
         expiresAt: 1,
-        password: "pass-1",
+        password: "48291573",
         ssid: "ColdGuard_A100",
         testUrl: "http://192.168.4.1/api/v1/connection-test",
       }),
@@ -58,7 +60,23 @@ describe("wifi bridge helpers", () => {
       ssid: "ColdGuard_A100",
     });
 
-    expect(mockConnectToAccessPointAsync).toHaveBeenCalledWith("ColdGuard_A100", "pass-1");
+    expect(mockConnectToAccessPointAsync).toHaveBeenCalledWith("ColdGuard_A100", "48291573");
+  });
+
+  test("lists nearby ColdGuard networks through the native module on android", async () => {
+    jest.doMock("react-native", () => ({
+      Platform: { OS: "android" },
+    }));
+    mockListNearbyColdGuardNetworksAsync.mockResolvedValue(["ColdGuard_A100", "ColdGuard_B200"]);
+
+    let createColdGuardWifiBridge: typeof import("./wifi-bridge").createColdGuardWifiBridge;
+    jest.isolateModules(() => {
+      ({ createColdGuardWifiBridge } = jest.requireActual("./wifi-bridge"));
+    });
+    const bridge = createColdGuardWifiBridge!();
+
+    await expect(bridge.listNearbyColdGuardNetworks()).resolves.toEqual(["ColdGuard_A100", "ColdGuard_B200"]);
+    expect(mockListNearbyColdGuardNetworksAsync).toHaveBeenCalledTimes(1);
   });
 
   test("releases the native network binding after use on android", async () => {
@@ -140,6 +158,7 @@ describe("wifi bridge helpers", () => {
       default: () => ({
         connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
         getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+        listNearbyColdGuardNetworksAsync: undefined,
         releaseNetworkBindingAsync: undefined,
         startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
         stopMonitoringDeviceAsync: (...args: unknown[]) => mockStopMonitoringDeviceAsync(...args),
@@ -153,6 +172,7 @@ describe("wifi bridge helpers", () => {
     const bridge = createColdGuardWifiBridge!();
 
     expect(bridge.fetchRuntimeSnapshot).toBeUndefined();
+    await expect(bridge.listNearbyColdGuardNetworks()).rejects.toThrow("WIFI_BRIDGE_DISCOVERY_UNAVAILABLE");
     await expect(bridge.release()).resolves.toBeUndefined();
     expect(mockReleaseNetworkBindingAsync).not.toHaveBeenCalled();
   });
@@ -223,6 +243,7 @@ describe("wifi bridge helpers", () => {
         connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
         fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
         getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+        listNearbyColdGuardNetworksAsync: (...args: unknown[]) => mockListNearbyColdGuardNetworksAsync(...args),
         releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
         startEnrollmentAsync: (...args: unknown[]) => mockStartEnrollmentAsync(...args),
         startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
@@ -247,7 +268,7 @@ describe("wifi bridge helpers", () => {
       protocolVersion: 1,
       runtimeBaseUrl: "http://192.168.4.1",
       smokeTestPassed: true,
-      softApPassword: "pass-1",
+      softApPassword: "48291573",
       softApSsid: "ColdGuard_7BCC",
     });
 
@@ -314,7 +335,7 @@ describe("wifi bridge helpers", () => {
         protocolVersion: 1,
         runtimeBaseUrl: "http://192.168.4.1",
         smokeTestPassed: true,
-        softApPassword: "pass-1",
+        softApPassword: "48291573",
         softApSsid: "ColdGuard_7BCC",
       };
     });
@@ -368,6 +389,7 @@ describe("wifi bridge helpers", () => {
         connectToAccessPointAsync: (...args: unknown[]) => mockConnectToAccessPointAsync(...args),
         fetchRuntimeSnapshotAsync: (...args: unknown[]) => mockFetchRuntimeSnapshotAsync(...args),
         getMonitoringStatusesAsync: (...args: unknown[]) => mockGetMonitoringStatusesAsync(...args),
+        listNearbyColdGuardNetworksAsync: (...args: unknown[]) => mockListNearbyColdGuardNetworksAsync(...args),
         releaseNetworkBindingAsync: () => mockReleaseNetworkBindingAsync(),
         startEnrollmentAsync: (...args: unknown[]) => mockStartEnrollmentAsync(...args),
         startMonitoringDeviceAsync: (...args: unknown[]) => mockStartMonitoringDeviceAsync(...args),
@@ -423,7 +445,7 @@ describe("wifi bridge helpers", () => {
     await expect(
       bridge.connect({
         expiresAt: 1,
-        password: "pass-1",
+        password: "48291573",
         ssid: "ColdGuard_A100",
         testUrl: "http://192.168.4.1/api/v1/connection-test",
       }),

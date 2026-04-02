@@ -9,6 +9,7 @@ jest.mock("expo-router", () => ({
 
 const mockGetProfileSnapshot = jest.fn();
 const mockEnsureLocalProfileForUser = jest.fn();
+const mockGetRecentReadingsForDevice = jest.fn();
 const mockQuickConnectColdGuardDevice = jest.fn();
 const mockSyncVisibleDevices = jest.fn();
 const mockEnsureSupervisorAdminGrant = jest.fn();
@@ -43,8 +44,12 @@ jest.mock("../../../../src/features/devices/services/device-directory", () => ({
   syncVisibleDevices: (profile: unknown) => mockSyncVisibleDevices(profile),
 }));
 
-jest.mock("../../../../src/features/devices/services/quick-connect", () => ({
+jest.mock("../../../../src/features/devices/services/connection-service", () => ({
   quickConnectColdGuardDevice: (args: unknown) => mockQuickConnectColdGuardDevice(args),
+}));
+
+jest.mock("../../../../src/lib/storage/sqlite/reading-repository", () => ({
+  getRecentReadingsForDevice: (...args: unknown[]) => mockGetRecentReadingsForDevice(...args),
 }));
 
 beforeEach(() => {
@@ -95,6 +100,7 @@ beforeEach(() => {
   ]);
   mockEnsureLocalProfileForUser.mockResolvedValue(profile);
   mockEnsureSupervisorAdminGrant.mockResolvedValue(null);
+  mockGetRecentReadingsForDevice.mockResolvedValue([]);
   mockQuickConnectColdGuardDevice.mockResolvedValue({
     deviceId: "d1",
     snapshot: {
@@ -111,9 +117,9 @@ test("renders the dedicated devices workspace", async () => {
   expect(ui.getByTestId("devices-scroll-view")).toBeTruthy();
   expect(ui.getByTestId("devices-scroll-view").props.refreshControl).toBeTruthy();
   expect(ui.getByText("Cold Room Alpha")).toBeTruthy();
-  expect(ui.getByText(/Nurse access/)).toBeTruthy();
+  expect(ui.getByText(/Use Quick Connect to open a nearby device/)).toBeTruthy();
   expect(ui.getByText("Open nearby device")).toBeTruthy();
-  expect(ui.getByText("Quick connect")).toBeTruthy();
+  expect(ui.getByText("Connect nearby device")).toBeTruthy();
 });
 
 test("refreshes on later tab focuses without double-loading on initial mount", async () => {
@@ -137,21 +143,18 @@ test("starts the default quick connect flow", async () => {
   const { router } = jest.requireMock("expo-router") as { router: { push: jest.Mock } };
   const ui = render(<DevicesScreen />);
 
-  await waitFor(() => expect(ui.getByText("Quick connect")).toBeTruthy());
+  await waitFor(() => expect(ui.getByText("Connect nearby device")).toBeTruthy());
 
-  fireEvent.changeText(ui.getByPlaceholderText("CG-ESP32-A100"), "CG-ESP32-A100");
+  fireEvent.changeText(ui.getByPlaceholderText("8-digit code"), "48291573");
   fireEvent.changeText(ui.getByPlaceholderText("Cold Room Alpha (optional)"), "Cold Room Alpha");
-  fireEvent.changeText(ui.getByPlaceholderText("ColdGuard_A100"), "ColdGuard_A100");
-  fireEvent.changeText(ui.getByPlaceholderText("SoftAP password"), "demo-pass-1");
-  fireEvent.press(ui.getByText("Quick connect"));
+  fireEvent.press(ui.getByText("Connect nearby device"));
 
   await waitFor(() =>
     expect(mockQuickConnectColdGuardDevice).toHaveBeenCalledWith(
       expect.objectContaining({
-        deviceId: "CG-ESP32-A100",
+        code: "48291573",
         nickname: "Cold Room Alpha",
-        password: "demo-pass-1",
-        ssid: "ColdGuard_A100",
+        onProgress: expect.any(Function),
       }),
     ),
   );

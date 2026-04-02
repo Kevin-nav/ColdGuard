@@ -4,6 +4,7 @@ import DeviceDetailsScreen from "../../../../app/device/[id]";
 const mockCopyToClipboard = jest.fn();
 const mockBack = jest.fn();
 const mockCanGoBack = jest.fn();
+const mockGetRecentReadingsForDevice = jest.fn();
 const mockReplace = jest.fn();
 const mockRefreshDevices = jest.fn();
 const mockListAssignableNurses = jest.fn();
@@ -98,8 +99,68 @@ jest.mock("../../../../src/features/devices/services/connection-service", () => 
   stopDeviceMonitoring: (deviceId: string) => mockStopDeviceMonitoring(deviceId),
 }));
 
+jest.mock("../../../../src/lib/storage/sqlite/reading-repository", () => ({
+  getRecentReadingsForDevice: (...args: unknown[]) => mockGetRecentReadingsForDevice(...args),
+}));
+
+function buildDefaultDashboardContext() {
+  return {
+    devices: [
+      {
+        id: "device-1",
+        institutionId: "institution-1",
+        institutionName: "Korle-Bu Teaching Hospital",
+        nickname: "Cold Room Alpha",
+        macAddress: "AA:BB:CC:DD:EE:01",
+        firmwareVersion: "fw-1.0.0",
+        protocolVersion: 1,
+        deviceStatus: "enrolled",
+        status: "enrolled",
+        grantVersion: 2,
+        accessRole: "manager",
+        primaryAssigneeName: "Akosua Mensah",
+        primaryAssigneeStaffId: "KB1001",
+        viewerNames: ["Mariam Fuseini"],
+        currentTempC: 4.6,
+        mktStatus: "safe",
+        batteryLevel: 93,
+        batteryPercentEstimate: 94,
+        batteryVoltageV: 4.01,
+        currentMa: 120,
+        latestSequence: 12,
+        lastSeenAt: Date.now() - 60_000,
+        lastConnectionTestAt: null,
+        lastConnectionTestStatus: "idle",
+        powerMw: 482,
+        recordedAt: Date.now() - 60_000,
+        rtcIso: new Date(Date.now() - 60_000).toISOString(),
+        sdCardMounted: true,
+        shuntVoltageMv: 9.8,
+        timeSource: "rtc",
+      },
+    ],
+    error: null,
+    isLoading: false,
+    profile: {
+      firebaseUid: "u1",
+      displayName: "Yaw Boateng",
+      email: "yaw@example.com",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      staffId: "KB1002",
+      role: "Supervisor",
+      lastUpdatedAt: 1,
+    },
+    refreshDevices: () => mockRefreshDevices(),
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  const { useDashboardContext } = jest.requireMock(
+    "../../../../src/features/dashboard/hooks/use-dashboard-context",
+  ) as { useDashboardContext: jest.Mock };
+  useDashboardContext.mockImplementation(() => buildDefaultDashboardContext());
   mockCanGoBack.mockReturnValue(true);
   mockRefreshDevices.mockResolvedValue(undefined);
   mockListAssignableNurses.mockResolvedValue([
@@ -197,6 +258,7 @@ beforeEach(() => {
     monitoringMode: "off",
   });
   mockDecommissionColdGuardDevice.mockResolvedValue(undefined);
+  mockGetRecentReadingsForDevice.mockResolvedValue([]);
 });
 
 test("shows supervisor assignment controls", async () => {
@@ -258,6 +320,84 @@ test("shows pending for an idle connection status", async () => {
       "This phone currently holds the BLE-primary lease and will keep primary control while it remains nearby.",
     ),
   ).toBeTruthy();
+});
+
+test("keeps quick-connect devices on the nurse-facing summary view", async () => {
+  const { useDashboardContext } = jest.requireMock(
+    "../../../../src/features/dashboard/hooks/use-dashboard-context",
+  ) as { useDashboardContext: jest.Mock };
+  const now = Date.now();
+  const quickConnectContext = {
+    devices: [
+      {
+        id: "device-1",
+        institutionId: "institution-1",
+        institutionName: "Korle-Bu Teaching Hospital",
+        localAccessMode: "quick_connect",
+        nickname: "Cold Room Alpha",
+        macAddress: "AA:BB:CC:DD:EE:01",
+        firmwareVersion: "fw-1.0.0",
+        protocolVersion: 1,
+        deviceStatus: "enrolled",
+        status: "enrolled",
+        grantVersion: 2,
+        accessRole: "viewer",
+        primaryAssigneeName: null,
+        primaryAssigneeStaffId: null,
+        viewerNames: [],
+        currentTempC: 4.6,
+        mktStatus: "safe",
+        batteryLevel: 93,
+        batteryPercentEstimate: 94,
+        batteryVoltageV: 4.01,
+        currentMa: 120,
+        latestSequence: 12,
+        lastSeenAt: now - 60_000,
+        lastConnectionTestAt: null,
+        lastConnectionTestStatus: "idle",
+        powerMw: 482,
+        recordedAt: now - 60_000,
+        rtcIso: new Date(now - 60_000).toISOString(),
+        sdCardMounted: true,
+        shuntVoltageMv: 9.8,
+        timeSource: "rtc",
+      },
+    ],
+    error: null,
+    isLoading: false,
+    profile: {
+      firebaseUid: "u1",
+      displayName: "Akosua Mensah",
+      email: "akosua@example.com",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      staffId: "KB1001",
+      role: "Nurse",
+      lastUpdatedAt: 1,
+    },
+    refreshDevices: () => mockRefreshDevices(),
+  };
+
+  useDashboardContext.mockImplementation(() => quickConnectContext);
+  mockGetRecentReadingsForDevice.mockResolvedValueOnce([{ currentTempC: 4.8 }, { currentTempC: 6.2 }]);
+
+  const ui = render(<DeviceDetailsScreen />);
+
+  await waitFor(() => expect(ui.getByText("Connected")).toBeTruthy());
+  expect(ui.getByText("MKT")).toBeTruthy();
+  expect(ui.getByText("Raw temperature")).toBeTruthy();
+  expect(ui.getByText("Last update")).toBeTruthy();
+  expect(ui.getByText("Device status")).toBeTruthy();
+  expect(ui.getByText("Refresh readings")).toBeTruthy();
+  expect(ui.getByText("Reconnect")).toBeTruthy();
+  expect(ui.queryByText("Connection Tools")).toBeNull();
+  expect(ui.queryByText("Authorized Access")).toBeNull();
+  expect(ui.queryByText("Supervisor Actions")).toBeNull();
+  expect(ui.queryByText("Run transport check")).toBeNull();
+  expect(ui.queryByText("Open temporary SoftAP access")).toBeNull();
+  expect(ui.queryByText("Live diagnostics")).toBeNull();
+  expect(ui.queryByText("Save facility Wi-Fi")).toBeNull();
+  expect(ui.queryByText("Developer code")).toBeNull();
 });
 
 test("shows a monitoring permission error instead of pretending monitoring was enabled", async () => {

@@ -10,6 +10,8 @@
 
 import type * as credential_throttle from "../credential_throttle.js";
 import type * as devices from "../devices.js";
+import type * as http from "../http.js";
+import type * as labview from "../labview.js";
 import type * as maintenance from "../maintenance.js";
 import type * as notifications from "../notifications.js";
 import type * as passcodes from "../passcodes.js";
@@ -26,6 +28,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   credential_throttle: typeof credential_throttle;
   devices: typeof devices;
+  http: typeof http;
+  labview: typeof labview;
   maintenance: typeof maintenance;
   notifications: typeof notifications;
   passcodes: typeof passcodes;

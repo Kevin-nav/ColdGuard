@@ -10,6 +10,7 @@ describe("getColdGuardWifiBridgeModule", () => {
       fetchRuntimeSnapshotAsync: jest.fn(),
       fetchRuntimeHistoryAsync: jest.fn(),
       getMonitoringStatusesAsync: jest.fn(),
+      listNearbyColdGuardNetworksAsync: jest.fn(),
       releaseNetworkBindingAsync: jest.fn(),
       startEnrollmentAsync: jest.fn(),
       startMonitoringDeviceAsync: jest.fn(),
@@ -96,6 +97,15 @@ describe("ColdGuardWifiBridgeModule.web", () => {
     const module = require("./ColdGuardWifiBridgeModule.web");
 
     await expect(module.default().fetchRuntimeHistoryAsync("http://192.168.4.1")).rejects.toThrow(
+      "WIFI_BRIDGE_UNAVAILABLE",
+    );
+  });
+
+  test("listNearbyColdGuardNetworksAsync throws when the web bridge is unavailable", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require("./ColdGuardWifiBridgeModule.web");
+
+    await expect(module.default().listNearbyColdGuardNetworksAsync()).rejects.toThrow(
       "WIFI_BRIDGE_UNAVAILABLE",
     );
   });

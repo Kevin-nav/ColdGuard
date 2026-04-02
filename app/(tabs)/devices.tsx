@@ -1,5 +1,5 @@
 import { router } from "expo-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
 import { DashboardSection } from "../../src/features/dashboard/components/dashboard-section";
@@ -7,8 +7,10 @@ import { DeviceCard } from "../../src/features/dashboard/components/device-card"
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
 import { useRefreshOnTabFocus } from "../../src/features/dashboard/hooks/use-refresh-on-tab-focus";
+import { quickConnectColdGuardDevice } from "../../src/features/devices/services/connection-service";
 import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
-import { quickConnectColdGuardDevice } from "../../src/features/devices/services/quick-connect";
+import { resolveDisplayMktC } from "../../src/features/devices/services/mkt";
+import { getRecentReadingsForDevice } from "../../src/lib/storage/sqlite/reading-repository";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
 
@@ -16,15 +18,50 @@ export default function DevicesScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createSharedStyles(colors), [colors]);
   const { devices, error, isLoading, isRefreshing, profile, refreshDevices } = useDashboardContext();
-  const [deviceId, setDeviceId] = useState("");
   const [nickname, setNickname] = useState("");
-  const [password, setPassword] = useState("");
+  const [quickConnectCode, setQuickConnectCode] = useState("");
+  const [quickConnectStatus, setQuickConnectStatus] = useState<string | null>(null);
   const [qrPayload, setQrPayload] = useState("");
-  const [softApSsid, setSoftApSsid] = useState("");
+  const [displayMktByDeviceId, setDisplayMktByDeviceId] = useState<Record<string, number>>({});
   const [isQuickConnecting, setIsQuickConnecting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useRefreshOnTabFocus(refreshDevices);
+
+  useEffect(() => {
+    let isActive = true;
+
+    async function loadDisplayMkt() {
+      const entries = await Promise.all(
+        devices.map(async (device) => {
+          const readings = await getRecentReadingsForDevice(device.id, 24);
+          const displayMktC = resolveDisplayMktC({
+            fallbackTempC: device.currentTempC,
+            readings,
+          });
+          return [device.id, displayMktC] as const;
+        }),
+      );
+
+      if (!isActive) {
+        return;
+      }
+
+      setDisplayMktByDeviceId(
+        Object.fromEntries(
+          entries.flatMap(([nextDeviceId, displayMktC]) =>
+            typeof displayMktC === "number" ? [[nextDeviceId, displayMktC]] : [],
+          ),
+        ),
+      );
+    }
+
+    void loadDisplayMkt();
+
+    return () => {
+      isActive = false;
+    };
+  }, [devices]);
 
   if (error) {
     return (
@@ -52,23 +89,26 @@ export default function DevicesScreen() {
 
     setIsQuickConnecting(true);
     setMessage(null);
+    setQuickConnectStatus("Looking for nearby devices...");
 
     try {
       const result = await quickConnectColdGuardDevice({
-        deviceId,
+        code: quickConnectCode,
         nickname,
-        password,
+        onProgress: setQuickConnectStatus,
         profile,
-        ssid: softApSsid,
       });
       await refreshDevices();
       router.push(`/device/${result.deviceId}`);
     } catch (nextError) {
       setMessage(nextError instanceof Error ? nextError.message : "Quick connect failed.");
     } finally {
+      setQuickConnectStatus(null);
       setIsQuickConnecting(false);
     }
   }
+
+  const isQuickConnectDisabled = isQuickConnecting || quickConnectCode.length !== 8;
 
   function openEnrollmentFlow() {
     try {
@@ -110,29 +150,30 @@ export default function DevicesScreen() {
         <PanelCard>
           <Text style={[styles.bodyText, { color: colors.textPrimary }]}>
             {profile.role === "Supervisor"
-              ? "Supervisor access: enroll, assign, reconnect, and remove facility units."
-              : "Nurse access: reconnect only to devices assigned to you."}
+              ? "Use Quick Connect for demos and nearby checks. Advanced setup stays available when needed."
+              : "Use Quick Connect to open a nearby device and review its latest readings."}
           </Text>
           {message ? <Text style={styles.helperText}>{message}</Text> : null}
         </PanelCard>
       </DashboardSection>
 
       <DashboardSection
-        description="Join a nearby device directly with the SoftAP credentials shown on its OLED screen."
+        description="Enter the 8-digit code shown on the device screen. The app will find the nearby device for you."
         eyebrow="Quick Connect"
         title="Open nearby device"
       >
         <PanelCard>
           <Text style={styles.bodyText}>
-            Enter the device ID, SoftAP name, and password shown on the device to open its live local session.
+            Enter the Quick Connect code from the device screen to open its live session.
           </Text>
           <TextInput
-            autoCapitalize="characters"
-            onChangeText={setDeviceId}
-            placeholder="CG-ESP32-A100"
+            keyboardType="number-pad"
+            maxLength={8}
+            onChangeText={(value) => setQuickConnectCode(value.replace(/[^0-9]/g, "").slice(0, 8))}
+            placeholder="8-digit code"
             placeholderTextColor={colors.textSecondary}
             style={styles.input}
-            value={deviceId}
+            value={quickConnectCode}
           />
           <TextInput
             onChangeText={setNickname}
@@ -141,33 +182,17 @@ export default function DevicesScreen() {
             style={styles.input}
             value={nickname}
           />
-          <TextInput
-            autoCapitalize="none"
-            onChangeText={setSoftApSsid}
-            placeholder="ColdGuard_A100"
-            placeholderTextColor={colors.textSecondary}
-            style={styles.input}
-            value={softApSsid}
-          />
-          <TextInput
-            autoCapitalize="none"
-            onChangeText={setPassword}
-            placeholder="SoftAP password"
-            placeholderTextColor={colors.textSecondary}
-            secureTextEntry
-            style={styles.input}
-            value={password}
-          />
+          {isQuickConnecting && quickConnectStatus ? <Text style={styles.helperText}>{quickConnectStatus}</Text> : null}
           <Pressable
-            disabled={isQuickConnecting}
+            disabled={isQuickConnectDisabled}
             onPress={() => void handleQuickConnect()}
             style={({ pressed }) => [
               styles.primaryButton,
-              (pressed || isQuickConnecting) && styles.buttonDisabled,
+              (pressed || isQuickConnectDisabled) && styles.buttonDisabled,
             ]}
           >
             <Text style={styles.primaryButtonText}>
-              {isQuickConnecting ? "Connecting..." : "Quick connect"}
+              {isQuickConnecting ? "Connecting..." : "Connect nearby device"}
             </Text>
           </Pressable>
         </PanelCard>
@@ -208,7 +233,7 @@ export default function DevicesScreen() {
       ) : null}
 
       <DashboardSection
-        description="All active and monitored units."
+        description="Current devices with their latest care-facing readings."
         eyebrow="Current Fleet"
         title={devices.length === 0 ? "No devices yet" : `${devices.length} active devices`}
       >
@@ -222,6 +247,7 @@ export default function DevicesScreen() {
               <DeviceCard
                 key={device.id}
                 device={device}
+                displayMktC={displayMktByDeviceId[device.id]}
                 onPress={() => router.push(`/device/${device.id}`)}
               />
             ))}

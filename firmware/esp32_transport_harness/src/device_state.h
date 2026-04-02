@@ -45,6 +45,9 @@ struct DeviceState {
   String telemetrySensorHealth = "uninitialized";
   String telemetryStatusText;
   String telemetryMktStatus = "safe";
+  double telemetryMktExponentialSum = 0.0;
+  uint32_t telemetryMktSampleCount = 0;
+  float telemetryMktC = 0.0f;
   float telemetryTemperatureC = 4.0f;
   bool telemetryTemperatureSensorHealthy = false;
   bool telemetryRtcHealthy = false;

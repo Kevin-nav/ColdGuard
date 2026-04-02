@@ -15,6 +15,7 @@
 #define COLDGUARD_HAS_DS18B20 1
 #else
 #define COLDGUARD_HAS_DS18B20 0
+#warning "OneWire.h or DallasTemperature.h not found — DS18B20 support DISABLED. Sensor will always show disconnected."
 #endif
 
 #if __has_include(<RTClib.h>)
@@ -33,8 +34,13 @@ constexpr unsigned long kTelemetrySampleIntervalMs = 15UL * 1000UL;
 constexpr unsigned long kTelemetryStorageRetryMs = 10UL * 1000UL;
 constexpr unsigned long kOfflineWarningMs = 10UL * 60UL * 1000UL;
 constexpr unsigned long kOfflineCriticalMs = 30UL * 60UL * 1000UL;
+constexpr float kTempSafeMinC = 2.0f;
+constexpr float kTempSafeMaxC = 8.0f;
 constexpr float kTempWarningC = 5.0f;
 constexpr float kTempCriticalC = 8.0f;
+constexpr double kMktActivationEnergyKjPerMol = 83.144;
+constexpr double kGasConstantKjPerMolK = 0.0083144;
+constexpr double kKelvinOffset = 273.15;
 constexpr size_t kTelemetryLogMaxBytes = 48UL * 1024UL;
 constexpr uint32_t kHistoryPageDefaultLimit = 100U;
 constexpr uint32_t kHistoryPageMaxLimit = 250U;
@@ -46,10 +52,17 @@ bool gTelemetryHardwareReady = false;
 bool gTelemetryStorageReady = false;
 unsigned long gLastTelemetrySampleAtMs = 0;
 unsigned long gLastTelemetryStorageRetryAtMs = 0;
+bool gDs18b20Initialized = false;
+constexpr uint8_t kDs18b20MaxRetries = 3;
+constexpr unsigned long kDs18b20RetryDelayMs = 100UL;
+constexpr float kDs18b20PowerOnResetC = 85.0f;
 
 #if COLDGUARD_HAS_DS18B20
 OneWire gOneWire(kTelemetryDs18b20Pin);
 DallasTemperature gTemperatureSensors(&gOneWire);
+constexpr float kDisconnectedTemperatureC = DEVICE_DISCONNECTED_C;
+#else
+constexpr float kDisconnectedTemperatureC = -127.0f;
 #endif
 
 #if COLDGUARD_HAS_RTC
@@ -120,6 +133,51 @@ bool isMktStatusValue(const String& value) {
   return value == "safe" || value == "warning" || value == "alert";
 }
 
+bool isValidTemperatureReading(float temperatureC) {
+  if (temperatureC <= kDisconnectedTemperatureC + 0.5f) {
+    return false;  // -127.0 C or close to it = disconnected
+  }
+  if (temperatureC < -55.0f || temperatureC > 125.0f) {
+    return false;  // outside DS18B20 operating range
+  }
+  // Filter the well-known 85.0 C power-on reset default value.
+  // The DS18B20 returns exactly 85.0 C before the first real conversion.
+  if (temperatureC >= kDs18b20PowerOnResetC - 0.5f && temperatureC <= kDs18b20PowerOnResetC + 0.5f) {
+    return false;
+  }
+  return true;
+}
+
+bool isTemperatureOutOfRange(float temperatureC) {
+  return temperatureC < kTempSafeMinC || temperatureC > kTempSafeMaxC;
+}
+
+double temperatureToMktExponential(float temperatureC) {
+  const double temperatureK = static_cast<double>(temperatureC) + kKelvinOffset;
+  return std::exp(-kMktActivationEnergyKjPerMol / (kGasConstantKjPerMolK * temperatureK));
+}
+
+float calculateMeanKineticTemperatureC(double exponentialSum, uint32_t sampleCount) {
+  if (sampleCount == 0 || exponentialSum <= 0.0) {
+    return 0.0f;
+  }
+
+  const double averageExponential = exponentialSum / static_cast<double>(sampleCount);
+  const double meanKineticTemperatureK =
+    (kMktActivationEnergyKjPerMol / kGasConstantKjPerMolK) / -std::log(averageExponential);
+  return static_cast<float>(meanKineticTemperatureK - kKelvinOffset);
+}
+
+String deriveMktStatus(float meanKineticTemperatureC) {
+  if (meanKineticTemperatureC >= kTempCriticalC) {
+    return "alert";
+  }
+  if (meanKineticTemperatureC >= kTempWarningC) {
+    return "warning";
+  }
+  return "safe";
+}
+
 uint64_t parseUint64Field(const String& value, uint64_t fallback = 0) {
   if (value.isEmpty()) {
     return fallback;
@@ -153,23 +211,29 @@ String deriveStatusText(const DeviceState& state) {
   if (!state.telemetryInitialized) {
     return deviceLabel + " is waiting for the first telemetry sample.";
   }
-  if (!state.telemetryTemperatureSensorHealthy || !state.telemetryRtcHealthy) {
+  if (!state.telemetryTemperatureSensorHealthy) {
+    return deviceLabel + " temperature probe is disconnected.";
+  }
+  if (!state.telemetryRtcHealthy) {
     return deviceLabel + " is running with degraded telemetry hardware.";
   }
-  if (state.telemetryTemperatureCritical) {
-    return deviceLabel + " is in a critical temperature state.";
+  if (isTemperatureOutOfRange(state.telemetryTemperatureC)) {
+    return deviceLabel + " temperature is outside the 2 C to 8 C safe range.";
   }
-  return deviceLabel + " is logging real sensor telemetry to internal storage.";
+  return deviceLabel + " temperature is within the 2 C to 8 C safe range.";
 }
 
 String buildTelemetryStatusText(const String& deviceLabel, const TelemetrySample& sample) {
-  if (!sample.temperatureSensorHealthy || !sample.rtcHealthy) {
+  if (!sample.temperatureSensorHealthy) {
+    return deviceLabel + " temperature probe is disconnected.";
+  }
+  if (!sample.rtcHealthy) {
     return deviceLabel + " is running with degraded telemetry hardware.";
   }
-  if (sample.temperatureCritical) {
-    return deviceLabel + " is in a critical temperature state.";
+  if (isTemperatureOutOfRange(sample.vaccineTempC)) {
+    return deviceLabel + " temperature is outside the 2 C to 8 C safe range.";
   }
-  return deviceLabel + " is logging real sensor telemetry to internal storage.";
+  return deviceLabel + " temperature is within the 2 C to 8 C safe range.";
 }
 
 bool ensureTelemetryStorageReady() {
@@ -414,6 +478,7 @@ bool sampleRuntimeTelemetry(DeviceState* state, Preferences& preferences) {
   TelemetrySample sample;
   sample.sequence = gNextTelemetrySequence++;
   sample.recordedAtEpochMs = currentDeviceTimeMs();
+  bool hasFreshTemperatureSample = false;
 
 #if COLDGUARD_HAS_RTC
   if (gRtc.begin()) {
@@ -444,46 +509,90 @@ bool sampleRuntimeTelemetry(DeviceState* state, Preferences& preferences) {
 #endif
 
 #if COLDGUARD_HAS_DS18B20
-  gTemperatureSensors.begin();
-  gTemperatureSensors.setResolution(10);
-  gTemperatureSensors.setWaitForConversion(true);
-  gTemperatureSensors.requestTemperatures();
-  delay(200);
-  const float temperature = gTemperatureSensors.getTempCByIndex(0);
-  if (temperature != DEVICE_DISCONNECTED_C && temperature > -100.0f && temperature < 100.0f) {
-    sample.vaccineTempC = temperature;
-    sample.temperatureSensorHealthy = true;
-  } else {
+  // Re-initialize the bus only if a previous cycle fully failed.
+  if (!gDs18b20Initialized) {
+    gTemperatureSensors.begin();
+    gTemperatureSensors.setResolution(10);
+    gTemperatureSensors.setWaitForConversion(true);
+    const uint8_t deviceCount = gTemperatureSensors.getDeviceCount();
+    gDs18b20Initialized = deviceCount > 0;
+    Serial.println(
+      String("[TELEMETRY] DS18B20 re-init: found ") + String(deviceCount) +
+      String(" device(s) on pin ") + String(kTelemetryDs18b20Pin));
+  }
+
+  // Retry loop — try up to kDs18b20MaxRetries times before giving up.
+  for (uint8_t attempt = 1; attempt <= kDs18b20MaxRetries; attempt++) {
+    gTemperatureSensors.requestTemperatures();
+    const float temperature = gTemperatureSensors.getTempCByIndex(0);
+
+    if (isValidTemperatureReading(temperature)) {
+      sample.vaccineTempC = temperature;
+      sample.temperatureSensorHealthy = true;
+      hasFreshTemperatureSample = true;
+      Serial.println(
+        String("[TELEMETRY] DS18B20 read: ") + String(temperature, 2) +
+        String(" C (attempt ") + String(attempt) + String("/") +
+        String(kDs18b20MaxRetries) + String(", devices=") +
+        String(gTemperatureSensors.getDeviceCount()) + String(")"));
+      break;
+    }
+
+    Serial.println(
+      String("[TELEMETRY] DS18B20 attempt ") + String(attempt) + String("/") +
+      String(kDs18b20MaxRetries) + String(" FAILED: raw=") +
+      String(temperature, 2) + String(" C (devices=") +
+      String(gTemperatureSensors.getDeviceCount()) + String(")"));
+
+    if (attempt < kDs18b20MaxRetries) {
+      delay(kDs18b20RetryDelayMs);
+    }
+  }
+
+  if (!hasFreshTemperatureSample) {
     sample.vaccineTempC = state->telemetryTemperatureC;
+    // Force a full bus re-scan on the next cycle.
+    gDs18b20Initialized = false;
+    Serial.println(
+      String("[TELEMETRY] DS18B20 all ") + String(kDs18b20MaxRetries) +
+      String(" attempts failed — marking sensor unhealthy, reinitializing bus"));
   }
 #else
   sample.vaccineTempC = state->telemetryTemperatureC;
 #endif
 
-  sample.temperatureCritical = sample.vaccineTempC >= kTempCriticalC;
-  const bool tempWarning = sample.vaccineTempC >= kTempWarningC;
-  if (sample.temperatureCritical) {
-    sample.mktStatus = "alert";
-  } else if (tempWarning) {
-    sample.mktStatus = "warning";
+  sample.temperatureCritical =
+    sample.temperatureSensorHealthy && isTemperatureOutOfRange(sample.vaccineTempC);
+  if (hasFreshTemperatureSample) {
+    state->telemetryMktExponentialSum += temperatureToMktExponential(sample.vaccineTempC);
+    state->telemetryMktSampleCount += 1;
+    state->telemetryMktC = calculateMeanKineticTemperatureC(
+      state->telemetryMktExponentialSum,
+      state->telemetryMktSampleCount
+    );
+    sample.mktStatus = deriveMktStatus(state->telemetryMktC);
   } else {
-    sample.mktStatus = "safe";
+    sample.mktStatus = state->telemetryMktStatus;
   }
 
   sample.sensorHealth = buildSensorHealthSummary(sample.temperatureSensorHealthy, sample.rtcHealthy);
   const String deviceLabel = state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname;
   sample.statusText = buildTelemetryStatusText(deviceLabel, sample);
 
-  const bool historyWriteOk = appendTelemetrySample(sample);
+  const bool historyWriteOk = hasFreshTemperatureSample ? appendTelemetrySample(sample) : true;
 
-  state->telemetrySequence = sample.sequence;
+  if (hasFreshTemperatureSample) {
+    state->telemetrySequence = sample.sequence;
+  }
   state->telemetryRecordedAtEpochMs = sample.recordedAtEpochMs;
   state->telemetryRtcIso = sample.rtcIso;
   state->telemetryTimeSource = sample.timeSource;
   state->telemetrySensorHealth = sample.sensorHealth;
   state->telemetryStatusText = sample.statusText;
-  state->telemetryMktStatus = sample.mktStatus;
-  state->telemetryTemperatureC = sample.vaccineTempC;
+  if (hasFreshTemperatureSample) {
+    state->telemetryMktStatus = sample.mktStatus;
+    state->telemetryTemperatureC = sample.vaccineTempC;
+  }
   state->telemetryTemperatureSensorHealthy = sample.temperatureSensorHealthy;
   state->telemetryRtcHealthy = sample.rtcHealthy;
   state->telemetrySdCardMounted = gTelemetryStorageReady;
@@ -518,6 +627,30 @@ void initializeRuntimeTelemetry(DeviceState* state, Preferences& preferences) {
   gTemperatureSensors.begin();
   gTemperatureSensors.setResolution(10);
   gTemperatureSensors.setWaitForConversion(true);
+  {
+    const uint8_t deviceCount = gTemperatureSensors.getDeviceCount();
+    gDs18b20Initialized = deviceCount > 0;
+    Serial.println(
+      String("[TELEMETRY] DS18B20 init: found ") + String(deviceCount) +
+      String(" device(s) on pin ") + String(kTelemetryDs18b20Pin));
+    DeviceAddress addr;
+    for (uint8_t i = 0; i < deviceCount; i++) {
+      if (gTemperatureSensors.getAddress(addr, i)) {
+        String addrStr;
+        for (uint8_t b = 0; b < 8; b++) {
+          if (addr[b] < 0x10) addrStr += "0";
+          addrStr += String(addr[b], HEX);
+        }
+        Serial.println(
+          String("[TELEMETRY] DS18B20 device ") + String(i) +
+          String(" address: ") + addrStr);
+      }
+    }
+    if (deviceCount == 0) {
+      Serial.println("[TELEMETRY] WARNING: No DS18B20 devices found on OneWire bus!");
+      Serial.println("[TELEMETRY]   Check wiring: DATA->GPIO17, VCC->3.3V, GND->GND, 4.7k pull-up on DATA");
+    }
+  }
 #endif
 
 #if COLDGUARD_HAS_RTC

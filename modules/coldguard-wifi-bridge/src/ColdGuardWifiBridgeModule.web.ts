@@ -27,6 +27,9 @@ function createColdGuardWifiBridgeWebModule(): ColdGuardWifiBridgeModuleContract
     async getMonitoringStatusesAsync() {
       return {};
     },
+    async listNearbyColdGuardNetworksAsync() {
+      throw new Error("WIFI_BRIDGE_UNAVAILABLE");
+    },
     async releaseNetworkBindingAsync() {
       return;
     },

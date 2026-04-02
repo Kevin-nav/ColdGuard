@@ -125,6 +125,7 @@ export type ColdGuardWifiBridgeModuleContract = {
     limit?: number,
   ): Promise<ColdGuardRuntimeHistoryPage>;
   getMonitoringStatusesAsync(): Promise<ColdGuardMonitoringStatusMap>;
+  listNearbyColdGuardNetworksAsync(): Promise<string[]>;
   releaseNetworkBindingAsync(): Promise<void>;
   startEnrollmentAsync(options: ColdGuardEnrollmentRequest): Promise<ColdGuardEnrollmentResult>;
   startMonitoringDeviceAsync(options: ColdGuardMonitoringServiceOptions): Promise<ColdGuardMonitoringStatusMap>;

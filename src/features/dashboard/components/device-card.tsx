@@ -30,16 +30,18 @@ function getStatusIcon(status: DeviceRecord["mktStatus"]) {
   }
 }
 
-export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }) {
+export function DeviceCard(props: { device: DeviceRecord; displayMktC?: number | null; onPress?: () => void }) {
   const { colors } = useTheme();
   const statusColor = getStatusColor(props.device.mktStatus, colors);
   const statusIcon = getStatusIcon(props.device.mktStatus);
   const accessLabel =
-    props.device.accessRole === "manager"
-      ? "Supervisor managed"
-      : props.device.accessRole === "primary"
-        ? "Primary nurse"
-        : "Assigned viewer";
+    props.device.localAccessMode === "quick_connect"
+      ? "Quick Connect"
+      : props.device.accessRole === "manager"
+        ? "Supervisor managed"
+        : props.device.accessRole === "primary"
+          ? "Primary nurse"
+          : "Assigned viewer";
   const connectionLabel =
     props.device.lastConnectionTestStatus === "success"
       ? "Connection verified"
@@ -64,17 +66,25 @@ export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }
         />
       </View>
       <View style={styles.metrics}>
-        <MetricRow iconName="thermometer-outline" label="Temp" value={`${props.device.currentTempC.toFixed(1)} C`} />
-        <MetricRow iconName="layers-outline" label="Sequence" value={`${props.device.latestSequence}`} />
-        <MetricRow iconName="time-outline" label="Clock" value={props.device.timeSource.toUpperCase()} />
+        <MetricRow
+          iconName="pulse-outline"
+          label="MKT"
+          value={`${(props.displayMktC ?? props.device.currentTempC).toFixed(1)} C`}
+        />
+        <MetricRow iconName="thermometer-outline" label="Latest reading" value={`${props.device.currentTempC.toFixed(1)} C`} />
+        <MetricRow iconName="time-outline" label="Last update" value={formatLastSeen(props.device.lastSeenAt)} />
       </View>
       <View style={styles.summary}>
         <Text style={[styles.meta, { color: colors.textPrimary }]}>{accessLabel}</Text>
-        <Text style={[styles.meta, { color: colors.textSecondary }]}>
-          {props.device.primaryAssigneeName
-            ? `Primary: ${props.device.primaryAssigneeName}`
-            : "Primary nurse not assigned"}
-        </Text>
+        {props.device.localAccessMode !== "quick_connect" ? (
+          <Text style={[styles.meta, { color: colors.textSecondary }]}>
+            {props.device.primaryAssigneeName
+              ? `Primary: ${props.device.primaryAssigneeName}`
+              : "Primary nurse not assigned"}
+          </Text>
+        ) : (
+          <Text style={[styles.meta, { color: colors.textSecondary }]}>Local device session</Text>
+        )}
         <Text
           style={[
             styles.meta,
@@ -91,9 +101,6 @@ export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }
           {connectionLabel}
         </Text>
       </View>
-      <Text style={[styles.meta, { color: colors.textSecondary }]}>
-        Last seen {formatLastSeen(props.device.lastSeenAt)}
-      </Text>
     </PanelCard>
   );
 

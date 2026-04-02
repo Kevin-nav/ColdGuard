@@ -16,6 +16,7 @@ export type ColdGuardWifiBridge = {
   connect(ticket: ColdGuardWifiTicket): Promise<{ localIp: string; ssid: string }>;
   fetchRuntimeSnapshot?(runtimeBaseUrl: string): Promise<ColdGuardRuntimeFetchResult>;
   fetchRuntimeHistory?(runtimeBaseUrl: string, afterSequence?: number, limit?: number): Promise<ColdGuardRuntimeHistoryPage>;
+  listNearbyColdGuardNetworks?(): Promise<string[]>;
   release(): Promise<void>;
 };
 
@@ -42,6 +43,12 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
   if (Platform.OS === "android" && wifiBridgeModule?.connectToAccessPointAsync) {
     const bridge: ColdGuardWifiBridge = {
       connect: (ticket) => wifiBridgeModule.connectToAccessPointAsync(ticket.ssid, ticket.password),
+      listNearbyColdGuardNetworks: async () => {
+        if (!wifiBridgeModule.listNearbyColdGuardNetworksAsync) {
+          throw new Error("WIFI_BRIDGE_DISCOVERY_UNAVAILABLE");
+        }
+        return await wifiBridgeModule.listNearbyColdGuardNetworksAsync();
+      },
       release: async () => {
         await wifiBridgeModule.releaseNetworkBindingAsync?.();
       },
@@ -61,6 +68,9 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
 
   return {
     async connect() {
+      throw new Error("WIFI_BRIDGE_UNAVAILABLE");
+    },
+    async listNearbyColdGuardNetworks() {
       throw new Error("WIFI_BRIDGE_UNAVAILABLE");
     },
     async release() {

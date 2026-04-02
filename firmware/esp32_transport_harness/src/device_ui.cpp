@@ -14,6 +14,8 @@ namespace {
 
 constexpr unsigned long kTransientMessageMs = 2500UL;
 constexpr bool kBuiltInLedActiveHigh = true;
+constexpr float kTempSafeMinC = 2.0f;
+constexpr float kTempSafeMaxC = 8.0f;
 
 enum class TouchRole {
   Nav,
@@ -36,6 +38,8 @@ enum class UiScreen {
 
 enum class DetailView {
   Status,
+  QuickConnect,
+  Settings,
   PairingCode,
   WifiTools,
   Diagnostics,
@@ -50,11 +54,8 @@ enum class ConfirmAction {
 
 enum class MenuItem {
   Status,
-  NewEnrollment,
-  ShowPairingCode,
-  WifiTools,
-  Diagnostics,
-  FactoryReset,
+  QuickConnect,
+  Settings,
   Exit,
 };
 
@@ -126,11 +127,8 @@ bool gLastBuzzerOutput = false;
 
 const MenuItem kMenuItems[] = {
   MenuItem::Status,
-  MenuItem::NewEnrollment,
-  MenuItem::ShowPairingCode,
-  MenuItem::WifiTools,
-  MenuItem::Diagnostics,
-  MenuItem::FactoryReset,
+  MenuItem::QuickConnect,
+  MenuItem::Settings,
   MenuItem::Exit,
 };
 
@@ -274,9 +272,34 @@ String runtimePhaseLabel(const DeviceState& state) {
   return "";
 }
 
+bool hasLiveTemperatureReading(const DeviceState& state) {
+  return state.telemetryInitialized && state.telemetryTemperatureSensorHealthy;
+}
+
+bool isTemperatureOutOfRange(const DeviceState& state) {
+  return hasLiveTemperatureReading(state) &&
+         (state.telemetryTemperatureC < kTempSafeMinC || state.telemetryTemperatureC > kTempSafeMaxC);
+}
+
+String liveTemperatureSummary(const DeviceState& state) {
+  if (!state.telemetryInitialized) {
+    return runtimeStatusLine(state);
+  }
+  if (!state.telemetryTemperatureSensorHealthy) {
+    return "Probe disconnected";
+  }
+
+  String summary = "Temp " + String(state.telemetryTemperatureC, 1) + " C";
+  summary += isTemperatureOutOfRange(state) ? " out range" : " in range";
+  return summary;
+}
+
 String homePrimaryLine(const DeviceState& state) {
   if (state.telemetryInitialized) {
-    return "Temp " + String(state.telemetryTemperatureC, 1) + " C";
+    if (!state.telemetryTemperatureSensorHealthy) {
+      return "Sensor disconnected";
+    }
+    return "MKT " + String(state.telemetryMktC, 1) + " C";
   }
 
   const String runtimePhase = runtimePhaseLabel(state);
@@ -289,7 +312,7 @@ String homePrimaryLine(const DeviceState& state) {
 
 String homeSecondaryLine(const DeviceState& state) {
   if (state.telemetryInitialized) {
-    return "Store " + String(state.telemetrySdCardMounted ? "ok" : "fault") + "  Seq " + String(state.telemetrySequence);
+    return liveTemperatureSummary(state);
   }
 
   return runtimeStatusLine(state);
@@ -299,16 +322,10 @@ String menuLabel(MenuItem item) {
   switch (item) {
     case MenuItem::Status:
       return "Status";
-    case MenuItem::NewEnrollment:
-      return "New enrollment";
-    case MenuItem::ShowPairingCode:
-      return "Pairing code";
-    case MenuItem::WifiTools:
-      return "Wi-Fi tools";
-    case MenuItem::Diagnostics:
-      return "Diagnostics";
-    case MenuItem::FactoryReset:
-      return "Factory reset";
+    case MenuItem::QuickConnect:
+      return "Quick Connect";
+    case MenuItem::Settings:
+      return "Settings";
     case MenuItem::Exit:
       return "Home";
   }
@@ -335,12 +352,16 @@ const char* detailViewLabel(DetailView view) {
   switch (view) {
     case DetailView::Status:
       return "status";
+    case DetailView::QuickConnect:
+      return "quick-connect";
+    case DetailView::Settings:
+      return "settings";
     case DetailView::PairingCode:
-      return "pairing";
+      return "advanced-setup";
     case DetailView::WifiTools:
-      return "wifi-tools";
+      return "local-access";
     case DetailView::Diagnostics:
-      return "diagnostics";
+      return "developer";
   }
 
   return "status";
@@ -620,20 +641,8 @@ LedMode determineLedMode(const DeviceState& state) {
 }
 
 BuzzerMode determineBuzzerMode(const DeviceState& state) {
-  if (!state.lastErrorCode.isEmpty() || runtimePhaseHasFailure(state)) {
-    return BuzzerMode::Error;
-  }
-  if (state.telemetryTemperatureCritical) {
+  if (isTemperatureOutOfRange(state)) {
     return BuzzerMode::Critical;
-  }
-  if (state.telemetryInitialized &&
-      (!state.telemetrySdCardMounted ||
-       !state.telemetryTemperatureSensorHealthy ||
-       !state.telemetryRtcHealthy)) {
-    return BuzzerMode::Warning;
-  }
-  if (state.telemetryInitialized) {
-    return BuzzerMode::Notice;
   }
   return BuzzerMode::Quiet;
 }
@@ -847,12 +856,16 @@ void renderStatusDetail(const DeviceState& state) {
       body2 = "Transport " + currentTransportLabel(state);
       break;
     case 1:
-      body1 = state.telemetryInitialized
-        ? ("Temp " + String(state.telemetryTemperatureC, 1) + " C")
-        : "Telemetry waiting";
-      body2 = state.telemetryInitialized
-        ? ("Status " + String(state.telemetryMktStatus))
-        : "Sampling sensors";
+      if (!state.telemetryInitialized) {
+        body1 = "Telemetry waiting";
+        body2 = "Sampling sensors";
+      } else if (!state.telemetryTemperatureSensorHealthy) {
+        body1 = "Sensor disconnected";
+        body2 = "Reconnect probe";
+      } else {
+        body1 = "MKT " + String(state.telemetryMktC, 1) + " C";
+        body2 = liveTemperatureSummary(state);
+      }
       break;
     default:
       if (state.telemetryInitialized) {
@@ -878,6 +891,100 @@ void renderStatusDetail(const DeviceState& state) {
   drawTextLeft(0, 21, shown1);
   setBodyFont();
   drawTextLeft(0, 39, shown2);
+  drawFooter(footer);
+  endFrame();
+}
+
+void renderQuickConnectDetail(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  String body1;
+  String body2;
+
+  switch (gDetailPage % 4) {
+    case 0:
+      body1 = "Device name";
+      body2 = state.deviceNickname.isEmpty() ? state.bleName : state.deviceNickname;
+      break;
+    case 1:
+      body1 = "Quick connect SSID";
+      body2 = state.wifiSsid;
+      break;
+    case 2:
+      body1 = "Quick connect pass";
+      body2 = state.wifiPassword;
+      break;
+    default:
+      if (!state.telemetryInitialized) {
+        body1 = "Telemetry waiting";
+        body2 = runtimeStatusLine(state);
+      } else if (!state.telemetryTemperatureSensorHealthy) {
+        body1 = "Sensor disconnected";
+        body2 = "Reconnect probe";
+      } else {
+        body1 = "MKT " + String(state.telemetryMktC, 1) + " C";
+        body2 = liveTemperatureSummary(state);
+      }
+      break;
+  }
+
+  const String footer = currentFooterNotice("Nav: page  Hold: back");
+  const String shown1 = fitBodyText(body1, nowMs);
+  const String shown2 = fitBodyText(body2, nowMs);
+  const String frameKey = String("detail|quick|") + String(gDetailPage % 4) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Quick Connect");
+  setEmphasisFont();
+  drawTextLeft(0, 21, shown1);
+  setBodyFont();
+  drawTextLeft(0, 37, shown2);
+  drawFooter(footer);
+  endFrame();
+}
+
+void renderSettingsDetail(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  String body1;
+  String body2;
+
+  switch (gDetailPage % 5) {
+    case 0:
+      body1 = "Advanced pairing";
+      body2 = state.enrollmentReady ? "Refresh pairing code" : "Create pairing code";
+      break;
+    case 1:
+      body1 = "Pairing details";
+      body2 = state.enrollmentReady ? "Claim token and link" : "Pairing is not ready";
+      break;
+    case 2:
+      body1 = "Wi-Fi settings";
+      body2 = state.facilityWifiSsid.isEmpty() ? "Clear or review Wi-Fi" : state.facilityWifiSsid;
+      break;
+    case 3:
+      body1 = "Diagnostics";
+      body2 = state.lastErrorCode.isEmpty() ? "Firmware and health" : state.lastErrorCode;
+      break;
+    default:
+      body1 = "Factory reset";
+      body2 = "Hold to clear device";
+      break;
+  }
+
+  const String footer = currentFooterNotice("Nav: page  Select: open");
+  const String shown1 = fitBodyText(body1, nowMs);
+  const String shown2 = fitBodyText(body2, nowMs);
+  const String frameKey = String("detail|settings|") + String(gDetailPage % 5) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
+  if (!beginFrame(frameKey)) {
+    return;
+  }
+
+  drawHeader("Settings");
+  setEmphasisFont();
+  drawTextLeft(0, 21, shown1);
+  setBodyFont();
+  drawTextLeft(0, 37, shown2);
   drawFooter(footer);
   endFrame();
 }
@@ -915,7 +1022,7 @@ void renderPairingCodeDetail(const DeviceState& state) {
     return;
   }
 
-  drawHeader("Pairing code");
+  drawHeader("Advanced setup");
   setEmphasisFont();
   drawTextLeft(0, 21, shown1);
   setBodyFont();
@@ -929,12 +1036,16 @@ void renderWifiToolsDetail(const DeviceState& state) {
   String body1;
   String body2;
 
-  switch (gDetailPage % 2) {
+  switch (gDetailPage % 3) {
     case 0:
       body1 = state.facilityWifiSsid.isEmpty() ? "Saved Wi-Fi: none" : "Saved Wi-Fi";
       body2 = state.facilityWifiSsid.isEmpty()
                 ? "SoftAP " + String(state.accessPointStarted ? "up" : "down")
                 : state.facilityWifiSsid;
+      break;
+    case 1:
+      body1 = "Quick connect";
+      body2 = state.accessPointStarted ? "Ready for phones" : "Starting local access";
       break;
     default:
       body1 = "Clear saved Wi-Fi";
@@ -947,12 +1058,12 @@ void renderWifiToolsDetail(const DeviceState& state) {
   const String footer = currentFooterNotice("Nav: page  Select: clear");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
-  const String frameKey = String("detail|wifi|") + String(gDetailPage % 2) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
+  const String frameKey = String("detail|wifi|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
   if (!beginFrame(frameKey)) {
     return;
   }
 
-  drawHeader("Wi-Fi tools");
+  drawHeader("Local access");
   setEmphasisFont();
   drawTextLeft(0, 21, shown1);
   setBodyFont();
@@ -993,7 +1104,7 @@ void renderDiagnosticsDetail(const DeviceState& state) {
     return;
   }
 
-  drawHeader("Diagnostics");
+  drawHeader("Developer");
   setEmphasisFont();
   drawTextLeft(0, 21, shown1);
   setBodyFont();
@@ -1059,34 +1170,44 @@ void logNewEnrollment(const DeviceState& state) {
 
 void performMenuAction(
   MenuItem item,
-  DeviceState* state,
-  Preferences& preferences,
-  WebServer& webServer,
-  BLEAdvertising* advertising) {
+  DeviceState*,
+  Preferences&,
+  WebServer&,
+  BLEAdvertising*) {
   logUiEvent(String("Selected menu item: ") + menuLabel(item));
 
   switch (item) {
     case MenuItem::Status:
       openDetailView(DetailView::Status);
       return;
-    case MenuItem::NewEnrollment:
-      openConfirmScreen(ConfirmAction::NewEnrollment, UiScreen::Menu, DetailView::Status);
+    case MenuItem::QuickConnect:
+      openDetailView(DetailView::QuickConnect);
       return;
-    case MenuItem::ShowPairingCode:
-      logUiEvent("Pairing code viewed");
-      openDetailView(DetailView::PairingCode);
-      return;
-    case MenuItem::WifiTools:
-      openDetailView(DetailView::WifiTools);
-      return;
-    case MenuItem::FactoryReset:
-      openConfirmScreen(ConfirmAction::FactoryReset, UiScreen::Menu, DetailView::Status);
-      return;
-    case MenuItem::Diagnostics:
-      openDetailView(DetailView::Diagnostics);
+    case MenuItem::Settings:
+      openDetailView(DetailView::Settings);
       return;
     case MenuItem::Exit:
       openHome();
+      return;
+  }
+}
+
+void performSettingsAction(size_t page) {
+  switch (page % 5) {
+    case 0:
+      openConfirmScreen(ConfirmAction::NewEnrollment, UiScreen::Detail, DetailView::Settings);
+      return;
+    case 1:
+      openDetailView(DetailView::PairingCode);
+      return;
+    case 2:
+      openDetailView(DetailView::WifiTools);
+      return;
+    case 3:
+      openDetailView(DetailView::Diagnostics);
+      return;
+    default:
+      openConfirmScreen(ConfirmAction::FactoryReset, UiScreen::Detail, DetailView::Settings);
       return;
   }
 }
@@ -1210,6 +1331,10 @@ void handleInputEvent(
         return;
       }
       if (gScreen == UiScreen::Detail) {
+        if (gDetailView == DetailView::Settings) {
+          performSettingsAction(gDetailPage);
+          return;
+        }
         if (gDetailView == DetailView::WifiTools) {
           openConfirmScreen(ConfirmAction::ClearFacilityWifi, UiScreen::Detail, DetailView::WifiTools);
           return;
@@ -1226,6 +1351,10 @@ void handleInputEvent(
       }
       if (gScreen == UiScreen::Menu) {
         performMenuAction(kMenuItems[gMenuIndex], state, preferences, webServer, advertising);
+        return;
+      }
+      if (gScreen == UiScreen::Detail && gDetailView == DetailView::Settings) {
+        performSettingsAction(gDetailPage);
         return;
       }
       if (gScreen == UiScreen::Detail && gDetailView == DetailView::WifiTools) {
@@ -1315,6 +1444,12 @@ void renderUi(const DeviceState& state) {
       switch (gDetailView) {
         case DetailView::Status:
           renderStatusDetail(state);
+          return;
+        case DetailView::QuickConnect:
+          renderQuickConnectDetail(state);
+          return;
+        case DetailView::Settings:
+          renderSettingsDetail(state);
           return;
         case DetailView::PairingCode:
           renderPairingCodeDetail(state);

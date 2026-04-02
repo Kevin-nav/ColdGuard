@@ -142,11 +142,13 @@ export type DeviceRuntimeConfig = {
 export type ColdGuardConnectionPayload = {
   accessMode?: "bluetooth_primary" | "facility_runtime" | "runtime_recovery" | "temporary_shared_access";
   currentTempC: number;
+  deviceId?: string;
   firmwareVersion: string;
   latestSequence: number;
   lastSeenAt: number;
   macAddress: string;
   mktStatus: "safe" | "warning" | "alert";
+  nickname?: string | null;
   recordedAt: number;
   rtcIso: string | null;
   sdCardMounted?: boolean;

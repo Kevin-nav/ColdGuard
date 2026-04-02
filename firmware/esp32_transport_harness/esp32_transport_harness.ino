@@ -4,6 +4,8 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <Preferences.h>
 #include <WebServer.h>
 

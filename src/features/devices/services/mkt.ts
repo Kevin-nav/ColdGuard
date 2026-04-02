@@ -1,31 +1,44 @@
 import type { DeviceTelemetryReadingRecord } from "../types";
 
-const WHO_MKT_ACTIVATION_ENERGY_KJ_PER_MOL = 83.144;
+const DEFAULT_ACTIVATION_ENERGY_KJ_PER_MOL = 83.144;
 const GAS_CONSTANT_KJ_PER_MOL_K = 0.0083144;
 const KELVIN_OFFSET = 273.15;
 
-type TemperatureReading = Pick<DeviceTelemetryReadingRecord, "currentTempC">;
+export function computeMeanKineticTemperatureC(
+  readings: Pick<DeviceTelemetryReadingRecord, "currentTempC">[],
+): number | null {
+  const temperaturesK = readings
+    .map((reading) => reading.currentTempC + KELVIN_OFFSET)
+    .filter((temperatureK) => Number.isFinite(temperatureK) && temperatureK > 0);
 
-export function computeMeanKineticTemperatureC(temperaturesC: readonly number[]): number | null {
-  const normalizedTemperatures = temperaturesC.filter((value) => Number.isFinite(value));
-  if (normalizedTemperatures.length === 0) {
+  if (temperaturesK.length === 0) {
     return null;
   }
 
-  const averageExponential =
-    normalizedTemperatures.reduce((sum, temperatureC) => {
-      const temperatureK = temperatureC + KELVIN_OFFSET;
-      return sum + Math.exp(-WHO_MKT_ACTIVATION_ENERGY_KJ_PER_MOL / (GAS_CONSTANT_KJ_PER_MOL_K * temperatureK));
-    }, 0) / normalizedTemperatures.length;
+  const meanExponential =
+    temperaturesK.reduce(
+      (sum, temperatureK) =>
+        sum + Math.exp(-DEFAULT_ACTIVATION_ENERGY_KJ_PER_MOL / (GAS_CONSTANT_KJ_PER_MOL_K * temperatureK)),
+      0,
+    ) / temperaturesK.length;
 
-  const meanKineticTemperatureK =
-    (WHO_MKT_ACTIVATION_ENERGY_KJ_PER_MOL / GAS_CONSTANT_KJ_PER_MOL_K) / -Math.log(averageExponential);
+  if (meanExponential <= 0 || !Number.isFinite(meanExponential)) {
+    return null;
+  }
 
-  return meanKineticTemperatureK - KELVIN_OFFSET;
+  const temperatureK =
+    (DEFAULT_ACTIVATION_ENERGY_KJ_PER_MOL / GAS_CONSTANT_KJ_PER_MOL_K) / -Math.log(meanExponential);
+
+  if (!Number.isFinite(temperatureK)) {
+    return null;
+  }
+
+  return temperatureK - KELVIN_OFFSET;
 }
 
-export function computeMeanKineticTemperatureFromReadings(
-  readings: readonly TemperatureReading[],
-): number | null {
-  return computeMeanKineticTemperatureC(readings.map((reading) => reading.currentTempC));
+export function resolveDisplayMktC(args: {
+  fallbackTempC?: number | null;
+  readings: Pick<DeviceTelemetryReadingRecord, "currentTempC">[];
+}) {
+  return computeMeanKineticTemperatureC(args.readings) ?? args.fallbackTempC ?? null;
 }

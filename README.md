@@ -72,6 +72,10 @@ Required values are listed in `.env.example`:
 - `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`
 - `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
 
+Backend runtime values used by Convex should be configured with `npx convex env set ...`:
+
+- `CG_LABVIEW_API_KEY`
+
 ## Scripts
 
 - `npm start`: start Expo dev server
@@ -99,6 +103,28 @@ After seeding, the onboarding flow includes both QR institution selection and cr
   - Staff IDs: `HO3001`, `HO3002`
 
 Passcodes are defined in `convex/seeds.ts` for local/demo onboarding.
+
+## LabVIEW Telemetry Pull
+
+LabVIEW can pull raw temperature batches directly from Convex over HTTPS/JSON.
+
+- Route: `GET /api/labview/telemetry/pull`
+- Auth: `x-coldguard-api-key: <CG_LABVIEW_API_KEY>` or `Authorization: Bearer <CG_LABVIEW_API_KEY>`
+- Required query param: `deviceId`
+- Optional query params: `startMs`, `endMs`, `afterSequence`, `limit`
+
+Example:
+
+```text
+GET https://<your-convex-deployment>.convex.site/api/labview/telemetry/pull?deviceId=CG-ESP32-A100&startMs=1712010000000&endMs=1712013600000&afterSequence=120&limit=120
+```
+
+Response fields intended for LabVIEW:
+
+- `temperatureArrayC`: raw temperature array for MKT processing
+- `rows`: raw reading records with `sequence`, `recordedAt`, `rtcIso`, `temperatureC`, and status metadata
+- `sequenceArray` and `recordedAtMsArray`: convenience arrays for batch orchestration
+- `nextAfterSequence`: cursor to use on the next pull
 
 ## Repo Notes
 

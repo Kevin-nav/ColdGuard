@@ -1,6 +1,7 @@
 package expo.modules.coldguardwifibridge
 
 import android.content.Context
+import android.net.wifi.WifiManager
 import androidx.core.content.ContextCompat
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
@@ -32,6 +33,10 @@ class ColdGuardWifiBridgeModule : Module() {
 
     AsyncFunction("fetchRuntimeHistoryAsync") Coroutine { runtimeBaseUrl: String, afterSequence: Double?, limit: Double? ->
       fetchRuntimeHistory(runtimeBaseUrl, afterSequence?.toLong(), limit?.toInt())
+    }
+
+    AsyncFunction("listNearbyColdGuardNetworksAsync") Coroutine {
+      listNearbyColdGuardNetworks()
     }
 
     AsyncFunction("startEnrollmentAsync") Coroutine { options: Map<String, Any?> ->
@@ -141,6 +146,34 @@ class ColdGuardWifiBridgeModule : Module() {
         "rowsJson" to page.rowsJson,
         "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
       )
+    }
+  }
+
+  private suspend fun listNearbyColdGuardNetworks(): List<String> {
+    return withContext(Dispatchers.IO) {
+      val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
+      val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        ?: throw IllegalStateException("WIFI_MANAGER_UNAVAILABLE")
+
+      try {
+        wifiManager.startScan()
+      } catch (_: Exception) {
+      }
+
+      wifiManager.scanResults
+        .asSequence()
+        .mapNotNull { result ->
+          val ssid = result.SSID?.trim()
+          if (ssid.isNullOrEmpty() || !ssid.startsWith("ColdGuard_")) {
+            null
+          } else {
+            ssid to result.level
+          }
+        }
+        .groupBy({ it.first }, { it.second })
+        .map { (ssid, levels) -> ssid to (levels.maxOrNull() ?: Int.MIN_VALUE) }
+        .sortedByDescending { it.second }
+        .map { it.first }
     }
   }
 

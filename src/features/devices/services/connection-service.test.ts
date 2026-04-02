@@ -224,7 +224,7 @@ beforeEach(() => {
     protocolVersion: 1,
     runtimeBaseUrl: "http://192.168.4.1",
     smokeTestPassed: true,
-    softApPassword: "pass-1",
+    softApPassword: "48291573",
     softApSsid: "ColdGuard_A100",
   });
   mockStartNativeMonitoringDevice.mockResolvedValue({
@@ -299,7 +299,7 @@ test("rejects invalid device qr payloads", () => {
   );
 });
 
-test("quick connects over manual softap credentials and persists local runtime state", async () => {
+test("quick connects from a single code and persists the discovered local runtime state", async () => {
   mockFetch.mockClear();
   mockGetReadingsAfterSequenceForDevice.mockResolvedValueOnce([
     {
@@ -317,9 +317,8 @@ test("quick connects over manual softap credentials and persists local runtime s
   mockGetReadingsAfterSequenceForDevice.mockResolvedValueOnce([]);
 
   const result = await quickConnectColdGuardDevice({
-    deviceId: "CG-ESP32-A100",
+    code: "48291573",
     nickname: "Cold Room Alpha",
-    password: "demo-pass-1",
     profile: {
       displayName: "Yaw Boateng",
       email: "yaw@example.com",
@@ -330,12 +329,12 @@ test("quick connects over manual softap credentials and persists local runtime s
       role: "Supervisor",
       staffId: "KB1001",
     },
-    ssid: "ColdGuard_A100",
     wifiBridge: {
       connect: async () => ({
         localIp: "192.168.4.2",
         ssid: "ColdGuard_A100",
       }),
+      listNearbyColdGuardNetworks: async () => ["ColdGuard_A100"],
       fetchRuntimeSnapshot: async () => ({
         alertsJson: "{\"alerts\":[]}",
         historyJson: "{\"hasMore\":false,\"nextSequence\":42,\"rows\":[]}",
@@ -369,7 +368,7 @@ test("quick connects over manual softap credentials and persists local runtime s
     "CG-ESP32-A100",
     expect.objectContaining({
       activeTransport: "softap",
-      softApPassword: "demo-pass-1",
+      softApPassword: "48291573",
       softApSsid: "ColdGuard_A100",
     }),
   );
@@ -396,11 +395,10 @@ test("quick connects over manual softap credentials and persists local runtime s
   expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
 });
 
-test("rejects quick connect when the device id is missing", async () => {
+test("rejects quick connect when the code is missing", async () => {
   await expect(
     quickConnectColdGuardDevice({
-      deviceId: "   ",
-      password: "demo-pass-1",
+      code: "   ",
       profile: {
         displayName: "Yaw Boateng",
         email: "yaw@example.com",
@@ -411,16 +409,16 @@ test("rejects quick connect when the device id is missing", async () => {
         role: "Supervisor",
         staffId: "KB1001",
       },
-      ssid: "ColdGuard_A100",
       wifiBridge: {
         connect: async () => ({
           localIp: "192.168.4.2",
           ssid: "ColdGuard_A100",
         }),
+        listNearbyColdGuardNetworks: async () => ["ColdGuard_A100"],
         release: async () => undefined,
       },
     }),
-  ).rejects.toThrow("DEVICE_ID_REQUIRED");
+  ).rejects.toThrow("Enter the 8-digit Quick Connect code.");
 });
 
 test("enrolls a blank mock device and registers it", async () => {
@@ -576,7 +574,7 @@ test("uses the native android enrollment bridge and persists temporary softap me
     "CG-ESP32-A100",
     expect.objectContaining({
       lastRuntimeError: null,
-      softApPassword: "pass-1",
+      softApPassword: "48291573",
       softApRuntimeBaseUrl: "http://192.168.4.1",
       softApSsid: "ColdGuard_A100",
     }),
@@ -754,7 +752,7 @@ test("starts native monitoring with facility and softap recovery context", async
     facilityWifiPassword: "facility-pass",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     facilityWifiSsid: "HospitalNet",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     lastMonitorAt: Date.now(),
@@ -782,7 +780,7 @@ test("starts native monitoring with facility and softap recovery context", async
       handshakeToken: "handshake-token",
       heartbeatIntervalMs: 10_000,
       leaseDurationMs: 35_000,
-      softApPassword: "A100-wifi",
+      softApPassword: "48291573",
       softApRuntimeBaseUrl: "http://192.168.4.1",
       softApSsid: "ColdGuard_A100",
       transport: "softap",
@@ -816,7 +814,7 @@ test("starts monitoring in ble-primary mode when facility wifi is configured but
     facilityWifiPassword: "facility-pass",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     facilityWifiSsid: "HospitalNet",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     lastMonitorAt: Date.now(),
@@ -851,7 +849,7 @@ test("keeps ble-primary startup transport when facility wifi was previously acti
     facilityWifiPassword: "facility-pass",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     facilityWifiSsid: "HospitalNet",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     lastMonitorAt: null,
@@ -917,7 +915,7 @@ test("keeps multi-device monitoring state isolated per device", async () => {
       facilityWifiPassword: "facility-pass",
       facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
       facilityWifiSsid: "HospitalNet",
-      softApPassword: "A100-wifi",
+      softApPassword: "48291573",
       softApRuntimeBaseUrl: "http://192.168.4.1",
       softApSsid: "ColdGuard_A100",
       lastMonitorAt: Date.now(),
@@ -1016,7 +1014,7 @@ test("merges per-device native monitoring status into the runtime session", asyn
     facilityWifiPassword: "facility-pass",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     facilityWifiSsid: "HospitalNet",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     lastMonitorAt: 1,
@@ -1071,7 +1069,7 @@ test("preserves ble-primary ownership visibility even when runtime transport is 
     primaryLeaseExpiresAt: null,
     primaryLeaseSessionId: null,
     sessionStatus: "recovering",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     updatedAt: 1,
@@ -1111,7 +1109,7 @@ test("prefers proven facility wifi over softap during reconnect", async () => {
     facilityWifiPassword: "facility-pass",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     facilityWifiSsid: "HospitalNet",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     lastMonitorAt: null,
@@ -1145,7 +1143,7 @@ test("uses stored softap before facility wifi when facility path is not yet prov
     facilityWifiPassword: "facility-pass",
     facilityWifiRuntimeBaseUrl: "http://10.0.0.22",
     facilityWifiSsid: "HospitalNet",
-    softApPassword: "A100-wifi",
+    softApPassword: "48291573",
     softApRuntimeBaseUrl: "http://192.168.4.1",
     softApSsid: "ColdGuard_A100",
     lastMonitorAt: null,

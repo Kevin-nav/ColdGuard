@@ -1,6 +1,7 @@
 #include "device_state.h"
 
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <esp_timer.h>
 
@@ -31,22 +32,25 @@ String generateBootstrapToken() {
   return token;
 }
 
+bool isValidQuickConnectPassword(const String& password) {
+  if (password.length() != 8) {
+    return false;
+  }
+
+  for (size_t index = 0; index < password.length(); index++) {
+    if (!std::isdigit(static_cast<unsigned char>(password.charAt(index)))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 String generateWifiPassword() {
-  static const char kHexDigits[] = "0123456789abcdef";
-  uint8_t randomBytes[16];
-  for (size_t index = 0; index < sizeof(randomBytes); index++) {
-    randomBytes[index] = static_cast<uint8_t>(esp_random() & 0xFF);
-  }
-
   String password;
-  password.reserve(sizeof(randomBytes) * 2);
-  for (uint8_t byte : randomBytes) {
-    password += kHexDigits[(byte >> 4) & 0x0F];
-    password += kHexDigits[byte & 0x0F];
-  }
-
-  if (password.length() < 8) {
-    password += "12345678";
+  password.reserve(8);
+  for (size_t index = 0; index < 8; index++) {
+    password += static_cast<char>('0' + (esp_random() % 10));
   }
   return password;
 }
@@ -180,6 +184,19 @@ uint64_t parseUnsignedLongLong(const String& value, uint64_t fallback = 0) {
   return parsed;
 }
 
+double parseDoubleValue(const String& value, double fallback = 0.0) {
+  if (value.isEmpty()) {
+    return fallback;
+  }
+
+  char* endPtr = nullptr;
+  const double parsed = std::strtod(value.c_str(), &endPtr);
+  if (endPtr == value.c_str()) {
+    return fallback;
+  }
+  return parsed;
+}
+
 String buildAdvertisementPayload(const DeviceState& state, uint8_t protocolVersion) {
   return "id=" + state.deviceId + ";state=" + observableEnrollmentState(state) + ";pv=" + String(protocolVersion);
 }
@@ -197,7 +214,7 @@ void loadDeviceState(Preferences& preferences, const char* preferencesNamespace,
     preferences.putString("bootstrap", state->bootstrapToken);
   }
   state->wifiPassword = preferences.getString("wifi_pw", "");
-  if (state->wifiPassword.length() < 8) {
+  if (!isValidQuickConnectPassword(state->wifiPassword)) {
     state->wifiPassword = generateWifiPassword();
     preferences.putString("wifi_pw", state->wifiPassword);
   }
@@ -223,6 +240,9 @@ void loadDeviceState(Preferences& preferences, const char* preferencesNamespace,
   state->telemetrySensorHealth = preferences.getString("telemetry_sensor_health", "uninitialized");
   state->telemetryStatusText = preferences.getString("telemetry_status_text", "");
   state->telemetryMktStatus = preferences.getString("telemetry_mkt_status", "safe");
+  state->telemetryMktExponentialSum = parseDoubleValue(preferences.getString("telemetry_mkt_exp_sum", ""), 0.0);
+  state->telemetryMktSampleCount = preferences.getUInt("telemetry_mkt_samples", 0);
+  state->telemetryMktC = preferences.getFloat("telemetry_mkt_c", 0.0f);
   state->telemetryTemperatureC = preferences.getFloat("telemetry_temp_c", 4.0f);
   state->telemetryTemperatureSensorHealthy = preferences.getBool("telemetry_temp_healthy", false);
   state->telemetryRtcHealthy = preferences.getBool("telemetry_rtc_healthy", false);
@@ -258,6 +278,9 @@ void saveDeviceState(Preferences& preferences, const DeviceState& state) {
   preferences.putString("telemetry_sensor_health", state.telemetrySensorHealth);
   preferences.putString("telemetry_status_text", state.telemetryStatusText);
   preferences.putString("telemetry_mkt_status", state.telemetryMktStatus);
+  preferences.putString("telemetry_mkt_exp_sum", String(state.telemetryMktExponentialSum, 12));
+  preferences.putUInt("telemetry_mkt_samples", state.telemetryMktSampleCount);
+  preferences.putFloat("telemetry_mkt_c", state.telemetryMktC);
   preferences.putFloat("telemetry_temp_c", state.telemetryTemperatureC);
   preferences.putBool("telemetry_temp_healthy", state.telemetryTemperatureSensorHealthy);
   preferences.putBool("telemetry_rtc_healthy", state.telemetryRtcHealthy);

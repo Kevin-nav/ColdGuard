@@ -1,4 +1,5 @@
 import { initializeSQLite } from "./client";
+import type { TelemetryTimeSource } from "../../../features/devices/types";
 
 export type DeviceAccessRole = "manager" | "primary" | "viewer";
 export type DeviceConnectionTestStatus = "idle" | "running" | "success" | "failed" | null;
@@ -23,8 +24,11 @@ export type DeviceRecord = {
   macAddress: string;
   currentTempC: number;
   mktStatus: "safe" | "warning" | "alert";
-  batteryLevel: number;
-  doorOpen: boolean;
+  latestSequence: number;
+  recordedAt: number;
+  rtcIso: string | null;
+  sdCardMounted: boolean;
+  timeSource: TelemetryTimeSource;
   lastSeenAt: number;
   lastConnectionTestAt: number | null;
   lastConnectionTestStatus: DeviceConnectionTestStatus;
@@ -40,8 +44,11 @@ export type LegacySavedDevice = {
   macAddress: string;
   currentTempC: number;
   mktStatus: "safe" | "warning" | "alert";
-  batteryLevel: number;
-  doorOpen: boolean;
+  latestSequence?: number;
+  recordedAt?: number;
+  rtcIso?: string | null;
+  sdCardMounted?: boolean;
+  timeSource?: TelemetryTimeSource;
   lastSeenAt: number;
 };
 
@@ -61,8 +68,11 @@ type DeviceRow = {
   viewer_names_json: string;
   current_temp_c: number;
   mkt_status: "safe" | "warning" | "alert";
-  battery_level: number;
-  door_open: number;
+  latest_sequence: number;
+  recorded_at: number;
+  rtc_iso: string | null;
+  sd_card_mounted: number;
+  time_source: TelemetryTimeSource;
   last_seen_at: number;
   last_connection_test_at: number | null;
   last_connection_test_status: DeviceConnectionTestStatus;
@@ -78,6 +88,7 @@ export async function replaceDevicesForInstitution(
   devices: Omit<DeviceRecord, "institutionId" | "institutionName">[],
 ) {
   const database = await initializeSQLite();
+  const placeholderList = Array(28).fill("?").join(", ");
   await database.withTransactionAsync(async () => {
     await database.runAsync("DELETE FROM devices WHERE institution_id = ?", institutionId);
 
@@ -88,11 +99,12 @@ export async function replaceDevicesForInstitution(
           (
             id, institution_id, institution_name, nickname, mac_address, firmware_version, protocol_version,
             device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
-            viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
+            viewer_names_json, current_temp_c, mkt_status, latest_sequence, recorded_at, rtc_iso, time_source,
+            sd_card_mounted, last_seen_at,
             last_connection_test_at, last_connection_test_status, last_connection_sync_status,
             last_connection_sync_updated_at, last_connection_sync_failure_stage, last_connection_sync_error
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (${placeholderList})
         `,
         device.id,
         institutionId,
@@ -109,8 +121,11 @@ export async function replaceDevicesForInstitution(
         JSON.stringify(device.viewerNames),
         device.currentTempC,
         device.mktStatus,
-        device.batteryLevel,
-        device.doorOpen ? 1 : 0,
+        device.latestSequence,
+        device.recordedAt,
+        device.rtcIso,
+        device.timeSource,
+        0,
         device.lastSeenAt,
         device.lastConnectionTestAt,
         device.lastConnectionTestStatus,
@@ -198,29 +213,36 @@ export async function getDeviceById(deviceId: string, institutionId?: string): P
 export async function saveDeviceConnectionSnapshot(
   deviceId: string,
   snapshot: {
-    batteryLevel: number;
     currentTempC: number;
-    doorOpen: boolean;
     lastConnectionTestAt: number;
     lastConnectionTestStatus: DeviceConnectionTestStatus;
     lastSeenAt: number;
     macAddress: string;
     mktStatus: DeviceRecord["mktStatus"];
+    recordedAt: number;
+    rtcIso: string | null;
+    sdCardMounted: boolean;
+    sequence: number;
+    timeSource: TelemetryTimeSource;
   },
 ) {
   const database = await initializeSQLite();
   await database.runAsync(
     `
       UPDATE devices
-      SET mac_address = ?, current_temp_c = ?, mkt_status = ?, battery_level = ?, door_open = ?, last_seen_at = ?,
-          last_connection_test_at = ?, last_connection_test_status = ?
+      SET mac_address = ?, current_temp_c = ?, mkt_status = ?, latest_sequence = ?, recorded_at = ?,
+          rtc_iso = ?, time_source = ?, sd_card_mounted = ?, last_seen_at = ?, last_connection_test_at = ?,
+          last_connection_test_status = ?
       WHERE id = ?
     `,
     snapshot.macAddress,
     snapshot.currentTempC,
     snapshot.mktStatus,
-    snapshot.batteryLevel,
-    snapshot.doorOpen ? 1 : 0,
+    snapshot.sequence,
+    snapshot.recordedAt,
+    snapshot.rtcIso,
+    snapshot.timeSource,
+    0,
     snapshot.lastSeenAt,
     snapshot.lastConnectionTestAt,
     snapshot.lastConnectionTestStatus,
@@ -283,9 +305,12 @@ function normalizeSavedDevice(
 ): Omit<DeviceRecord, "institutionId" | "institutionName"> {
   return {
     accessRole: "accessRole" in device ? device.accessRole : "viewer",
-    batteryLevel: device.batteryLevel,
+    latestSequence: device.latestSequence ?? 0,
+    recordedAt: device.recordedAt ?? device.lastSeenAt,
+    rtcIso: device.rtcIso ?? null,
+    sdCardMounted: false,
+    timeSource: "timeSource" in device ? device.timeSource ?? "unknown" : "unknown",
     currentTempC: device.currentTempC,
-    doorOpen: device.doorOpen,
     firmwareVersion: "firmwareVersion" in device ? device.firmwareVersion : "legacy-fw-unknown",
     grantVersion: "grantVersion" in device ? device.grantVersion : 1,
     id: device.id,
@@ -317,7 +342,7 @@ function buildDeviceSelectClause(normalizeEmptyInstitutionId: boolean) {
     ${institutionIdSelect},
     institution_name, nickname, mac_address, firmware_version, protocol_version,
     device_status, grant_version, access_role, primary_assignee_name, primary_assignee_staff_id,
-    viewer_names_json, current_temp_c, mkt_status, battery_level, door_open, last_seen_at,
+    viewer_names_json, current_temp_c, mkt_status, latest_sequence, recorded_at, rtc_iso, time_source, sd_card_mounted, last_seen_at,
     last_connection_test_at, last_connection_test_status, last_connection_sync_status,
     last_connection_sync_updated_at, last_connection_sync_failure_stage, last_connection_sync_error
   `;
@@ -341,8 +366,11 @@ function mapDeviceRow(row: DeviceRow): DeviceRecord {
     macAddress: row.mac_address,
     currentTempC: row.current_temp_c,
     mktStatus: row.mkt_status,
-    batteryLevel: row.battery_level,
-    doorOpen: row.door_open === 1,
+    latestSequence: row.latest_sequence,
+    recordedAt: row.recorded_at,
+    rtcIso: row.rtc_iso,
+    sdCardMounted: false,
+    timeSource: row.time_source,
     lastSeenAt: row.last_seen_at,
     lastConnectionTestAt: row.last_connection_test_at ?? null,
     lastConnectionTestStatus: row.last_connection_test_status ?? "idle",

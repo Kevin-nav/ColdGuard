@@ -6,8 +6,6 @@ test("buildSignals prefers critical incidents when multiple conditions overlap",
     deviceId: "device-1",
     deviceNickname: "Cold Room Alpha",
     mktStatus: "alert",
-    batteryLevel: 8,
-    doorOpen: true,
     lastSeenAt: 0,
     observedAt: 31 * 60_000,
   });
@@ -15,11 +13,10 @@ test("buildSignals prefers critical incidents when multiple conditions overlap",
   expect(signals).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ incidentType: "temperature", severity: "critical" }),
-      expect.objectContaining({ incidentType: "door_open", severity: "critical" }),
       expect.objectContaining({ incidentType: "device_offline", severity: "critical" }),
-      expect.objectContaining({ incidentType: "battery_low", severity: "critical" }),
     ]),
   );
+  expect(signals).not.toEqual(expect.arrayContaining([expect.objectContaining({ incidentType: "door_open" })]));
 });
 
 test("temperature incidents require three healthy evaluations before resolving", () => {
@@ -33,8 +30,6 @@ test("temperature incidents require three healthy evaluations before resolving",
       deviceId: "device-1",
       deviceNickname: "Cold Room Alpha",
       mktStatus: "safe",
-      batteryLevel: 50,
-      doorOpen: false,
       lastSeenAt: Date.now(),
       observedAt: Date.now(),
     },
@@ -66,15 +61,9 @@ test("notification preference args normalize null quiet hours before persistence
 });
 
 test("notification preferences default missing per-type routine settings to enabled", () => {
-  expect(
-    __testing.normalizeNonCriticalByTypePreferences({
-      battery_low: false,
-    }),
-  ).toEqual({
+  expect(__testing.normalizeNonCriticalByTypePreferences({})).toEqual({
     temperature: true,
-    door_open: true,
     device_offline: true,
-    battery_low: false,
   });
 });
 
@@ -91,9 +80,7 @@ test("routine push delivery is skipped when that notification type is disabled",
         recoveryPushEnabled: true,
         nonCriticalByType: {
           temperature: false,
-          door_open: true,
           device_offline: true,
-          battery_low: true,
         },
       },
       {},
@@ -106,7 +93,7 @@ test("quiet hours still suppress routine push delivery", () => {
   expect(
     __testing.shouldDeliverPushToUser(
       {
-        incidentType: "door_open",
+        incidentType: "device_offline",
         severity: "warning",
       },
       {
@@ -115,9 +102,7 @@ test("quiet hours still suppress routine push delivery", () => {
         recoveryPushEnabled: true,
         nonCriticalByType: {
           temperature: true,
-          door_open: true,
           device_offline: true,
-          battery_low: true,
         },
         quietHoursStart: "22:00",
         quietHoursEnd: "06:00",
@@ -141,9 +126,7 @@ test("critical push delivery bypasses routine type settings", () => {
         recoveryPushEnabled: true,
         nonCriticalByType: {
           temperature: false,
-          door_open: true,
           device_offline: true,
-          battery_low: true,
         },
         quietHoursStart: "22:00",
         quietHoursEnd: "06:00",

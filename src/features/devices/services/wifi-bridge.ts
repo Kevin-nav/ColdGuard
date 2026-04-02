@@ -7,6 +7,7 @@ import type {
   ColdGuardMonitoringServiceOptions,
   ColdGuardMonitoringStatusMap,
   ColdGuardRuntimeFetchResult,
+  ColdGuardRuntimeHistoryPage,
 } from "../../../../modules/coldguard-wifi-bridge";
 import type { EventSubscription } from "expo-modules-core";
 import type { ColdGuardWifiTicket } from "../types";
@@ -14,8 +15,26 @@ import type { ColdGuardWifiTicket } from "../types";
 export type ColdGuardWifiBridge = {
   connect(ticket: ColdGuardWifiTicket): Promise<{ localIp: string; ssid: string }>;
   fetchRuntimeSnapshot?(runtimeBaseUrl: string): Promise<ColdGuardRuntimeFetchResult>;
+  fetchRuntimeHistory?(runtimeBaseUrl: string, afterSequence?: number, limit?: number): Promise<ColdGuardRuntimeHistoryPage>;
   release(): Promise<void>;
 };
+
+let nativeEnrollmentQueue: Promise<void> = Promise.resolve();
+
+async function runSerializedNativeEnrollment<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = nativeEnrollmentQueue;
+  let releaseCurrent!: () => void;
+  nativeEnrollmentQueue = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    releaseCurrent();
+  }
+}
 
 export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
   const wifiBridgeModule = Platform.OS === "android" ? getColdGuardWifiBridgeModule() : null;
@@ -30,6 +49,11 @@ export function createColdGuardWifiBridge(): ColdGuardWifiBridge {
 
     if (wifiBridgeModule.fetchRuntimeSnapshotAsync) {
       bridge.fetchRuntimeSnapshot = (runtimeBaseUrl) => wifiBridgeModule.fetchRuntimeSnapshotAsync(runtimeBaseUrl);
+    }
+
+    if (wifiBridgeModule.fetchRuntimeHistoryAsync) {
+      bridge.fetchRuntimeHistory = (runtimeBaseUrl, afterSequence, limit) =>
+        wifiBridgeModule.fetchRuntimeHistoryAsync(runtimeBaseUrl, afterSequence, limit);
     }
 
     return bridge;
@@ -78,7 +102,7 @@ export async function startNativeEnrollment(
   if (!wifiBridgeModule?.startEnrollmentAsync) {
     throw new Error("WIFI_BRIDGE_ENROLLMENT_UNAVAILABLE");
   }
-  return await wifiBridgeModule.startEnrollmentAsync(options);
+  return await runSerializedNativeEnrollment(() => wifiBridgeModule.startEnrollmentAsync(options));
 }
 
 export function subscribeToNativeEnrollmentStages(

@@ -1,8 +1,6 @@
 import type { DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
 import type { NotificationIncidentRecord, NotificationIncidentType, NotificationSeverity } from "../types";
 
-const DOOR_OPEN_WARNING_MS = 2 * 60_000;
-const DOOR_OPEN_CRITICAL_MS = 5 * 60_000;
 const OFFLINE_WARNING_MS = 10 * 60_000;
 const OFFLINE_CRITICAL_MS = 30 * 60_000;
 
@@ -92,40 +90,6 @@ function getIncidentDefinitions(device: DeviceRecord, now: number): IncidentDefi
       severity: "warning",
       title: `${device.nickname} has not checked in recently`,
       body: "The device appears offline. Confirm the mobile bridge or sensor connection.",
-    });
-  }
-
-  if (device.doorOpen) {
-    if (elapsedSinceSeen >= DOOR_OPEN_CRITICAL_MS) {
-      incidents.push({
-        type: "door_open",
-        severity: "critical",
-        title: `${device.nickname} has remained open too long`,
-        body: "Door open duration has passed the critical threshold. Close the unit immediately.",
-      });
-    } else if (elapsedSinceSeen >= DOOR_OPEN_WARNING_MS) {
-      incidents.push({
-        type: "door_open",
-        severity: "warning",
-        title: `${device.nickname} door is still open`,
-        body: "Door open duration has passed the warning threshold. Close the unit to protect stock.",
-      });
-    }
-  }
-
-  if (device.batteryLevel < 10) {
-    incidents.push({
-      type: "battery_low",
-      severity: "critical",
-      title: `${device.nickname} battery is critically low`,
-      body: `Battery level is ${device.batteryLevel}%. Restore power or recharge the device immediately.`,
-    });
-  } else if (device.batteryLevel < 20) {
-    incidents.push({
-      type: "battery_low",
-      severity: "warning",
-      title: `${device.nickname} battery is running low`,
-      body: `Battery level is ${device.batteryLevel}%. Plan to recharge the device soon.`,
     });
   }
 

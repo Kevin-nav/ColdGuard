@@ -790,17 +790,21 @@ export default function DeviceDetailsScreen() {
             />
             <View style={localStyles.divider} />
             <MetricRow
-              iconName="battery-half"
-              label="Battery Level"
-              value={`${activeDevice.batteryLevel}%`}
-              valueColor={activeDevice.batteryLevel < 20 ? colors.danger : undefined}
+              iconName="layers-outline"
+              label="Latest Sequence"
+              value={`${activeDevice.latestSequence}`}
             />
             <View style={localStyles.divider} />
             <MetricRow
-              iconName={activeDevice.doorOpen ? "lock-open-outline" : "lock-closed-outline"}
-              label="Door Sensor"
-              value={activeDevice.doorOpen ? "Door Open" : "Door Closed"}
-              valueColor={activeDevice.doorOpen ? colors.warning : undefined}
+              iconName="time-outline"
+              label="RTC Timestamp"
+              value={activeDevice.rtcIso ? new Date(activeDevice.rtcIso).toLocaleString() : "Not available"}
+            />
+            <View style={localStyles.divider} />
+            <MetricRow
+              iconName="time-outline"
+              label="Time Source"
+              value={activeDevice.timeSource.toUpperCase()}
             />
           </View>
         </PanelCard>

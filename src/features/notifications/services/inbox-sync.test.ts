@@ -72,8 +72,17 @@ function buildDevice(overrides: Partial<DeviceRecord> = {}): DeviceRecord {
     currentTempC: 12.4,
     mktStatus: "warning",
     batteryLevel: 80,
-    doorOpen: false,
+    batteryPercentEstimate: 82,
+    batteryVoltageV: 3.95,
+    currentMa: 120,
+    latestSequence: 25,
     lastSeenAt: Date.now(),
+    powerMw: 474,
+    recordedAt: Date.now(),
+    rtcIso: new Date().toISOString(),
+    sdCardMounted: true,
+    shuntVoltageMv: 9.1,
+    timeSource: "rtc",
     ...overrides,
   };
 }
@@ -519,7 +528,6 @@ test("falls back to the legacy mutation payload when the live validator rejects 
 test("exports safe default routine preferences for every notification type", () => {
   expect(DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType).toEqual({
     temperature: true,
-    door_open: true,
     device_offline: true,
     battery_low: true,
   });

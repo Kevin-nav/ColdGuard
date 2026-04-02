@@ -1,4 +1,4 @@
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import { useMemo } from "react";
 import { ActivityIndicator, RefreshControl, StyleSheet, Text, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
@@ -7,6 +7,7 @@ import { DeviceCard } from "../../src/features/dashboard/components/device-card"
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { SystemOverviewCard } from "../../src/features/dashboard/components/system-overview-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
+import { useRefreshOnTabFocus } from "../../src/features/dashboard/hooks/use-refresh-on-tab-focus";
 import { NotificationListItem } from "../../src/features/notifications/components/notification-list-item";
 import { useNotificationInbox } from "../../src/features/notifications/hooks/use-notification-inbox";
 import { createSharedStyles } from "../../src/theme/shared-styles";
@@ -21,14 +22,7 @@ export default function HomeScreen() {
     useDashboardContext();
   const { activeIncidents, markRead } = useNotificationInbox();
 
-  useFocusEffect(
-    useMemo(
-      () => () => {
-        void refreshDevices();
-      },
-      [refreshDevices],
-    ),
-  );
+  useRefreshOnTabFocus(refreshDevices);
 
   if (error) {
     return (

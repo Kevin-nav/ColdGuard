@@ -1,8 +1,6 @@
 export type NotificationIncidentType =
   | "temperature"
-  | "door_open"
-  | "device_offline"
-  | "battery_low";
+  | "device_offline";
 
 export type NotificationSeverity = "warning" | "critical";
 
@@ -36,9 +34,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   recoveryPushEnabled: true,
   nonCriticalByType: {
     temperature: true,
-    door_open: true,
     device_offline: true,
-    battery_low: true,
   },
   quietHoursStart: null,
   quietHoursEnd: null,
@@ -87,11 +83,7 @@ export function formatNotificationTypeLabel(type: NotificationIncidentType) {
   switch (type) {
     case "temperature":
       return "Temperature";
-    case "door_open":
-      return "Door Open";
     case "device_offline":
       return "Offline";
-    case "battery_low":
-      return "Low Battery";
   }
 }

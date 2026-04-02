@@ -5,6 +5,7 @@
 #include <WiFi.h>
 
 #include "ble_recovery.h"
+#include "device_state.h"
 #include "wifi_runtime.h"
 
 namespace coldguard {
@@ -65,6 +66,14 @@ enum class LedMode {
   Error,
 };
 
+enum class BuzzerMode {
+  Quiet,
+  Notice,
+  Warning,
+  Critical,
+  Error,
+};
+
 enum class LedOverlayType {
   None,
   EnrollmentGenerated,
@@ -89,21 +98,7 @@ struct TouchTracker {
   unsigned long startedAtMs = 0;
 };
 
-DeviceUiConfig gConfig = {
-  T0,
-  T4,
-  2,
-  21,
-  22,
-  16,
-  2,
-  0.40f,
-  200UL,
-  700UL,
-  "",
-  1,
-  "",
-};
+DeviceUiConfig gConfig{};
 U8G2_SH1106_128X64_NONAME_F_HW_I2C* gDisplay = nullptr;
 UiScreen gScreen = UiScreen::Home;
 DetailView gDetailView = DetailView::Status;
@@ -127,6 +122,7 @@ LedMode gLastLoggedLedMode = LedMode::Runtime;
 String gLastObservedErrorCode;
 bool gHasRenderedFrame = false;
 String gLastRenderedFrameKey;
+bool gLastBuzzerOutput = false;
 
 const MenuItem kMenuItems[] = {
   MenuItem::Status,
@@ -186,6 +182,15 @@ bool runtimePhaseIsPending(const DeviceState& state) {
 String runtimeStatusTag(const DeviceState& state) {
   if (runtimePhaseHasFailure(state) || !state.lastErrorCode.isEmpty()) {
     return "ERROR";
+  }
+  if (state.telemetryTemperatureCritical) {
+    return "ALERT";
+  }
+  if (state.telemetryInitialized &&
+      (!state.telemetrySdCardMounted ||
+       !state.telemetryTemperatureSensorHealthy ||
+       !state.telemetryRtcHealthy)) {
+    return "WARN";
   }
   if (state.stationConnectInProgress || state.softApStartInProgress || state.facilityWifiProvisioning) {
     return "PENDING";
@@ -270,6 +275,10 @@ String runtimePhaseLabel(const DeviceState& state) {
 }
 
 String homePrimaryLine(const DeviceState& state) {
+  if (state.telemetryInitialized) {
+    return "Temp " + String(state.telemetryTemperatureC, 1) + " C";
+  }
+
   const String runtimePhase = runtimePhaseLabel(state);
   if (!runtimePhase.isEmpty() && runtimePhaseIsActive(state)) {
     return runtimePhase;
@@ -279,6 +288,10 @@ String homePrimaryLine(const DeviceState& state) {
 }
 
 String homeSecondaryLine(const DeviceState& state) {
+  if (state.telemetryInitialized) {
+    return "Store " + String(state.telemetrySdCardMounted ? "ok" : "fault") + "  Seq " + String(state.telemetrySequence);
+  }
+
   return runtimeStatusLine(state);
 }
 
@@ -432,6 +445,9 @@ String uiFrameSignature(const DeviceState& state) {
          String("|rtTag=") + runtimeStatusTag(state) +
          String("|rtBusy=") + String(runtimePhaseIsPending(state) ? "1" : "0") +
          String("|err=") + (state.lastErrorCode.isEmpty() ? String("none") : state.lastErrorCode) +
+         String("|telemetrySeq=") + String(state.telemetrySequence) +
+         String("|telemetryTemp=") + String(state.telemetryTemperatureC, 1) +
+         String("|telemetrySd=") + String(state.telemetrySdCardMounted ? "1" : "0") +
          String("|transient=") + (gTransientUntilMs > millis() && gScreen != UiScreen::Confirm ? gTransientMessage : String("none"));
 }
 
@@ -545,6 +561,15 @@ void setLedOutput(bool on) {
   digitalWrite(gConfig.ledPin, on == kBuiltInLedActiveHigh ? HIGH : LOW);
 }
 
+void setBuzzerOutput(bool on) {
+  gLastBuzzerOutput = on;
+  if (on) {
+    tone(gConfig.buzzerPin, 2200);
+  } else {
+    noTone(gConfig.buzzerPin);
+  }
+}
+
 bool pulseWindow(unsigned long phaseMs, unsigned long startMs, unsigned long endMs) {
   return phaseMs >= startMs && phaseMs < endMs;
 }
@@ -576,6 +601,9 @@ LedMode determineLedMode(const DeviceState& state) {
   if (!state.lastErrorCode.isEmpty() || runtimePhaseHasFailure(state)) {
     return LedMode::Error;
   }
+  if (state.telemetryTemperatureCritical) {
+    return LedMode::Error;
+  }
   if (gScreen == UiScreen::Menu || gScreen == UiScreen::Confirm) {
     return LedMode::Menu;
   }
@@ -589,6 +617,54 @@ LedMode determineLedMode(const DeviceState& state) {
     return LedMode::EnrollmentReady;
   }
   return LedMode::Runtime;
+}
+
+BuzzerMode determineBuzzerMode(const DeviceState& state) {
+  if (!state.lastErrorCode.isEmpty() || runtimePhaseHasFailure(state)) {
+    return BuzzerMode::Error;
+  }
+  if (state.telemetryTemperatureCritical) {
+    return BuzzerMode::Critical;
+  }
+  if (state.telemetryInitialized &&
+      (!state.telemetrySdCardMounted ||
+       !state.telemetryTemperatureSensorHealthy ||
+       !state.telemetryRtcHealthy)) {
+    return BuzzerMode::Warning;
+  }
+  if (state.telemetryInitialized) {
+    return BuzzerMode::Notice;
+  }
+  return BuzzerMode::Quiet;
+}
+
+bool buzzerPatternActive(BuzzerMode mode, unsigned long nowMs) {
+  switch (mode) {
+    case BuzzerMode::Quiet:
+      return false;
+    case BuzzerMode::Notice: {
+      const unsigned long phaseMs = nowMs % 4000UL;
+      return pulseWindow(phaseMs, 0UL, 80UL);
+    }
+    case BuzzerMode::Warning: {
+      const unsigned long phaseMs = nowMs % 2200UL;
+      return pulseWindow(phaseMs, 0UL, 120UL) || pulseWindow(phaseMs, 450UL, 570UL);
+    }
+    case BuzzerMode::Critical: {
+      const unsigned long phaseMs = nowMs % 900UL;
+      return pulseWindow(phaseMs, 0UL, 100UL) ||
+             pulseWindow(phaseMs, 180UL, 280UL) ||
+             pulseWindow(phaseMs, 360UL, 460UL);
+    }
+    case BuzzerMode::Error: {
+      const unsigned long phaseMs = nowMs % 1200UL;
+      return pulseWindow(phaseMs, 0UL, 90UL) ||
+             pulseWindow(phaseMs, 220UL, 310UL) ||
+             pulseWindow(phaseMs, 440UL, 530UL);
+    }
+  }
+
+  return false;
 }
 
 bool continuousPatternActive(LedMode mode, unsigned long nowMs) {
@@ -639,6 +715,16 @@ void renderLed(const DeviceState& state) {
 
   if (ledOn != gLastLedOutput) {
     setLedOutput(ledOn);
+  }
+}
+
+void renderBuzzer(const DeviceState& state) {
+  const unsigned long nowMs = millis();
+  const BuzzerMode buzzerMode = determineBuzzerMode(state);
+  const bool buzzerOn = buzzerPatternActive(buzzerMode, nowMs);
+
+  if (buzzerOn != gLastBuzzerOutput) {
+    setBuzzerOutput(buzzerOn);
   }
 }
 
@@ -761,12 +847,21 @@ void renderStatusDetail(const DeviceState& state) {
       body2 = "Transport " + currentTransportLabel(state);
       break;
     case 1:
-      body1 = "SoftAP " + String(state.accessPointStarted ? "up" : "down");
-      body2 = "WiFi " + String(state.stationConnected ? "up" : "down");
+      body1 = state.telemetryInitialized
+        ? ("Temp " + String(state.telemetryTemperatureC, 1) + " C")
+        : "Telemetry waiting";
+      body2 = state.telemetryInitialized
+        ? ("Status " + String(state.telemetryMktStatus))
+        : "Sampling sensors";
       break;
     default:
-      body1 = "Runtime";
-      body2 = runtimePhaseLabel(state).isEmpty() ? runtimeStatusTag(state) : runtimePhaseLabel(state);
+      if (state.telemetryInitialized) {
+        body1 = "RTC " + String(state.telemetryRtcIso.isEmpty() ? "syncing" : state.telemetryRtcIso);
+        body2 = "Store " + String(state.telemetrySdCardMounted ? "ready" : "fault") + "  Seq " + String(state.telemetrySequence);
+      } else {
+        body1 = "Runtime";
+        body2 = runtimePhaseLabel(state).isEmpty() ? runtimeStatusTag(state) : runtimePhaseLabel(state);
+      }
       break;
   }
 
@@ -871,7 +966,7 @@ void renderDiagnosticsDetail(const DeviceState& state) {
   String body1;
   String body2;
 
-  switch (gDetailPage % 3) {
+  switch (gDetailPage % 4) {
     case 0:
       body1 = "Device ID";
       body2 = String("FW ") + String(gConfig.firmwareVersion);
@@ -879,6 +974,10 @@ void renderDiagnosticsDetail(const DeviceState& state) {
     case 1:
       body1 = "Last error";
       body2 = state.lastErrorCode.isEmpty() ? "none" : state.lastErrorCode;
+      break;
+    case 2:
+      body1 = "Health";
+      body2 = state.telemetrySensorHealth.isEmpty() ? "unknown" : state.telemetrySensorHealth;
       break;
     default:
       body1 = "BLE name";
@@ -889,7 +988,7 @@ void renderDiagnosticsDetail(const DeviceState& state) {
   const String footer = currentFooterNotice("Nav: page  Hold: back");
   const String shown1 = fitBodyText(body1, nowMs);
   const String shown2 = fitBodyText(body2, nowMs);
-  const String frameKey = String("detail|diag|") + String(gDetailPage % 3) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
+  const String frameKey = String("detail|diag|") + String(gDetailPage % 4) + "|" + shown1 + "|" + shown2 + "|" + footer + "|" + uiFrameSignature(state);
   if (!beginFrame(frameKey)) {
     return;
   }
@@ -1293,9 +1392,12 @@ void initializeDeviceUi(const DeviceUiConfig& config) {
   gLastObservedErrorCode = "";
   gHasRenderedFrame = false;
   gLastRenderedFrameKey = "";
+  gLastBuzzerOutput = false;
 
   pinMode(gConfig.ledPin, OUTPUT);
   setLedOutput(false);
+  pinMode(gConfig.buzzerPin, OUTPUT);
+  setBuzzerOutput(false);
 
   Wire.begin(gConfig.oledI2cSdaPin, gConfig.oledI2cSclPin);
   gDisplay = new U8G2_SH1106_128X64_NONAME_F_HW_I2C(U8G2_R0, U8X8_PIN_NONE);
@@ -1325,6 +1427,7 @@ void tickDeviceUi(
   processTouchTracker(&gSelectTouch, TouchRole::Select, state, preferences, webServer, advertising);
   maybeTrackErrorOverlay(*state);
   renderLed(*state);
+  renderBuzzer(*state);
   renderUi(*state);
 }
 

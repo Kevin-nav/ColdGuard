@@ -6,14 +6,15 @@
 
 #include <BLEAdvertising.h>
 
-#include "device_state.h"
-
 namespace coldguard {
+
+struct DeviceState;
 
 struct DeviceUiConfig {
   uint8_t navTouchPin;
   uint8_t selectTouchPin;
   uint8_t ledPin;
+  uint8_t buzzerPin;
   uint8_t oledI2cSdaPin;
   uint8_t oledI2cSclPin;
   uint8_t lcdColumns;

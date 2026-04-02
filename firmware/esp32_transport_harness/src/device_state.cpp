@@ -167,6 +167,19 @@ uint64_t currentDeviceTimeMs() {
   return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
 }
 
+uint64_t parseUnsignedLongLong(const String& value, uint64_t fallback = 0) {
+  if (value.isEmpty()) {
+    return fallback;
+  }
+
+  char* endPtr = nullptr;
+  const uint64_t parsed = std::strtoull(value.c_str(), &endPtr, 10);
+  if (endPtr == value.c_str()) {
+    return fallback;
+  }
+  return parsed;
+}
+
 String buildAdvertisementPayload(const DeviceState& state, uint8_t protocolVersion) {
   return "id=" + state.deviceId + ";state=" + observableEnrollmentState(state) + ";pv=" + String(protocolVersion);
 }
@@ -203,6 +216,20 @@ void loadDeviceState(Preferences& preferences, const char* preferencesNamespace,
   state->primaryLeaseHeartbeatIntervalMs = preferences.getULong("primary_lease_heartbeat", 10000UL);
   state->primaryLeaseTimeoutMs = preferences.getULong("primary_lease_timeout", 35000UL);
   state->grantVersion = preferences.getUInt("grantVer", 0);
+  state->telemetrySequence = preferences.getUInt("telemetry_seq", 0);
+  state->telemetryRecordedAtEpochMs = parseUnsignedLongLong(preferences.getString("telemetry_recorded_at", "0"), 0);
+  state->telemetryRtcIso = preferences.getString("telemetry_rtc_iso", "");
+  state->telemetryTimeSource = preferences.getString("telemetry_time_source", "fallback");
+  state->telemetrySensorHealth = preferences.getString("telemetry_sensor_health", "uninitialized");
+  state->telemetryStatusText = preferences.getString("telemetry_status_text", "");
+  state->telemetryMktStatus = preferences.getString("telemetry_mkt_status", "safe");
+  state->telemetryTemperatureC = preferences.getFloat("telemetry_temp_c", 4.0f);
+  state->telemetryTemperatureSensorHealthy = preferences.getBool("telemetry_temp_healthy", false);
+  state->telemetryRtcHealthy = preferences.getBool("telemetry_rtc_healthy", false);
+  state->telemetrySdCardMounted = preferences.getBool("telemetry_sd_mounted", false);
+  state->telemetryInitialized = preferences.getBool("telemetry_initialized", false);
+  state->telemetryTemperatureCritical = preferences.getBool("telemetry_temp_critical", false);
+  state->telemetryLastSampleAtMs = preferences.getULong("telemetry_last_sample_at", 0);
 }
 
 void saveDeviceState(Preferences& preferences, const DeviceState& state) {
@@ -224,6 +251,20 @@ void saveDeviceState(Preferences& preferences, const DeviceState& state) {
   preferences.putULong("primary_lease_heartbeat", state.primaryLeaseHeartbeatIntervalMs);
   preferences.putULong("primary_lease_timeout", state.primaryLeaseTimeoutMs);
   preferences.putUInt("grantVer", state.grantVersion);
+  preferences.putUInt("telemetry_seq", state.telemetrySequence);
+  preferences.putString("telemetry_recorded_at", uint64ToString(state.telemetryRecordedAtEpochMs));
+  preferences.putString("telemetry_rtc_iso", state.telemetryRtcIso);
+  preferences.putString("telemetry_time_source", state.telemetryTimeSource);
+  preferences.putString("telemetry_sensor_health", state.telemetrySensorHealth);
+  preferences.putString("telemetry_status_text", state.telemetryStatusText);
+  preferences.putString("telemetry_mkt_status", state.telemetryMktStatus);
+  preferences.putFloat("telemetry_temp_c", state.telemetryTemperatureC);
+  preferences.putBool("telemetry_temp_healthy", state.telemetryTemperatureSensorHealthy);
+  preferences.putBool("telemetry_rtc_healthy", state.telemetryRtcHealthy);
+  preferences.putBool("telemetry_sd_mounted", state.telemetrySdCardMounted);
+  preferences.putBool("telemetry_initialized", state.telemetryInitialized);
+  preferences.putBool("telemetry_temp_critical", state.telemetryTemperatureCritical);
+  preferences.putULong("telemetry_last_sample_at", state.telemetryLastSampleAtMs);
 }
 
 void setDeviceUiWorkflow(

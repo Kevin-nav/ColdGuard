@@ -13,13 +13,16 @@ import {
 } from "./connection-service";
 import { resetMockHardwareRegistry } from "./mock-hardware-registry";
 
+const mockConvexMutation = jest.fn();
 const mockDeleteConnectionGrant = jest.fn();
 const mockDeleteDeviceActionTicket = jest.fn();
 const mockDeleteSyncJob = jest.fn();
 const mockEnqueueSyncJob = jest.fn();
 const mockGetDeviceById = jest.fn();
 const mockListPendingSyncJobs = jest.fn();
+const mockGetReadingsAfterSequenceForDevice = jest.fn();
 const mockSaveDeviceConnectionSnapshot = jest.fn();
+const mockSaveReadings = jest.fn();
 const mockSetSyncJobStatus = jest.fn();
 const mockUpdateDeviceConnectionSyncState = jest.fn();
 const mockUpdateDeviceConnectionTestStatus = jest.fn();
@@ -50,6 +53,21 @@ Object.defineProperty(global, "fetch", {
   writable: true,
 });
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+
+  return {
+    promise,
+    reject,
+    resolve,
+  };
+}
+
 jest.mock("../../../lib/storage/sqlite/connection-grant-repository", () => ({
   deleteConnectionGrant: (...args: unknown[]) => mockDeleteConnectionGrant(...args),
   deleteDeviceActionTicket: (...args: unknown[]) => mockDeleteDeviceActionTicket(...args),
@@ -60,6 +78,11 @@ jest.mock("../../../lib/storage/sqlite/device-repository", () => ({
   saveDeviceConnectionSnapshot: (...args: unknown[]) => mockSaveDeviceConnectionSnapshot(...args),
   updateDeviceConnectionSyncState: (...args: unknown[]) => mockUpdateDeviceConnectionSyncState(...args),
   updateDeviceConnectionTestStatus: (...args: unknown[]) => mockUpdateDeviceConnectionTestStatus(...args),
+}));
+
+jest.mock("../../../lib/storage/sqlite/reading-repository", () => ({
+  getReadingsAfterSequenceForDevice: (...args: unknown[]) => mockGetReadingsAfterSequenceForDevice(...args),
+  saveReadings: (...args: unknown[]) => mockSaveReadings(...args),
 }));
 
 jest.mock("../../../lib/storage/sqlite/device-runtime-repository", () => ({
@@ -78,6 +101,12 @@ jest.mock("../../../lib/storage/sqlite/sync-job-repository", () => ({
 jest.mock("../../../lib/storage/secure-store", () => ({
   getClinicHandshakeToken: () => mockGetClinicHandshakeToken(),
   getOrCreateMonitoringClientId: () => mockGetOrCreateMonitoringClientId(),
+}));
+
+jest.mock("../../../lib/convex/client", () => ({
+  getConvexClient: () => ({
+    mutation: (...args: unknown[]) => mockConvexMutation(...args),
+  }),
 }));
 
 jest.mock("../../../lib/storage/sqlite/profile-repository", () => ({
@@ -128,6 +157,7 @@ beforeEach(() => {
   });
   mockGetLocalNotificationPermissionStatus.mockResolvedValue("granted");
   mockRequestLocalNotificationPermission.mockResolvedValue("granted");
+  mockConvexMutation.mockResolvedValue(undefined);
   mockEnsureSupervisorActionTicket.mockImplementation(async (_profile: unknown, deviceId: string, action: string) => ({
     action,
     counter: 1,
@@ -207,6 +237,8 @@ beforeEach(() => {
   });
   mockStopNativeMonitoringDevice.mockResolvedValue({});
   mockSubscribeToNativeEnrollmentStages.mockReturnValue({ remove: jest.fn() });
+  mockGetReadingsAfterSequenceForDevice.mockResolvedValue([]);
+  mockSaveReadings.mockResolvedValue(undefined);
   mockUpsertDeviceRuntimeConfig.mockImplementation(async (deviceId: string, patch: Record<string, unknown>) => ({
     activeRuntimeBaseUrl: patch.activeRuntimeBaseUrl ?? null,
     activeTransport: patch.activeTransport ?? null,
@@ -233,15 +265,18 @@ beforeEach(() => {
   mockFetch.mockResolvedValue({
     json: async () => ({
       alerts: [],
-      batteryLevel: 89,
       currentTempC: 4.7,
-      doorOpen: false,
       firmwareVersion: "fw-1.0.0",
+      latestSequence: 42,
       lastSeenAgeMs: 2_500,
       macAddress: "MOCK-A100",
       mktStatus: "safe",
+      recordedAt: 1_000_000,
+      rtcIso: "2026-04-01T00:00:00.000Z",
+      sdCardMounted: false,
       runtimeBaseUrl: "http://192.168.4.1",
       statusText: "Mock BLE-to-WiFi handover completed.",
+      timeSource: "rtc",
     }),
     ok: true,
   });
@@ -425,6 +460,68 @@ test("uses the native android enrollment bridge and persists temporary softap me
     }),
   );
   expect(remove).toHaveBeenCalledTimes(1);
+});
+
+test("blocks connection recovery while enrollment is in progress", async () => {
+  const deferredEnrollment = createDeferred<{
+    bleName: string;
+    bootstrapClaim: string;
+    deviceId: string;
+    firmwareVersion: string;
+    macAddress: string;
+    protocolVersion: number;
+    state: "enrolled";
+  }>();
+
+  const holdingBleClient = {
+    decommissionDevice: jest.fn(),
+    discoverDevice: jest.fn(),
+    enrollDevice: jest.fn(() => deferredEnrollment.promise),
+    provisionWifi: jest.fn(),
+    requestWifiTicket: jest.fn(),
+  };
+
+  const enrollmentPromise = enrollColdGuardDevice({
+    bleClient: holdingBleClient as unknown as MockColdGuardBleClient,
+    nickname: "Cold Room Alpha",
+    profile: {
+      firebaseUid: "firebase-u1",
+      displayName: "Yaw Boateng",
+      email: "yaw@example.com",
+      institutionId: "institution-1",
+      institutionName: "Korle-Bu Teaching Hospital",
+      staffId: "KB1002",
+      role: "Supervisor",
+      lastUpdatedAt: 1,
+    },
+    qrPayload: "coldguard://device/CG-ESP32-A100?claim=claim-alpha-100&v=1",
+  });
+
+  await expect(
+    runColdGuardConnectionTest({
+      bleClient: new MockColdGuardBleClient(),
+      deviceId: "CG-ESP32-A100",
+      wifiBridge: {
+        connect: async (ticket) => ({
+          localIp: "192.168.4.2",
+          ssid: ticket.ssid,
+        }),
+        release: async () => mockWifiBridgeRelease(),
+      },
+    }),
+  ).rejects.toThrow("ENROLLMENT_IN_PROGRESS");
+
+  deferredEnrollment.resolve({
+    bleName: "ColdGuard_A100",
+    bootstrapClaim: "claim-alpha-100",
+    deviceId: "CG-ESP32-A100",
+    firmwareVersion: "fw-1.0.0",
+    macAddress: "AA:BB:CC:DD:EE:01",
+    protocolVersion: 1,
+    state: "enrolled",
+  });
+
+  await enrollmentPromise;
 });
 
 test("requests bluetooth permission before native android enrollment", async () => {
@@ -942,9 +1039,10 @@ test("uses stored softap before facility wifi when facility path is not yet prov
       }),
       fetchRuntimeSnapshot: async () => ({
         alertsJson: "{\"alerts\":[]}",
+        historyJson: "{\"hasMore\":false,\"nextSequence\":0,\"rows\":[]}",
         runtimeBaseUrl: "http://192.168.4.1",
         statusJson:
-          "{\"batteryLevel\":89,\"currentTempC\":4.7,\"doorOpen\":false,\"firmwareVersion\":\"fw-1.0.0\",\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Mock BLE-to-WiFi handover completed.\"}",
+          "{\"currentTempC\":4.7,\"firmwareVersion\":\"fw-1.0.0\",\"latestSequence\":42,\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"recordedAt\":1000000,\"rtcIso\":\"2026-04-01T00:00:00.000Z\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Mock BLE-to-WiFi handover completed.\",\"timeSource\":\"rtc\"}",
       }),
       release: async () => mockWifiBridgeRelease(),
     },
@@ -1025,9 +1123,10 @@ test("uses the native runtime snapshot bridge when available for softap recovery
       }),
       fetchRuntimeSnapshot: async () => ({
         alertsJson: "{\"alerts\":[]}",
+        historyJson: "{\"hasMore\":false,\"nextSequence\":0,\"rows\":[]}",
         runtimeBaseUrl: "http://192.168.4.1",
         statusJson:
-          "{\"batteryLevel\":89,\"currentTempC\":4.7,\"doorOpen\":false,\"firmwareVersion\":\"fw-1.0.0\",\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Mock BLE-to-WiFi handover completed.\"}",
+          "{\"currentTempC\":4.7,\"firmwareVersion\":\"fw-1.0.0\",\"latestSequence\":42,\"lastSeenAgeMs\":2500,\"macAddress\":\"MOCK-A100\",\"mktStatus\":\"safe\",\"recordedAt\":1000000,\"rtcIso\":\"2026-04-01T00:00:00.000Z\",\"runtimeBaseUrl\":\"http://192.168.4.1\",\"statusText\":\"Mock BLE-to-WiFi handover completed.\",\"timeSource\":\"rtc\"}",
       }),
       release: async () => mockWifiBridgeRelease(),
     },
@@ -1040,7 +1139,8 @@ test("uses the native runtime snapshot bridge when available for softap recovery
       transport: "softap",
     }),
   );
-  expect(mockFetch).not.toHaveBeenCalled();
+  expect(mockFetch).toHaveBeenCalled();
+  expect(mockFetch.mock.calls.every(([url]) => String(url).includes("/api/v1/runtime/history"))).toBe(true);
   expect(mockWifiBridgeRelease).toHaveBeenCalledTimes(1);
 });
 

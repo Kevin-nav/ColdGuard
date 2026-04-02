@@ -1,4 +1,4 @@
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, Text, TextInput, View } from "react-native";
 import { DashboardPage } from "../../src/features/dashboard/components/dashboard-page";
@@ -6,6 +6,7 @@ import { DashboardSection } from "../../src/features/dashboard/components/dashbo
 import { DeviceCard } from "../../src/features/dashboard/components/device-card";
 import { PanelCard } from "../../src/features/dashboard/components/panel-card";
 import { useDashboardContext } from "../../src/features/dashboard/hooks/use-dashboard-context";
+import { useRefreshOnTabFocus } from "../../src/features/dashboard/hooks/use-refresh-on-tab-focus";
 import { parseDeviceEnrollmentLink } from "../../src/features/devices/services/device-linking";
 import { createSharedStyles } from "../../src/theme/shared-styles";
 import { useTheme } from "../../src/theme/theme-provider";
@@ -18,14 +19,7 @@ export default function DevicesScreen() {
   const [qrPayload, setQrPayload] = useState("");
   const [message, setMessage] = useState<string | null>(null);
 
-  useFocusEffect(
-    useMemo(
-      () => () => {
-        void refreshDevices();
-      },
-      [refreshDevices],
-    ),
-  );
+  useRefreshOnTabFocus(refreshDevices);
 
   if (error) {
     return (

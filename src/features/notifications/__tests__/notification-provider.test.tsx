@@ -5,6 +5,7 @@ import { NotificationProvider, useNotificationContext } from "../providers/notif
 const mockEnsureLocalProfileForUser = jest.fn();
 const mockListMonitoredDeviceRuntimeConfigs = jest.fn();
 const mockPollMonitoredDeviceRuntime = jest.fn();
+const mockRequestColdLaunchPermissions = jest.fn();
 const mockGetNativeMonitoringServiceStatuses = jest.fn();
 const mockSyncNotificationInbox = jest.fn();
 const mockSyncNotificationPreferences = jest.fn();
@@ -46,6 +47,7 @@ jest.mock("../../../lib/storage/sqlite/device-runtime-repository", () => ({
 
 jest.mock("../../devices/services/connection-service", () => ({
   pollMonitoredDeviceRuntime: (...args: unknown[]) => mockPollMonitoredDeviceRuntime(...args),
+  requestColdLaunchPermissions: (...args: unknown[]) => mockRequestColdLaunchPermissions(...args),
 }));
 
 jest.mock("../../devices/services/wifi-bridge", () => ({
@@ -101,6 +103,7 @@ beforeEach(() => {
     },
   );
   mockPollMonitoredDeviceRuntime.mockResolvedValue(undefined);
+  mockRequestColdLaunchPermissions.mockResolvedValue(undefined);
   mockGetNativeMonitoringServiceStatuses.mockResolvedValue({});
   mockSyncNotificationInbox.mockResolvedValue({
     incidents: [],

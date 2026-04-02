@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 
+#include "device_state.h"
 #include "runtime_mock_data.h"
 
 namespace coldguard {
@@ -53,30 +54,98 @@ String buildRuntimeStatusPayload(DeviceState* state, const char* firmwareVersion
   const RuntimeSnapshot snapshot = buildRuntimeSnapshot(*state, runtimeBaseUrl);
   const String alerts = buildRuntimeAlertsJson(snapshot, nowMs);
 
-  return "{"
-         "\"deviceId\":\"" + escapeJson(state->deviceId) + "\","
-         "\"firmwareVersion\":\"" + escapeJson(firmwareVersion) + "\","
-         "\"macAddress\":\"" + escapeJson(state->macAddress) + "\","
-         "\"currentTempC\":" + String(snapshot.currentTempC, 2) + ","
-         "\"batteryLevel\":" + String(snapshot.batteryLevel) + ","
-         "\"doorOpen\":" + String(snapshot.doorOpen ? "true" : "false") + ","
-         "\"mktStatus\":\"" + snapshot.mktStatus + "\","
-         "\"statusText\":\"" + escapeJson(snapshot.statusText) + "\","
-         "\"lastSeenAgeMs\":0,"
-         "\"nickname\":\"" + escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname) + "\","
-         "\"institutionId\":\"" + escapeJson(state->institutionId) + "\","
-         "\"primaryTransport\":\"" + snapshot.primaryTransport + "\","
-         "\"secondaryTransport\":" + (snapshot.secondaryTransport.isEmpty() ? String("null") : "\"" + snapshot.secondaryTransport + "\"") + ","
-         "\"accessMode\":\"" + snapshot.accessMode + "\","
-         "\"softApAvailable\":" + String(snapshot.softApAvailable ? "true" : "false") + ","
-         "\"softApClientCount\":" + String(snapshot.softApClientCount) + ","
-         "\"softApIdleTimeoutMs\":" + String(snapshot.softApIdleTimeoutMs) + ","
-         "\"stationConnected\":" + String(snapshot.stationConnected ? "true" : "false") + ","
-         "\"transport\":\"" + snapshot.transport + "\","
-         "\"runtimeBaseUrl\":\"" + escapeJson(snapshot.runtimeBaseUrl) + "\","
-         "\"alerts\":" + alerts + ","
-         "\"receivedAtMs\":" + String(nowMs) +
-         "}";
+  String response;
+  response.reserve(900);
+  response += "{";
+  response += "\"deviceId\":\"";
+  response += escapeJson(state->deviceId);
+  response += "\",";
+  response += "\"firmwareVersion\":\"";
+  response += escapeJson(firmwareVersion);
+  response += "\",";
+  response += "\"macAddress\":\"";
+  response += escapeJson(state->macAddress);
+  response += "\",";
+  response += "\"currentTempC\":";
+  response += String(snapshot.currentTempC, 2);
+  response += ",";
+  response += "\"mktStatus\":\"";
+  response += escapeJson(snapshot.mktStatus);
+  response += "\",";
+  response += "\"statusText\":\"";
+  response += escapeJson(snapshot.statusText);
+  response += "\",";
+  response += "\"lastSeenAt\":";
+  response += uint64ToString(snapshot.recordedAtEpochMs);
+  response += ",";
+  response += "\"lastSeenAgeMs\":0,";
+  response += "\"recordedAt\":";
+  response += uint64ToString(snapshot.recordedAtEpochMs);
+  response += ",";
+  response += "\"recordedAtEpochMs\":";
+  response += uint64ToString(snapshot.recordedAtEpochMs);
+  response += ",";
+  response += "\"rtcIso\":\"";
+  response += escapeJson(snapshot.rtcIso);
+  response += "\",";
+  response += "\"timeSource\":\"";
+  response += escapeJson(snapshot.timeSource);
+  response += "\",";
+  response += "\"latestSequence\":";
+  response += String(snapshot.latestSequence);
+  response += ",";
+  response += "\"nickname\":\"";
+  response += escapeJson(state->deviceNickname.isEmpty() ? state->bleName : state->deviceNickname);
+  response += "\",";
+  response += "\"institutionId\":\"";
+  response += escapeJson(state->institutionId);
+  response += "\",";
+  response += "\"primaryTransport\":\"";
+  response += escapeJson(snapshot.primaryTransport);
+  response += "\",";
+  response += "\"secondaryTransport\":";
+  if (snapshot.secondaryTransport.isEmpty()) {
+    response += "null";
+  } else {
+    response += "\"";
+    response += escapeJson(snapshot.secondaryTransport);
+    response += "\"";
+  }
+  response += ",";
+  response += "\"accessMode\":\"";
+  response += escapeJson(snapshot.accessMode);
+  response += "\",";
+  response += "\"softApAvailable\":";
+  response += String(snapshot.softApAvailable ? "true" : "false");
+  response += ",";
+  response += "\"softApClientCount\":";
+  response += String(snapshot.softApClientCount);
+  response += ",";
+  response += "\"softApIdleTimeoutMs\":";
+  response += String(snapshot.softApIdleTimeoutMs);
+  response += ",";
+  response += "\"stationConnected\":";
+  response += String(snapshot.stationConnected ? "true" : "false");
+  response += ",";
+  response += "\"transport\":\"";
+  response += escapeJson(snapshot.transport);
+  response += "\",";
+  response += "\"temperatureSensorHealthy\":";
+  response += String(snapshot.temperatureSensorHealthy ? "true" : "false");
+  response += ",";
+  response += "\"rtcHealthy\":";
+  response += String(snapshot.rtcHealthy ? "true" : "false");
+  response += ",";
+  response += "\"sensorHealth\":\"";
+  response += escapeJson(snapshot.sensorHealth);
+  response += "\",";
+  response += "\"alerts\":";
+  response += alerts;
+  response += ",";
+  response += "\"receivedAtMs\":";
+  response += String(nowMs);
+  response += "}";
+  return response;
 }
 
 void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, const char* firmwareVersion) {
@@ -110,6 +179,25 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
     webServer.send(200, "application/json", buildRuntimeStatusPayload(state, firmwareVersion));
   });
 
+  webServer.on("/api/v1/runtime/history", HTTP_GET, [state, &webServer]() {
+    if (!state->accessPointStarted && !state->stationConnected) {
+      webServer.send(
+        503,
+        "application/json",
+        "{\"ok\":false,\"errorCode\":\"RUNTIME_UNAVAILABLE\",\"message\":\"Runtime transport is unavailable.\"}");
+      return;
+    }
+
+    const uint32_t afterSequence = webServer.hasArg("afterSequence")
+      ? static_cast<uint32_t>(webServer.arg("afterSequence").toInt())
+      : 0U;
+    const uint32_t limit = webServer.hasArg("limit")
+      ? static_cast<uint32_t>(webServer.arg("limit").toInt())
+      : 100U;
+
+    webServer.send(200, "application/json", buildRuntimeHistoryJson(*state, afterSequence, limit));
+  });
+
   webServer.on("/api/v1/runtime/alerts", HTTP_GET, [state, &webServer]() {
     if (!state->accessPointStarted && !state->stationConnected) {
       webServer.send(
@@ -120,37 +208,45 @@ void ensureRuntimeRoutesRegistered(WebServer& webServer, DeviceState* state, con
     }
 
     const RuntimeSnapshot snapshot = buildRuntimeSnapshot(*state, buildRuntimeBaseUrl(state));
-    webServer.send(
-      200,
-      "application/json",
-      "{"
-      "\"ok\":true,"
-      "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\","
-      "\"alerts\":" + buildRuntimeAlertsJson(snapshot, millis()) +
-      "}");
+    String response;
+    response.reserve(200 + snapshot.sensorHealth.length());
+    response += "{\"ok\":true,\"runtimeBaseUrl\":\"";
+    response += escapeJson(buildRuntimeBaseUrl(state));
+    response += "\",\"alerts\":";
+    response += buildRuntimeAlertsJson(snapshot, millis());
+    response += "}";
+    webServer.send(200, "application/json", response);
   });
 
   webServer.on("/api/v1/runtime/ack", HTTP_POST, [state, &webServer]() {
     state->lastHeartbeatAtMs = millis();
-    webServer.send(
-      200,
-      "application/json",
-      "{"
-      "\"ok\":true,"
-      "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\""
-      "}");
+    const uint32_t uploadedThroughSequence = webServer.hasArg("uploadedThroughSequence")
+      ? static_cast<uint32_t>(webServer.arg("uploadedThroughSequence").toInt())
+      : 0U;
+    const bool ackApplied =
+      uploadedThroughSequence > 0 ? acknowledgeRuntimeHistoryThroughSequence(uploadedThroughSequence) : true;
+    String response;
+    response.reserve(180);
+    response += "{\"ok\":true,\"runtimeBaseUrl\":\"";
+    response += escapeJson(buildRuntimeBaseUrl(state));
+    response += "\",\"uploadedThroughSequence\":";
+    response += String(uploadedThroughSequence);
+    response += ",\"ackApplied\":";
+    response += String(ackApplied ? "true" : "false");
+    response += "}";
+    webServer.send(200, "application/json", response);
   });
 
   webServer.on("/api/v1/runtime/heartbeat", HTTP_POST, [state, &webServer]() {
     state->lastHeartbeatAtMs = millis();
-    webServer.send(
-      200,
-      "application/json",
-      "{"
-      "\"ok\":true,"
-      "\"receivedAtMs\":" + String(state->lastHeartbeatAtMs) + ","
-      "\"runtimeBaseUrl\":\"" + escapeJson(buildRuntimeBaseUrl(state)) + "\""
-      "}");
+    String response;
+    response.reserve(120);
+    response += "{\"ok\":true,\"receivedAtMs\":";
+    response += String(state->lastHeartbeatAtMs);
+    response += ",\"runtimeBaseUrl\":\"";
+    response += escapeJson(buildRuntimeBaseUrl(state));
+    response += "\"}";
+    webServer.send(200, "application/json", response);
   });
 
   webServer.begin();

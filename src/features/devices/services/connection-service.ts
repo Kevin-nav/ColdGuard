@@ -1,14 +1,17 @@
 import { PermissionsAndroid, Platform } from "react-native";
+import { api } from "../../../../convex/_generated/api";
 import {
   deleteConnectionGrant,
   deleteDeviceActionTicket,
 } from "../../../lib/storage/sqlite/connection-grant-repository";
+import { getConvexClient } from "../../../lib/convex/client";
 import {
   getDeviceById,
   saveDeviceConnectionSnapshot,
   updateDeviceConnectionSyncState,
   updateDeviceConnectionTestStatus,
 } from "../../../lib/storage/sqlite/device-repository";
+import { getReadingsAfterSequenceForDevice, saveReadings } from "../../../lib/storage/sqlite/reading-repository";
 import {
   deleteDeviceRuntimeConfig,
   getDeviceRuntimeConfig,
@@ -30,6 +33,7 @@ import type {
   ColdGuardConnectionPayload,
   ColdGuardDiscoveredDevice,
   ColdGuardWifiTicket,
+  DeviceTelemetryReadingRecord,
   DeviceRuntimeSnapshot,
   FacilityWifiProvisioning,
   RuntimeAlertRecord,
@@ -87,6 +91,8 @@ const MONITORING_NOTIFICATION_PERMISSION_ERROR =
 const FACILITY_WIFI_PROOF_WINDOW_MS = 15 * 60 * 1000;
 const PRIMARY_LEASE_HEARTBEAT_INTERVAL_MS = 10_000;
 const PRIMARY_LEASE_DURATION_MS = 35_000;
+const ENROLLMENT_IN_PROGRESS_ERROR = "ENROLLMENT_IN_PROGRESS";
+let enrollmentInProgress = false;
 
 function getMonitoringStatusForDevice(
   statuses: Record<
@@ -111,6 +117,24 @@ function normalizeMonitoringControlRole(
   value: DeviceControlRole | "blocked" | null | undefined,
 ): DeviceControlRole {
   return value === "primary" || value === "secondary" ? value : "none";
+}
+
+function ensureEnrollmentNotInProgress() {
+  if (enrollmentInProgress) {
+    throw new Error(ENROLLMENT_IN_PROGRESS_ERROR);
+  }
+}
+
+function beginEnrollmentGuard() {
+  if (enrollmentInProgress) {
+    throw new Error(ENROLLMENT_IN_PROGRESS_ERROR);
+  }
+
+  enrollmentInProgress = true;
+}
+
+function endEnrollmentGuard() {
+  enrollmentInProgress = false;
 }
 
 export interface ColdGuardBleClient {
@@ -167,8 +191,19 @@ export interface ColdGuardWifiBridge {
   connect(ticket: ColdGuardWifiTicket): Promise<{ localIp: string; ssid: string }>;
   fetchRuntimeSnapshot?(runtimeBaseUrl: string): Promise<{
     alertsJson: string;
+    historyJson: string;
     runtimeBaseUrl: string;
     statusJson: string;
+  }>;
+  fetchRuntimeHistory?(
+    runtimeBaseUrl: string,
+    afterSequence?: number,
+    limit?: number,
+  ): Promise<{
+    hasMore: boolean;
+    nextSequence: number;
+    rowsJson: string;
+    runtimeBaseUrl: string;
   }>;
   release(): Promise<void>;
 }
@@ -303,6 +338,9 @@ export class MockColdGuardBleClient implements ColdGuardBleClient {
 const realBleClient = new RealColdGuardBleClient();
 const RUNTIME_STATUS_PATH = "/api/v1/runtime/status";
 const RUNTIME_ALERTS_PATH = "/api/v1/runtime/alerts";
+const RUNTIME_HISTORY_PATH = "/api/v1/runtime/history";
+const RUNTIME_ACK_PATH = "/api/v1/runtime/ack";
+const DEFAULT_HISTORY_PAGE_LIMIT = 100;
 
 function normalizeRuntimeBaseUrl(value: string) {
   try {
@@ -333,10 +371,8 @@ function normalizeRuntimeAlerts(value: unknown): RuntimeAlertRecord[] {
       typeof candidate.triggeredAt !== "number" ||
       (candidate.severity !== "warning" && candidate.severity !== "critical") ||
       (candidate.status !== "open" && candidate.status !== "resolved") ||
-      (candidate.incidentType !== "temperature" &&
-        candidate.incidentType !== "door_open" &&
-        candidate.incidentType !== "device_offline" &&
-        candidate.incidentType !== "battery_low")
+      candidate.incidentType !== "temperature" &&
+      candidate.incidentType !== "device_offline"
     ) {
       return [];
     }
@@ -395,15 +431,36 @@ function buildRuntimeSnapshot(args: {
     runtimeBaseUrl: _reportedRuntimeBaseUrl,
     ...payloadBase
   } = args.response;
+  const recordedAt =
+    typeof args.response.recordedAt === "number"
+      ? args.response.recordedAt
+      : typeof (args.response as { recordedAtEpochMs?: unknown }).recordedAtEpochMs === "number"
+        ? (args.response as { recordedAtEpochMs: number }).recordedAtEpochMs
+        : normalizeConnectionLastSeenAt(args.response, args.receivedAt);
 
   return {
-    ...(payloadBase as ColdGuardConnectionPayload),
+    accessMode: payloadBase.accessMode,
+    currentTempC: typeof payloadBase.currentTempC === "number" ? payloadBase.currentTempC : 0,
+    firmwareVersion: payloadBase.firmwareVersion,
+    latestSequence: typeof payloadBase.latestSequence === "number" ? payloadBase.latestSequence : 0,
     alerts: args.alerts,
     lastSeenAt: normalizeConnectionLastSeenAt(args.response, args.receivedAt),
     localIp: args.localIp,
+    macAddress: payloadBase.macAddress,
+    mktStatus: payloadBase.mktStatus,
+    primaryTransport: payloadBase.primaryTransport,
     receivedAt: args.receivedAt,
+    recordedAt,
+    rtcIso: payloadBase.rtcIso ?? null,
     runtimeBaseUrl: normalizeRuntimeBaseUrl(args.runtimeBaseUrl),
+    sdCardMounted: false,
+    secondaryTransport: payloadBase.secondaryTransport,
     ssid: args.ssid,
+    softApAvailable: payloadBase.softApAvailable,
+    softApClientCount: payloadBase.softApClientCount,
+    softApIdleTimeoutMs: payloadBase.softApIdleTimeoutMs,
+    statusText: payloadBase.statusText,
+    timeSource: payloadBase.timeSource ?? "unknown",
     transport: args.transport,
   };
 }
@@ -431,6 +488,7 @@ async function fetchAndBuildRuntimeSnapshot(args: {
 
 async function fetchAndBuildRuntimeSnapshotFromBridge(args: {
   alertsJson: string;
+  historyJson: string;
   localIp: string | null;
   runtimeBaseUrl: string;
   ssid: string | null;
@@ -457,11 +515,306 @@ async function fetchAndBuildRuntimeSnapshotFromBridge(args: {
   } catch (error) {
     console.warn("Failed to parse native runtime snapshot payload; falling back to HTTP runtime fetch.", {
       alertsJson: args.alertsJson,
+      historyJson: args.historyJson,
       runtimeBaseUrl: args.runtimeBaseUrl,
       statusJson: args.statusJson,
     });
     return null;
   }
+}
+
+function parseRuntimeHistoryRows(value: unknown, fallbackInstitutionName = ""): DeviceTelemetryReadingRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry, index) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+
+    const candidate = entry as Partial<DeviceTelemetryReadingRecord> & {
+      currentTempC?: number;
+      institutionName?: string;
+      latestSequence?: number;
+      recordedAt?: number;
+      recordedAtEpochMs?: number;
+      vaccineTempC?: number;
+    };
+    const currentTempC =
+      typeof candidate.currentTempC === "number"
+        ? candidate.currentTempC
+        : typeof candidate.vaccineTempC === "number"
+          ? candidate.vaccineTempC
+          : null;
+    const recordedAt =
+      typeof candidate.recordedAt === "number"
+        ? candidate.recordedAt
+        : typeof candidate.recordedAtEpochMs === "number"
+          ? candidate.recordedAtEpochMs
+          : Date.now();
+
+    if (
+      typeof candidate.deviceId !== "string" ||
+      typeof candidate.sequence !== "number" ||
+      currentTempC === null ||
+      (candidate.mktStatus !== "safe" && candidate.mktStatus !== "warning" && candidate.mktStatus !== "alert")
+    ) {
+      return [];
+    }
+
+    return [
+      {
+        currentTempC,
+        deviceId: candidate.deviceId,
+        id: typeof candidate.id === "string" ? candidate.id : `${candidate.deviceId}:${candidate.sequence}`,
+        institutionName: candidate.institutionName ?? fallbackInstitutionName,
+        mktStatus: candidate.mktStatus,
+        recordedAt,
+        rtcIso: typeof candidate.rtcIso === "string" ? candidate.rtcIso : null,
+        sdCardMounted: false,
+        sequence: candidate.sequence,
+        timeSource:
+          candidate.timeSource === "rtc" || candidate.timeSource === "fallback"
+            ? candidate.timeSource
+            : "unknown",
+      },
+    ];
+  });
+}
+
+function normalizeRuntimeHistoryPage(value: unknown, runtimeBaseUrl: string) {
+  if (!value || typeof value !== "object") {
+    return {
+      hasMore: false,
+      nextSequence: 0,
+      rows: [] as DeviceTelemetryReadingRecord[],
+      runtimeBaseUrl,
+    };
+  }
+
+  const candidate = value as {
+    hasMore?: unknown;
+    nextSequence?: unknown;
+    next_sequence?: unknown;
+    rows?: unknown;
+    rowsJson?: unknown;
+    runtimeBaseUrl?: unknown;
+  };
+  const rowsValue =
+    candidate.rowsJson && typeof candidate.rowsJson === "string"
+      ? safeParseJson(candidate.rowsJson)
+      : candidate.rows;
+
+  return {
+    hasMore: Boolean(candidate.hasMore),
+    nextSequence:
+      typeof candidate.nextSequence === "number"
+        ? candidate.nextSequence
+        : typeof candidate.next_sequence === "number"
+          ? candidate.next_sequence
+          : 0,
+    rows: parseRuntimeHistoryRows(rowsValue, ""),
+    runtimeBaseUrl:
+      typeof candidate.runtimeBaseUrl === "string" && candidate.runtimeBaseUrl.length > 0
+        ? candidate.runtimeBaseUrl
+        : runtimeBaseUrl,
+  };
+}
+
+function safeParseJson(value: string) {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchRuntimeHistory(baseUrl: string, afterSequence = -1, limit = DEFAULT_HISTORY_PAGE_LIMIT) {
+  const url = new URL(buildRuntimeUrl(baseUrl, RUNTIME_HISTORY_PATH));
+  url.searchParams.set("afterSequence", String(afterSequence));
+  url.searchParams.set("limit", String(limit));
+  const response = await fetch(url.toString());
+  if (!response.ok) {
+    throw new Error(`HTTP_RUNTIME_HISTORY_FAILED_${response.status}`);
+  }
+
+  return normalizeRuntimeHistoryPage(await response.json(), normalizeRuntimeBaseUrl(baseUrl));
+}
+
+async function acknowledgeRuntimeHistoryUpload(runtimeBaseUrl: string, uploadedThroughSequence: number) {
+  if (!Number.isFinite(uploadedThroughSequence) || uploadedThroughSequence < 0) {
+    return;
+  }
+
+  const url = new URL(buildRuntimeUrl(runtimeBaseUrl, RUNTIME_ACK_PATH));
+  url.searchParams.set("uploadedThroughSequence", String(uploadedThroughSequence));
+  const response = await fetch(url.toString(), { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`HTTP_RUNTIME_ACK_FAILED_${response.status}`);
+  }
+}
+
+async function fetchRuntimeHistoryPage(args: {
+  afterSequence: number;
+  fallbackInstitutionName: string;
+  limit?: number;
+  runtimeBaseUrl: string;
+  wifiBridge?: ColdGuardWifiBridge;
+}) {
+  if (args.wifiBridge?.fetchRuntimeHistory) {
+    const page = await args.wifiBridge.fetchRuntimeHistory(
+      args.runtimeBaseUrl,
+      args.afterSequence,
+      args.limit ?? DEFAULT_HISTORY_PAGE_LIMIT,
+    );
+
+    const normalized = normalizeRuntimeHistoryPage(
+      {
+        hasMore: page.hasMore,
+        nextSequence: page.nextSequence,
+        rowsJson: page.rowsJson,
+        runtimeBaseUrl: page.runtimeBaseUrl,
+      },
+      args.runtimeBaseUrl,
+    );
+
+    return {
+      ...normalized,
+      rows: parseRuntimeHistoryRows(normalized.rows, args.fallbackInstitutionName),
+    };
+  }
+
+  const page = await fetchRuntimeHistory(
+    args.runtimeBaseUrl,
+    args.afterSequence,
+    args.limit ?? DEFAULT_HISTORY_PAGE_LIMIT,
+  );
+
+  return {
+    ...page,
+    rows: page.rows.map((row) => ({
+      ...row,
+      institutionName: row.institutionName || args.fallbackInstitutionName,
+    })),
+  };
+}
+
+async function syncTelemetryHistoryAfterSnapshot(args: {
+  deviceId: string;
+  snapshot: DeviceRuntimeSnapshot;
+  wifiBridge?: ColdGuardWifiBridge;
+}) {
+  const [device, runtimeConfig] = await Promise.all([
+    getDeviceById(args.deviceId),
+    getDeviceRuntimeConfig(args.deviceId),
+  ]);
+
+  if (!device) {
+    return;
+  }
+
+  let afterSequence = runtimeConfig?.telemetryHistoryCursor ?? -1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const page = await fetchRuntimeHistoryPage({
+      afterSequence,
+      fallbackInstitutionName: device.institutionName,
+      runtimeBaseUrl: args.snapshot.runtimeBaseUrl,
+      wifiBridge: args.wifiBridge,
+    });
+
+    const rows = page.rows.map((row) => ({
+      ...row,
+      deviceId: args.deviceId,
+      id: row.id || `${args.deviceId}:${row.sequence}`,
+      institutionName: row.institutionName || device.institutionName,
+    }));
+
+    if (rows.length > 0) {
+      await saveReadings(rows);
+    }
+
+    const maxSequenceFromRows = rows.reduce((max, row) => Math.max(max, row.sequence), afterSequence);
+    const nextSequence = Math.max(afterSequence, page.nextSequence, maxSequenceFromRows);
+
+    if (nextSequence <= afterSequence) {
+      break;
+    }
+
+    afterSequence = nextSequence;
+    await upsertDeviceRuntimeConfig(args.deviceId, {
+      telemetryHistoryCursor: afterSequence,
+    });
+
+    hasMore = page.hasMore;
+  }
+
+  await uploadPendingTelemetryHistory(args.deviceId, args.snapshot.runtimeBaseUrl);
+}
+
+async function uploadPendingTelemetryHistory(deviceId: string, runtimeBaseUrl?: string) {
+  const [device, runtimeConfig] = await Promise.all([
+    getDeviceById(deviceId),
+    getDeviceRuntimeConfig(deviceId),
+  ]);
+  if (!device) {
+    return;
+  }
+
+  const convex = getConvexClient();
+  let afterSequence = runtimeConfig?.telemetryUploadCursor ?? -1;
+
+  while (true) {
+    const rows = await getReadingsAfterSequenceForDevice(deviceId, afterSequence, DEFAULT_HISTORY_PAGE_LIMIT);
+    if (rows.length === 0) {
+      return;
+    }
+
+    await convex.mutation((api as any).devices.ingestDeviceTelemetryBatch, {
+      deviceId,
+      readings: rows.map((row) => ({
+        mktStatus: row.mktStatus,
+        recordedAt: row.recordedAt,
+        rtcIso: row.rtcIso ?? "",
+        sdCardMounted: false,
+        sequence: row.sequence,
+        timeSource: row.timeSource,
+        vaccineTempC: row.currentTempC,
+      })),
+    });
+
+    afterSequence = rows[rows.length - 1]?.sequence ?? afterSequence;
+    await upsertDeviceRuntimeConfig(deviceId, {
+      telemetryUploadCursor: afterSequence,
+    });
+
+    if (runtimeBaseUrl) {
+      await acknowledgeRuntimeHistoryUpload(runtimeBaseUrl, afterSequence).catch((error) => {
+        console.warn("Failed to acknowledge uploaded telemetry history to firmware.", {
+          deviceId,
+          error: error instanceof Error ? error.message : String(error),
+          uploadedThroughSequence: afterSequence,
+        });
+      });
+    }
+  }
+}
+
+export async function getPendingTelemetryReadingsForDevice(deviceId: string, limit = DEFAULT_HISTORY_PAGE_LIMIT) {
+  const runtimeConfig = await getDeviceRuntimeConfig(deviceId);
+  const afterSequence = runtimeConfig?.telemetryUploadCursor ?? -1;
+  return await getReadingsAfterSequenceForDevice(deviceId, afterSequence, limit);
+}
+
+export async function markTelemetryReadingsUploadedThroughSequence(
+  deviceId: string,
+  sequence: number,
+) {
+  await upsertDeviceRuntimeConfig(deviceId, {
+    telemetryUploadCursor: sequence,
+  });
 }
 
 async function tryFetchRuntimeSnapshotFromBridge(args: {
@@ -479,6 +832,7 @@ async function tryFetchRuntimeSnapshotFromBridge(args: {
     const runtimeSnapshot = await args.wifiBridge.fetchRuntimeSnapshot(args.runtimeBaseUrl);
     return await fetchAndBuildRuntimeSnapshotFromBridge({
       alertsJson: runtimeSnapshot.alertsJson,
+      historyJson: runtimeSnapshot.historyJson,
       localIp: args.localIp,
       runtimeBaseUrl: runtimeSnapshot.runtimeBaseUrl,
       ssid: args.ssid,
@@ -515,6 +869,16 @@ async function connectViaFacilityWifi(deviceId: string) {
     lastPingAt: snapshot.receivedAt,
     lastRuntimeError: null,
     sessionStatus: "connected",
+  });
+
+  void syncTelemetryHistoryAfterSnapshot({
+    deviceId,
+    snapshot,
+  }).catch((error) => {
+    console.warn("Failed to sync facility Wi-Fi telemetry history.", {
+      deviceId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   });
 
   return snapshot;
@@ -593,6 +957,16 @@ async function connectViaSoftAp(args: {
       softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
       softApSsid: ticket.ssid,
     });
+    await syncTelemetryHistoryAfterSnapshot({
+      deviceId: args.deviceId,
+      snapshot,
+      wifiBridge: args.wifiBridge,
+    }).catch((error) => {
+      console.warn("Failed to sync SoftAP telemetry history.", {
+        deviceId: args.deviceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 
     return snapshot;
   } finally {
@@ -648,6 +1022,16 @@ async function connectViaStoredSoftAp(args: {
       softApRuntimeBaseUrl: snapshot.runtimeBaseUrl,
       softApSsid: ssid,
     });
+    await syncTelemetryHistoryAfterSnapshot({
+      deviceId: args.deviceId,
+      snapshot,
+      wifiBridge: args.wifiBridge,
+    }).catch((error) => {
+      console.warn("Failed to sync stored SoftAP telemetry history.", {
+        deviceId: args.deviceId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
 
     return snapshot;
   } finally {
@@ -666,77 +1050,83 @@ export async function enrollColdGuardDevice(args: {
     throw new Error("DEVICE_MANAGEMENT_FORBIDDEN");
   }
 
-  await ensureEnrollmentPermissions();
+  beginEnrollmentGuard();
+  try {
+    await ensureEnrollmentPermissions();
 
-  const handshakeToken = await getRequiredClinicHandshakeToken();
-  const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
-  const bleClient = args.bleClient ?? realBleClient;
-  const actionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "enroll");
-  const nickname = args.nickname.trim() || `ColdGuard ${deviceId.slice(-4).toUpperCase()}`;
-  const enrolledDevice =
-    Platform.OS === "android" && !args.bleClient
-      ? await (async () => {
-          await ensureBleTransportPermissions();
-          await ensureWifiBridgePermissions();
-          const connectActionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "connect");
-          const progressSubscription = subscribeToNativeEnrollmentStages((event) => {
-            args.onProgress?.(event);
+    const handshakeToken = await getRequiredClinicHandshakeToken();
+    const { bootstrapToken, deviceId } = parseDeviceQrPayload(args.qrPayload);
+    const bleClient = args.bleClient ?? realBleClient;
+    const actionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "enroll");
+    const nickname = args.nickname.trim() || `ColdGuard ${deviceId.slice(-4).toUpperCase()}`;
+    const enrolledDevice =
+      Platform.OS === "android" && !args.bleClient
+        ? await (async () => {
+            await ensureBleTransportPermissions();
+            await ensureWifiBridgePermissions();
+            const connectActionTicket = await ensureSupervisorActionTicket(args.profile, deviceId, "connect");
+            const progressSubscription = subscribeToNativeEnrollmentStages((event) => {
+              args.onProgress?.(event);
+            });
+
+            try {
+              const result = await startNativeEnrollment({
+                actionTicketJson: JSON.stringify(actionTicket),
+                bootstrapToken,
+                connectActionTicketJson: JSON.stringify(connectActionTicket),
+                deviceId,
+                handshakeToken,
+                institutionId: args.profile.institutionId,
+                nickname,
+              });
+
+              await upsertDeviceRuntimeConfig(deviceId, {
+                lastRuntimeError: null,
+                softApPassword: result.softApPassword,
+                softApRuntimeBaseUrl: result.runtimeBaseUrl,
+                softApSsid: result.softApSsid,
+              });
+
+              return {
+                bleName: result.bleName,
+                bootstrapClaim: bootstrapToken,
+                deviceId: result.deviceId,
+                firmwareVersion: result.firmwareVersion,
+                macAddress: result.macAddress,
+                protocolVersion: result.protocolVersion,
+                state: "enrolled" as const,
+              };
+            } finally {
+              progressSubscription?.remove();
+            }
+          })()
+        : await bleClient.enrollDevice({
+            actionTicket,
+            bootstrapToken,
+            deviceId,
+            handshakeToken,
+            institutionId: args.profile.institutionId,
+            nickname,
           });
 
-          try {
-            const result = await startNativeEnrollment({
-              actionTicketJson: JSON.stringify(actionTicket),
-              bootstrapToken,
-              connectActionTicketJson: JSON.stringify(connectActionTicket),
-              deviceId,
-              handshakeToken,
-              institutionId: args.profile.institutionId,
-              nickname,
-            });
+    const registeredDevice = await registerEnrolledDevice({
+      bleName: enrolledDevice.bleName,
+      deviceId: enrolledDevice.deviceId,
+      firmwareVersion: enrolledDevice.firmwareVersion,
+      macAddress: enrolledDevice.macAddress,
+      nickname,
+      protocolVersion: enrolledDevice.protocolVersion,
+    });
 
-            await upsertDeviceRuntimeConfig(deviceId, {
-              lastRuntimeError: null,
-              softApPassword: result.softApPassword,
-              softApRuntimeBaseUrl: result.runtimeBaseUrl,
-              softApSsid: result.softApSsid,
-            });
+    await syncVisibleDevices(args.profile);
 
-            return {
-              bleName: result.bleName,
-              bootstrapClaim: bootstrapToken,
-              deviceId: result.deviceId,
-              firmwareVersion: result.firmwareVersion,
-              macAddress: result.macAddress,
-              protocolVersion: result.protocolVersion,
-              state: "enrolled" as const,
-            };
-          } finally {
-            progressSubscription?.remove();
-          }
-        })()
-      : await bleClient.enrollDevice({
-          actionTicket,
-          bootstrapToken,
-          deviceId,
-          handshakeToken,
-          institutionId: args.profile.institutionId,
-          nickname,
-        });
+    await bootstrapDefaultDeviceMonitoring(enrolledDevice.deviceId);
 
-  const registeredDevice = await registerEnrolledDevice({
-    bleName: enrolledDevice.bleName,
-    deviceId: enrolledDevice.deviceId,
-    firmwareVersion: enrolledDevice.firmwareVersion,
-    macAddress: enrolledDevice.macAddress,
-    nickname,
-    protocolVersion: enrolledDevice.protocolVersion,
-  });
-
-  await syncVisibleDevices(args.profile);
-
-  await bootstrapDefaultDeviceMonitoring(enrolledDevice.deviceId);
-
-  return registeredDevice;
+    endEnrollmentGuard();
+    return registeredDevice;
+  } finally {
+    endEnrollmentGuard();
+  }
 }
 
 export async function requestColdLaunchPermissions() {
@@ -757,6 +1147,7 @@ export async function connectOrRecoverDevice(args: {
   bleClient?: ColdGuardBleClient;
   wifiBridge?: ColdGuardWifiBridge;
 }) {
+  ensureEnrollmentNotInProgress();
   const device = await getDeviceById(args.deviceId);
   if (!device) {
     throw new Error("DEVICE_NOT_FOUND");
@@ -866,6 +1257,16 @@ export async function pingOrRecoverDevice(args: {
         lastRuntimeError: null,
         sessionStatus: "connected",
       });
+      void syncTelemetryHistoryAfterSnapshot({
+        deviceId: args.deviceId,
+        snapshot,
+        wifiBridge: args.wifiBridge,
+      }).catch((error) => {
+        console.warn("Failed to sync runtime telemetry history.", {
+          deviceId: args.deviceId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
       return snapshot;
     } catch (error) {
       await upsertDeviceRuntimeConfig(args.deviceId, {
@@ -884,6 +1285,7 @@ export async function provisionFacilityWifi(args: {
   ssid: string;
   bleClient?: ColdGuardBleClient;
 }) {
+  ensureEnrollmentNotInProgress();
   const device = await getDeviceById(args.deviceId);
   if (!device) {
     throw new Error("DEVICE_NOT_FOUND");
@@ -910,7 +1312,13 @@ export async function provisionFacilityWifi(args: {
   return provisioning;
 }
 
-export async function startDeviceMonitoring(deviceId: string): Promise<DeviceRuntimeConfig> {
+export async function startDeviceMonitoring(
+  deviceId: string,
+  options?: { allowDuringEnrollment?: boolean },
+): Promise<DeviceRuntimeConfig> {
+  if (!options?.allowDuringEnrollment) {
+    ensureEnrollmentNotInProgress();
+  }
   if (Platform.OS !== "web") {
     const permissionStatus = await getLocalNotificationPermissionStatus();
     const nextPermissionStatus =
@@ -1029,17 +1437,21 @@ export async function pollMonitoredDeviceRuntime(args: {
   bleClient?: ColdGuardBleClient;
   wifiBridge?: ColdGuardWifiBridge;
 }) {
+  ensureEnrollmentNotInProgress();
   try {
     const snapshot = await pingOrRecoverDevice(args);
     await saveDeviceConnectionSnapshot(args.deviceId, {
-      batteryLevel: snapshot.batteryLevel,
       currentTempC: snapshot.currentTempC,
-      doorOpen: snapshot.doorOpen,
       lastConnectionTestAt: snapshot.receivedAt,
       lastConnectionTestStatus: "success",
       lastSeenAt: snapshot.lastSeenAt,
       macAddress: snapshot.macAddress,
       mktStatus: snapshot.mktStatus,
+      recordedAt: snapshot.recordedAt,
+      rtcIso: snapshot.rtcIso,
+      sdCardMounted: false,
+      sequence: snapshot.latestSequence,
+      timeSource: snapshot.timeSource,
     });
     await upsertDeviceRuntimeConfig(args.deviceId, {
       lastMonitorAt: snapshot.receivedAt,
@@ -1060,6 +1472,7 @@ export async function runColdGuardConnectionTest(args: {
   bleClient?: ColdGuardBleClient;
   wifiBridge?: ColdGuardWifiBridge;
 }) {
+  ensureEnrollmentNotInProgress();
   const device = await getDeviceById(args.deviceId);
   if (!device) {
     throw new Error("DEVICE_NOT_FOUND");
@@ -1076,14 +1489,17 @@ export async function runColdGuardConnectionTest(args: {
     const payload = await pingOrRecoverDevice(args);
 
     await saveDeviceConnectionSnapshot(args.deviceId, {
-      batteryLevel: payload.batteryLevel,
       currentTempC: payload.currentTempC,
-      doorOpen: payload.doorOpen,
       lastConnectionTestAt: payload.receivedAt,
       lastConnectionTestStatus: "success",
       lastSeenAt: payload.lastSeenAt,
       macAddress: payload.macAddress,
       mktStatus: payload.mktStatus,
+      recordedAt: payload.recordedAt,
+      rtcIso: payload.rtcIso,
+      sdCardMounted: false,
+      sequence: payload.latestSequence,
+      timeSource: payload.timeSource,
     });
 
     await updateDeviceConnectionTestStatus({
@@ -1289,7 +1705,7 @@ export async function bootstrapDefaultDeviceMonitoring(deviceId: string): Promis
     sessionStatus: "connecting",
   });
 
-  return await startDeviceMonitoring(deviceId);
+  return await startDeviceMonitoring(deviceId, { allowDuringEnrollment: true });
 }
 
 async function ensureWifiBridgePermissions() {

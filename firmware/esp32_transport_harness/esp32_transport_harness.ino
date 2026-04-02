@@ -10,6 +10,7 @@
 #include "src/ble_recovery.h"
 #include "src/device_ui.h"
 #include "src/device_state.h"
+#include "src/runtime_mock_data.h"
 #include "src/wifi_runtime.h"
 
 namespace {
@@ -27,7 +28,7 @@ constexpr char kServiceUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110";
 constexpr char kCommandCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C111";
 constexpr char kResponseCharacteristicUuid[] = "6B8F7B61-8B30-4A70-BD9A-44B4C1D7C112";
 constexpr uint8_t kNavTouchPin = T0;
-constexpr uint8_t kSelectTouchPin = T4;  // GPIO 13
+constexpr uint8_t kSelectTouchPin = T5;  // GPIO 12
 constexpr uint8_t kBuiltInLedPin = 2;
 constexpr uint8_t kLcdColumns = 16;
 constexpr uint8_t kLcdRows = 2;
@@ -54,21 +55,24 @@ constexpr coldguard::BleRecoveryConfig kBleRecoveryConfig = {
   kProtocolVersion,
 };
 
-constexpr coldguard::DeviceUiConfig kDeviceUiConfig = {
-  kNavTouchPin,
-  kSelectTouchPin,
-  kBuiltInLedPin,
-  21,
-  22,
-  kLcdColumns,
-  kLcdRows,
-  kTouchThresholdFactor,
-  kTouchDebounceMs,
-  kTouchLongPressMs,
-  kFirmwareVersion,
-  kProtocolVersion,
-  kServiceUuid,
-};
+const coldguard::DeviceUiConfig kDeviceUiConfig = [] {
+  coldguard::DeviceUiConfig config{};
+  config.navTouchPin = kNavTouchPin;
+  config.selectTouchPin = kSelectTouchPin;
+  config.ledPin = kBuiltInLedPin;
+  config.buzzerPin = 16;
+  config.oledI2cSdaPin = 21;
+  config.oledI2cSclPin = 22;
+  config.lcdColumns = kLcdColumns;
+  config.lcdRows = kLcdRows;
+  config.touchThresholdFactor = kTouchThresholdFactor;
+  config.touchDebounceMs = kTouchDebounceMs;
+  config.longPressMs = kTouchLongPressMs;
+  config.firmwareVersion = kFirmwareVersion;
+  config.protocolVersion = kProtocolVersion;
+  config.serviceUuid = kServiceUuid;
+  return config;
+}();
 
 void logSecretValue(const String& label, const String& value) {
   if (kVerboseSecretLogging) {
@@ -209,12 +213,14 @@ void setup() {
   Serial.println("[BOOT] setup: serial ready");
   Serial.println("[BOOT] setup: loading device state");
   coldguard::loadDeviceState(preferences, kPreferencesNamespace, &deviceState);
-  Serial.println("[BOOT] setup: initializing device UI");
-  coldguard::initializeDeviceUi(kDeviceUiConfig);
-  Serial.println("[BOOT] setup: starting wifi runtime tick");
-  coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
   Serial.println("[BOOT] setup: initializing BLE");
   initializeBle();
+  Serial.println("[BOOT] setup: initializing device UI");
+  coldguard::initializeDeviceUi(kDeviceUiConfig);
+  Serial.println("[BOOT] setup: initializing runtime telemetry");
+  coldguard::initializeRuntimeTelemetry(&deviceState, preferences);
+  Serial.println("[BOOT] setup: starting wifi runtime tick");
+  coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
   Serial.println("[BOOT] setup: init complete");
 
   Serial.println("ColdGuard ESP32 transport harness ready");
@@ -227,6 +233,7 @@ void setup() {
 }
 
 void loop() {
+  coldguard::tickRuntimeTelemetry(&deviceState, preferences);
   coldguard::tickWifiRuntime(webServer, &deviceState, kFirmwareVersion);
   coldguard::syncDeviceUiWorkflow(&deviceState);
   coldguard::tickDeviceUi(&deviceState, preferences, webServer, advertising);

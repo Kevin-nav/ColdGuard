@@ -90,8 +90,48 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
         { name: "current_temp_c" },
         { name: "mkt_status" },
         { name: "battery_level" },
-        { name: "door_open" },
+        { name: "battery_voltage_v" },
+        { name: "current_ma" },
+        { name: "power_mw" },
+        { name: "battery_percent_estimate" },
+        { name: "latest_sequence" },
+        { name: "recorded_at" },
+        { name: "rtc_iso" },
+        { name: "time_source" },
+        { name: "sd_card_mounted" },
+        { name: "shunt_voltage_mv" },
         { name: "last_seen_at" },
+      ];
+    }
+
+    if (query.includes("readings")) {
+      return [
+        { name: "id" },
+        { name: "institution_name" },
+        { name: "device_id" },
+        { name: "recorded_at" },
+      ];
+    }
+
+    if (query.includes("device_runtime_config")) {
+      return [
+        { name: "device_id" },
+        { name: "active_transport" },
+        { name: "session_status" },
+        { name: "monitoring_mode" },
+        { name: "active_runtime_base_url" },
+        { name: "facility_wifi_ssid" },
+        { name: "facility_wifi_password" },
+        { name: "facility_wifi_runtime_base_url" },
+        { name: "softap_ssid" },
+        { name: "softap_password" },
+        { name: "softap_runtime_base_url" },
+        { name: "last_ping_at" },
+        { name: "last_recover_at" },
+        { name: "last_monitor_at" },
+        { name: "last_runtime_error" },
+        { name: "last_monitor_error" },
+        { name: "updated_at" },
       ];
     }
 
@@ -112,6 +152,15 @@ test("migrates legacy sqlite tables without dropping cached data", async () => {
   );
   expect(mockExecAsync).toHaveBeenCalledWith(
     "ALTER TABLE devices ADD COLUMN last_connection_sync_status TEXT NOT NULL DEFAULT 'idle'",
+  );
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE readings ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0",
+  );
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE device_runtime_config ADD COLUMN telemetry_history_cursor INTEGER",
+  );
+  expect(mockExecAsync).toHaveBeenCalledWith(
+    "ALTER TABLE device_runtime_config ADD COLUMN telemetry_upload_cursor INTEGER",
   );
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("UPDATE devices"));
   expect(mockExecAsync).toHaveBeenCalledWith(expect.stringContaining("SET institution_id ="));

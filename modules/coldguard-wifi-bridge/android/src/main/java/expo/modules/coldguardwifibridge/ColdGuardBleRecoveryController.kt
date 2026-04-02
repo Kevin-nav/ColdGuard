@@ -219,10 +219,8 @@ class ColdGuardBleRecoveryController(private val context: Context) {
 
   companion object {
     private const val LOG_TAG = "ColdGuardEnrollment"
-    private const val MAX_BLE_WRITE_BYTES = 180
     private const val RESPONSE_TIMEOUT_MS = 8_000L
     private const val SCAN_TIMEOUT_MS = 12_000L
-    private const val TRANSPORT_CHUNK_BYTES = 120
     private val COLDGUARD_BLE_COMMAND_CHARACTERISTIC_UUID =
       UUID.fromString("6B8F7B61-8B30-4A70-BD9A-44B4C1D7C111")
     private val COLDGUARD_BLE_RESPONSE_CHARACTERISTIC_UUID =
@@ -231,25 +229,6 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       UUID.fromString("6B8F7B61-8B30-4A70-BD9A-44B4C1D7C110")
     private val CLIENT_CHARACTERISTIC_CONFIG_UUID =
       UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-
-    private fun encodeTransportPayload(jsonPayload: String): String {
-      return java.util.Base64.getEncoder().encodeToString(jsonPayload.toByteArray(StandardCharsets.UTF_8))
-    }
-
-    private fun splitTransportPayload(value: String, chunkSize: Int = TRANSPORT_CHUNK_BYTES): List<String> {
-      val chunks = mutableListOf<String>()
-      var index = 0
-      while (index < value.length) {
-        val nextEnd = minOf(value.length, index + chunkSize)
-        chunks += value.substring(index, nextEnd)
-        index = nextEnd
-      }
-      return chunks
-    }
-
-    private fun utf8ByteLength(value: String): Int {
-      return value.toByteArray(StandardCharsets.UTF_8).size
-    }
   }
 
   private data class BleHelloResponse(
@@ -263,6 +242,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
     private val gatt: BluetoothGatt,
     private val commandCharacteristic: BluetoothGattCharacteristic,
     private val callback: SessionCallback,
+    private val maxWriteBytes: Int,
   ) {
     suspend fun hello(expectedDeviceId: String): BleHelloResponse {
       val response = sendCommand("hello", JSONObject())
@@ -289,27 +269,14 @@ class ColdGuardBleRecoveryController(private val context: Context) {
         put("command", command)
         put("requestId", requestId)
       }
-      val rawPayload = payload.toString()
-      if (utf8ByteLength(rawPayload) <= MAX_BLE_WRITE_BYTES) {
-        return writePayload(rawPayload, requestId, command)
-      }
-
-      val chunks = splitTransportPayload(encodeTransportPayload(rawPayload))
-      for (index in chunks.indices) {
-        val chunkJson = JSONObject().apply {
-          put("command", "transport.chunk")
-          put("data", chunks[index])
-          put("final", index == chunks.lastIndex)
-          put("requestId", "chunk-$requestId-$index")
-          put("transportId", requestId)
-        }
-
+      val writes = ColdGuardBleTransport.buildWriteEnvelopes(payload.toString(), requestId, maxWriteBytes)
+      for (write in writes) {
         val response = writePayload(
-          payload = chunkJson.toString(),
-          requestId = if (index == chunks.lastIndex) requestId else null,
+          payload = write.payload,
+          requestId = write.responseRequestId,
           command = command,
         )
-        if (index == chunks.lastIndex) {
+        if (write.responseRequestId != null) {
           return response
         }
       }
@@ -417,10 +384,26 @@ class ColdGuardBleRecoveryController(private val context: Context) {
               callback.pendingDescriptorWrite?.await()
             }
 
+            val negotiatedMtu =
+              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                callback.prepareMtuChange()
+                val mtuRequestStarted = gatt.requestMtu(ColdGuardBleTransport.REQUESTED_MTU)
+                if (!mtuRequestStarted) {
+                  callback.clearPendingMtuChange()
+                  throw IllegalStateException("BLE_MTU_REQUEST_FAILED")
+                }
+                withTimeout(RESPONSE_TIMEOUT_MS) {
+                  callback.pendingMtuChange?.await()
+                } ?: throw IllegalStateException("BLE_MTU_NEGOTIATION_FAILED")
+              } else {
+                23
+              }
+
             return ColdGuardBleGattSession(
               gatt = gatt,
               commandCharacteristic = commandCharacteristic,
               callback = callback,
+              maxWriteBytes = maxOf(negotiatedMtu - 3, 20),
             )
           } catch (error: Exception) {
             lastError = error
@@ -457,6 +440,8 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       private val responseAssembler = ColdGuardBleJsonAssembler()
       var pendingDescriptorWrite: CompletableDeferred<Unit>? = null
         private set
+      var pendingMtuChange: CompletableDeferred<Int>? = null
+        private set
       var pendingResponse: CompletableDeferred<JSONObject>? = null
         private set
       private var pendingResponseId: String? = null
@@ -469,6 +454,16 @@ class ColdGuardBleRecoveryController(private val context: Context) {
       fun clearPendingDescriptorWrite() {
         pendingDescriptorWrite?.cancel()
         pendingDescriptorWrite = null
+      }
+
+      fun prepareMtuChange() {
+        pendingMtuChange?.cancel()
+        pendingMtuChange = CompletableDeferred()
+      }
+
+      fun clearPendingMtuChange() {
+        pendingMtuChange?.cancel()
+        pendingMtuChange = null
       }
 
       fun prepareWrite(): CompletableDeferred<Unit> {
@@ -499,6 +494,7 @@ class ColdGuardBleRecoveryController(private val context: Context) {
 
       fun close() {
         clearPendingDescriptorWrite()
+        clearPendingMtuChange()
         clearPendingWrite()
         clearPendingResponse()
         responseAssembler.clear()
@@ -556,6 +552,17 @@ class ColdGuardBleRecoveryController(private val context: Context) {
           return
         }
         deferred?.complete(Unit)
+      }
+
+      override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+        Log.d(LOG_TAG, "[mtu_changed] status=$status mtu=$mtu")
+        val deferred = pendingMtuChange
+        pendingMtuChange = null
+        if (status != BluetoothGatt.GATT_SUCCESS || mtu <= 0) {
+          deferred?.completeExceptionally(IllegalStateException("BLE_MTU_CHANGED_STATUS_$status"))
+          return
+        }
+        deferred?.complete(mtu)
       }
 
       override fun onCharacteristicWrite(

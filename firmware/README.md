@@ -23,4 +23,13 @@ The transport harness in `esp32_transport_harness/` is the current development t
 - action-ticket verification
 - Wi-Fi handoff for runtime connectivity tests
 
+The current harness also carries the real telemetry integration used by the mobile stack:
+
+- `DS18B20` vaccine temperature probe on `GPIO17`
+- `Passive buzzer` on `GPIO16`
+- `RTC` and `SH1106 OLED` on I2C `SDA=21`, `SCL=22`
+- internal flash history buffering for unsent telemetry rows
+
+Historical telemetry is stored in a bounded internal flash backlog. The app syncs every unsent row by `sequence`; when storage fills, the firmware evicts the oldest buffered rows. The old reed-switch / door-open signal is no longer part of the firmware contract.
+
 Do not use the production profile as the place to accumulate factory-only tooling.

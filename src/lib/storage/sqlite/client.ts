@@ -45,7 +45,9 @@ type SQLiteTableInfoRow = {
 async function migrateLegacySQLiteSchema(database: SQLiteDatabase) {
   await ensureLegacyColumns(database, "profile_cache", SQLITE_LEGACY_COLUMN_MIGRATIONS.profile_cache);
   await ensureLegacyColumns(database, "devices", SQLITE_LEGACY_COLUMN_MIGRATIONS.devices);
+  await ensureLegacyColumns(database, "readings", SQLITE_LEGACY_COLUMN_MIGRATIONS.readings);
   await ensureLegacyColumns(database, "connection_grants", SQLITE_LEGACY_COLUMN_MIGRATIONS.connection_grants);
+  await ensureLegacyColumns(database, "device_runtime_config", SQLITE_LEGACY_COLUMN_MIGRATIONS.device_runtime_config);
   await backfillLegacyDeviceInstitutionIds(database);
 }
 

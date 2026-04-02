@@ -1,6 +1,7 @@
 import {
   __testing,
   assignDevice,
+  ingestDeviceTelemetryBatch,
   issueDeviceActionTicket,
   issueSupervisorActionTicket,
   recordConnectionTest,
@@ -534,11 +535,218 @@ test("allows connection test writes from an assigned nurse", async () => {
   jest.restoreAllMocks();
 });
 
+test("ingests telemetry rows and refreshes the latest device snapshot", async () => {
+  const now = 1_700_000_005_000;
+  jest.spyOn(Date, "now").mockReturnValue(now);
+
+  const ctx = createMutationCtx({
+    assignmentsByStaff: [
+      {
+        deviceId: "device-1",
+        isActive: true,
+        staffId: "KB1002",
+      },
+    ],
+    device: {
+      _id: "device-row-1",
+      batteryLevel: 72,
+      deviceId: "device-1",
+      grantVersion: 4,
+      institutionId: "institution-1",
+      latestSequence: 3,
+      status: "active",
+    },
+    user: {
+      _id: "user-2",
+      displayName: "Nurse One",
+      firebaseUid: "firebase-user-2",
+      institutionId: "institution-1",
+      role: "Nurse",
+      staffId: "KB1002",
+    },
+  });
+
+  await (ingestDeviceTelemetryBatch as any)._handler(ctx, {
+    deviceId: "device-1",
+    readings: [
+      {
+        batteryPercentEstimate: 71,
+        batteryVoltageV: 3.82,
+        currentMa: 112.5,
+        mktStatus: "safe",
+        powerMw: 429.6,
+        recordedAt: 1_700_000_004_000,
+        rtcIso: "2026-04-01T00:00:04Z",
+        sdCardMounted: true,
+        sequence: 4,
+        sensorHealthJson: "{\"ds18b20\":\"ok\"}",
+        statusText: "Sample 4",
+        shuntVoltageMv: 18.2,
+        timeSource: "rtc",
+        vaccineTempC: 4.4,
+      },
+      {
+        batteryPercentEstimate: 69,
+        batteryVoltageV: 3.79,
+        currentMa: 130.25,
+        mktStatus: "warning",
+        powerMw: 493.8,
+        recordedAt: 1_700_000_005_000,
+        rtcIso: "2026-04-01T00:00:05Z",
+        sdCardMounted: true,
+        sequence: 5,
+        sensorHealthJson: "{\"ds18b20\":\"ok\"}",
+        statusText: "Sample 5",
+        shuntVoltageMv: 21.6,
+        timeSource: "rtc",
+        vaccineTempC: 4.9,
+      },
+    ],
+  });
+
+  expect(ctx.db.insert).toHaveBeenCalledWith(
+    "deviceTelemetryReadings",
+    expect.objectContaining({
+      deviceId: "device-1",
+      institutionId: "institution-1",
+      sequence: 4,
+      batteryPercentEstimate: 71,
+      batteryLevel: 71,
+      currentTempC: 4.4,
+    }),
+  );
+  expect(ctx.db.insert).toHaveBeenCalledWith(
+    "deviceTelemetryReadings",
+    expect.objectContaining({
+      deviceId: "device-1",
+      institutionId: "institution-1",
+      sequence: 5,
+      batteryPercentEstimate: 69,
+      currentTempC: 4.9,
+    }),
+  );
+  expect(ctx.db.patch).toHaveBeenCalledWith(
+    "device-row-1",
+    expect.objectContaining({
+      batteryPercentEstimate: 69,
+      batteryLevel: 69,
+      currentTempC: 4.9,
+      latestSequence: 5,
+      mktStatus: "warning",
+      recordedAt: 1_700_000_005_000,
+      rtcIso: "2026-04-01T00:00:05Z",
+      sdCardMounted: true,
+      timeSource: "rtc",
+      updatedAt: now,
+    }),
+  );
+
+  jest.restoreAllMocks();
+});
+
+test("upserts existing telemetry rows without duplicating the latest snapshot", async () => {
+  const now = 1_700_000_006_000;
+  jest.spyOn(Date, "now").mockReturnValue(now);
+
+  const ctx = createMutationCtx({
+    assignmentsByStaff: [
+      {
+        deviceId: "device-1",
+        isActive: true,
+        staffId: "KB1002",
+      },
+    ],
+    device: {
+      _id: "device-row-1",
+      batteryLevel: 68,
+      deviceId: "device-1",
+      grantVersion: 4,
+      institutionId: "institution-1",
+      latestSequence: 4,
+      status: "active",
+    },
+    telemetryReadingsByKey: {
+      "device-1:5": {
+        _id: "telemetry-row-5",
+        deviceId: "device-1",
+        institutionId: "institution-1",
+        sequence: 5,
+      },
+    },
+    user: {
+      _id: "user-2",
+      displayName: "Nurse One",
+      firebaseUid: "firebase-user-2",
+      institutionId: "institution-1",
+      role: "Nurse",
+      staffId: "KB1002",
+    },
+  });
+
+  await (ingestDeviceTelemetryBatch as any)._handler(ctx, {
+    deviceId: "device-1",
+    readings: [
+      {
+        batteryPercentEstimate: 67,
+        batteryVoltageV: 3.76,
+        currentMa: 145.25,
+        mktStatus: "alert",
+        powerMw: 545.2,
+        recordedAt: 1_700_000_006_000,
+        rtcIso: "2026-04-01T00:00:06Z",
+        sdCardMounted: true,
+        sequence: 5,
+        sensorHealthJson: "{\"ds18b20\":\"warn\"}",
+        statusText: "Sample 5",
+        shuntVoltageMv: 24.4,
+        timeSource: "rtc",
+        vaccineTempC: 5.6,
+      },
+    ],
+  });
+
+  expect(ctx.db.patch).toHaveBeenCalledWith(
+    "telemetry-row-5",
+    expect.objectContaining({
+      batteryPercentEstimate: 67,
+      batteryLevel: 67,
+      currentTempC: 5.6,
+      deviceId: "device-1",
+      institutionId: "institution-1",
+      mktStatus: "alert",
+      powerMw: 545.2,
+      recordedAt: 1_700_000_006_000,
+      rtcIso: "2026-04-01T00:00:06Z",
+      sdCardMounted: true,
+      sequence: 5,
+      statusText: "Sample 5",
+      timeSource: "rtc",
+      updatedAt: now,
+    }),
+  );
+  expect(ctx.db.patch).toHaveBeenCalledWith(
+    "device-row-1",
+    expect.objectContaining({
+      batteryPercentEstimate: 67,
+      batteryLevel: 67,
+      currentTempC: 5.6,
+      latestSequence: 5,
+      mktStatus: "alert",
+      updatedAt: now,
+    }),
+  );
+  expect(ctx.db.insert).not.toHaveBeenCalled();
+
+  jest.restoreAllMocks();
+});
+
 function createMutationCtx(args: {
   assignmentsByStaff?: any[];
   activeAssignments?: any[];
   device?: any;
   nurses?: any[];
+  telemetryReadingsByKey?: Record<string, any>;
+  telemetryReadings?: any[];
   user: {
     _id: string;
     displayName: string | null;
@@ -552,7 +760,8 @@ function createMutationCtx(args: {
   const insert = jest.fn(async () => "inserted-row");
   const query = jest.fn((table: string) => ({
     withIndex: (indexName: string, buildIndex?: (queryBuilder: any) => unknown) => {
-      buildIndex?.(createIndexBuilder());
+      const indexBuilder = createIndexBuilder();
+      buildIndex?.(indexBuilder);
 
       if (table === "users" && indexName === "by_firebase_uid") {
         return {
@@ -570,6 +779,18 @@ function createMutationCtx(args: {
       if (table === "devices" && indexName === "by_device_id") {
         return {
           unique: async () => args.device ?? null,
+        };
+      }
+
+      if (table === "deviceTelemetryReadings" && indexName === "by_device_id_sequence") {
+        return {
+          unique: async () => args.telemetryReadingsByKey?.[`${indexBuilder.deviceId}:${indexBuilder.sequence}`] ?? null,
+        };
+      }
+
+      if (table === "deviceTelemetryReadings" && indexName === "by_device_id") {
+        return {
+          collect: async () => args.telemetryReadings ?? [],
         };
       }
 
@@ -609,7 +830,15 @@ function createMutationCtx(args: {
 
 function createIndexBuilder() {
   return {
-    eq() {
+    deviceId: undefined as string | undefined,
+    sequence: undefined as number | undefined,
+    eq(field: string, value: unknown) {
+      if (field === "deviceId") {
+        this.deviceId = value as string;
+      }
+      if (field === "sequence") {
+        this.sequence = value as number;
+      }
       return this;
     },
   };

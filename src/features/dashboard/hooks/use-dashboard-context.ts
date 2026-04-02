@@ -93,6 +93,8 @@ export function useDashboardContext(): DashboardContextState {
     };
   }, [loadDashboardContext]);
 
+  const refreshDevices = useCallback(async () => await loadDashboardContext("refresh"), [loadDashboardContext]);
+
   const counts = useMemo(
     () => ({
       alertCount: devices.filter((device) => device.mktStatus === "alert").length,
@@ -109,7 +111,7 @@ export function useDashboardContext(): DashboardContextState {
     isLoading,
     isRefreshing,
     profile,
-    refreshDevices: async () => await loadDashboardContext("refresh"),
+    refreshDevices,
     safeCount: counts.safeCount,
     warningCount: counts.warningCount,
   };

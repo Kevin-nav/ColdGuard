@@ -2,8 +2,6 @@ import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, mutation, query } from "./_generated/server";
 
-const DOOR_OPEN_WARNING_MS = 2 * 60_000;
-const DOOR_OPEN_CRITICAL_MS = 5 * 60_000;
 const OFFLINE_WARNING_MS = 10 * 60_000;
 const OFFLINE_CRITICAL_MS = 30 * 60_000;
 const RECENT_REOPEN_WINDOW_MS = 30 * 60_000;
@@ -16,9 +14,7 @@ const DEFAULT_NOTIFICATION_PREFERENCES = {
   recoveryPushEnabled: true,
   nonCriticalByType: {
     temperature: true,
-    door_open: true,
     device_offline: true,
-    battery_low: true,
   },
   quietHoursStart: undefined as string | undefined,
   quietHoursEnd: undefined as string | undefined,
@@ -31,14 +27,12 @@ type UserDoc = Doc<"users">;
 type PushDevice = Doc<"userPushDevices">;
 type NotificationPreferenceDoc = Doc<"userNotificationPreferences">;
 type NotificationSeverity = "warning" | "critical";
-type NotificationIncidentType = "temperature" | "door_open" | "device_offline" | "battery_low";
+type NotificationIncidentType = "temperature" | "device_offline";
 type Snapshot = {
   institutionId: Id<"institutions">;
   deviceId: string;
   deviceNickname: string;
   mktStatus: "safe" | "warning" | "alert";
-  batteryLevel: number;
-  doorOpen: boolean;
   lastSeenAt: number;
   observedAt: number;
 };
@@ -115,24 +109,6 @@ function buildSignals(snapshot: Snapshot, now = snapshot.observedAt): SignalDefi
     });
   }
 
-  if (snapshot.doorOpen) {
-    if (elapsedSinceSeen >= DOOR_OPEN_CRITICAL_MS) {
-      signals.push({
-        incidentType: "door_open",
-        severity: "critical",
-        title: `${snapshot.deviceNickname} has remained open too long`,
-        body: "Door-open duration has crossed the critical threshold.",
-      });
-    } else if (elapsedSinceSeen >= DOOR_OPEN_WARNING_MS) {
-      signals.push({
-        incidentType: "door_open",
-        severity: "warning",
-        title: `${snapshot.deviceNickname} door is still open`,
-        body: "Door-open duration has crossed the warning threshold.",
-      });
-    }
-  }
-
   if (elapsedSinceSeen >= OFFLINE_CRITICAL_MS) {
     signals.push({
       incidentType: "device_offline",
@@ -146,22 +122,6 @@ function buildSignals(snapshot: Snapshot, now = snapshot.observedAt): SignalDefi
       severity: "warning",
       title: `${snapshot.deviceNickname} has not checked in recently`,
       body: "The device appears offline. Confirm the mobile bridge or sensor connection.",
-    });
-  }
-
-  if (snapshot.batteryLevel < 10) {
-    signals.push({
-      incidentType: "battery_low",
-      severity: "critical",
-      title: `${snapshot.deviceNickname} battery is critically low`,
-      body: "Restore power or recharge the device immediately.",
-    });
-  } else if (snapshot.batteryLevel < 20) {
-    signals.push({
-      incidentType: "battery_low",
-      severity: "warning",
-      title: `${snapshot.deviceNickname} battery is running low`,
-      body: "Plan to recharge the device soon.",
     });
   }
 
@@ -188,17 +148,10 @@ function getRecoveryState(incident: NotificationIncident, snapshot: Snapshot, no
       const healthyEvaluationStreak = incident.healthyEvaluationStreak + 1;
       return { healthyEvaluationStreak, shouldResolve: healthyEvaluationStreak >= 3 };
     }
-    case "door_open":
-      return { healthyEvaluationStreak: snapshot.doorOpen ? 0 : 1, shouldResolve: !snapshot.doorOpen };
     case "device_offline":
       return {
         healthyEvaluationStreak: now - snapshot.lastSeenAt < OFFLINE_WARNING_MS ? 1 : 0,
         shouldResolve: now - snapshot.lastSeenAt < OFFLINE_WARNING_MS,
-      };
-    case "battery_low":
-      return {
-        healthyEvaluationStreak: snapshot.batteryLevel >= 25 ? 1 : 0,
-        shouldResolve: snapshot.batteryLevel >= 25,
       };
   }
 }
@@ -562,8 +515,6 @@ export const evaluateOperationalSnapshot = mutation({
     deviceId: v.string(),
     deviceNickname: v.string(),
     mktStatus: v.union(v.literal("safe"), v.literal("warning"), v.literal("alert")),
-    batteryLevel: v.number(),
-    doorOpen: v.boolean(),
     lastSeenAt: v.number(),
     observedAt: v.number(),
   },
@@ -573,8 +524,6 @@ export const evaluateOperationalSnapshot = mutation({
       deviceId: args.deviceId,
       deviceNickname: args.deviceNickname,
       mktStatus: args.mktStatus,
-      batteryLevel: args.batteryLevel,
-      doorOpen: args.doorOpen,
       lastSeenAt: args.lastSeenAt,
       observedAt: args.observedAt,
     };
@@ -588,8 +537,6 @@ export const evaluateOperationalSnapshotInternal = internalMutation({
     deviceId: v.string(),
     deviceNickname: v.string(),
     mktStatus: v.union(v.literal("safe"), v.literal("warning"), v.literal("alert")),
-    batteryLevel: v.number(),
-    doorOpen: v.boolean(),
     lastSeenAt: v.number(),
     observedAt: v.number(),
   },
@@ -599,8 +546,6 @@ export const evaluateOperationalSnapshotInternal = internalMutation({
       deviceId: args.deviceId,
       deviceNickname: args.deviceNickname,
       mktStatus: args.mktStatus,
-      batteryLevel: args.batteryLevel,
-      doorOpen: args.doorOpen,
       lastSeenAt: args.lastSeenAt,
       observedAt: args.observedAt,
     });
@@ -876,9 +821,7 @@ export const updateNotificationPreferences = mutation({
     recoveryPushEnabled: v.boolean(),
     nonCriticalByType: v.object({
       temperature: v.boolean(),
-      door_open: v.boolean(),
       device_offline: v.boolean(),
-      battery_low: v.boolean(),
     }),
     quietHoursStart: v.optional(v.union(v.string(), v.null())),
     quietHoursEnd: v.optional(v.union(v.string(), v.null())),

@@ -32,6 +32,22 @@ ColdGuard currently uses this split:
 - BLE: discovery, secure control, and monitoring ownership
 - Wi-Fi / SoftAP: runtime status, alerts, heartbeats, and connection testing
 
+## Current Telemetry Contract
+
+The current device/app/backend flow now assumes:
+
+- live runtime snapshots include vaccine temperature, RTC time source, voltage, current, power, battery estimate, SD status, and a monotonically increasing `latestSequence`
+- the ESP32 stores historical telemetry on microSD and exposes it through `/api/v1/runtime/history`
+- the mobile app syncs every unsynced history row into local SQLite first, then batches it into Convex using the device sequence cursor
+- the old reed-switch / door-open flow is removed from the app, firmware runtime payloads, and backend incident model
+
+Current harness hardware pinout:
+
+- `DS18B20` vaccine probe: `GPIO17`
+- `Passive buzzer`: `GPIO16`
+- `OLED / RTC / INA219` I2C: `SDA=21`, `SCL=22`
+- `microSD` SPI: `SCK=18`, `MISO=19`, `MOSI=23`, `CS=5`
+
 For the full explanation of how those pieces fit together, read `docs/system-overview.md`.
 
 ## Setup

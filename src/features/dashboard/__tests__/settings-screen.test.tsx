@@ -89,7 +89,6 @@ beforeEach(() => {
       recoveryPushEnabled: true,
       nonCriticalByType: {
         temperature: true,
-        door_open: true,
         device_offline: true,
         battery_low: true,
       },

@@ -135,7 +135,6 @@ beforeEach(() => {
     nonCriticalByType: {
       battery_low: true,
       device_offline: true,
-      door_open: true,
       temperature: true,
     },
     quietHoursEnd: null,

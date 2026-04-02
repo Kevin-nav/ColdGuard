@@ -92,7 +92,6 @@ test("saves and loads notification preferences", async () => {
     recoveryPushEnabled: true,
     nonCriticalByType: {
       temperature: true,
-      door_open: false,
       device_offline: true,
       battery_low: false,
     },
@@ -105,7 +104,6 @@ test("saves and loads notification preferences", async () => {
     warning_local_enabled: 0,
     recovery_push_enabled: 1,
     temperature_enabled: 1,
-    door_open_enabled: 0,
     device_offline_enabled: 1,
     battery_low_enabled: 0,
     quiet_hours_start: "22:00",
@@ -119,7 +117,6 @@ test("saves and loads notification preferences", async () => {
     recoveryPushEnabled: true,
     nonCriticalByType: {
       temperature: true,
-      door_open: false,
       device_offline: true,
       battery_low: false,
     },
@@ -141,11 +138,11 @@ test("loads a single notification by id", async () => {
     institution_name: "Korle-Bu Teaching Hospital",
     device_id: "device-7",
     device_nickname: "Outreach Carrier 7",
-    incident_type: "door_open",
+    incident_type: "device_offline",
     severity: "warning",
     status: "acknowledged",
-    title: "Door open",
-    body: "Close the carrier lid.",
+    title: "Device offline warning",
+    body: "Outreach Carrier 7 has not checked in recently.",
     first_triggered_at: 1000,
     last_triggered_at: 2000,
     acknowledged_at: 2100,
@@ -159,7 +156,7 @@ test("loads a single notification by id", async () => {
     expect.objectContaining({
       id: "incident-9",
       status: "acknowledged",
-      incidentType: "door_open",
+      incidentType: "device_offline",
     }),
   );
 });

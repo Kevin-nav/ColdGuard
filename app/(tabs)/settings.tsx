@@ -25,19 +25,9 @@ const ROUTINE_ALERT_OPTIONS: {
     description: "Warnings when a unit drifts outside safe range.",
   },
   {
-    type: "door_open",
-    title: "Door open",
-    description: "Alerts when a unit door is left open.",
-  },
-  {
     type: "device_offline",
     title: "Device offline",
     description: "Alerts when a device hasn't checked in.",
-  },
-  {
-    type: "battery_low",
-    title: "Low battery",
-    description: "Warnings when a device needs power.",
   },
 ];
 
@@ -248,10 +238,10 @@ export default function SettingsScreen() {
 
 function getIconForAlertType(type: NotificationIncidentType): keyof typeof Ionicons.glyphMap {
   switch (type) {
-    case "temperature": return "thermometer";
-    case "door_open": return "warning-outline";
-    case "device_offline": return "wifi";
-    case "battery_low": return "battery-dead";
+    case "temperature":
+      return "thermometer";
+    case "device_offline":
+      return "wifi";
     default: return "alert-circle";
   }
 }

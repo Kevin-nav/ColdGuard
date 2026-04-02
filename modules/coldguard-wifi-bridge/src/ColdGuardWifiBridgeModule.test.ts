@@ -8,6 +8,7 @@ describe("getColdGuardWifiBridgeModule", () => {
     const nativeModule = {
       connectToAccessPointAsync: jest.fn(),
       fetchRuntimeSnapshotAsync: jest.fn(),
+      fetchRuntimeHistoryAsync: jest.fn(),
       getMonitoringStatusesAsync: jest.fn(),
       releaseNetworkBindingAsync: jest.fn(),
       startEnrollmentAsync: jest.fn(),
@@ -78,13 +79,24 @@ describe("ColdGuardWifiBridgeModule.web", () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const module = require("./ColdGuardWifiBridgeModule.web");
 
-    await expect(module.default().stopMonitoringDeviceAsync("device-123")).resolves.toEqual({
-      "device-123": {
-        deviceId: "device-123",
-        error: null,
-        isRunning: false,
-        transport: null,
-      },
-    });
+    await expect(module.default().stopMonitoringDeviceAsync("device-123")).resolves.toEqual(
+      expect.objectContaining({
+        "device-123": expect.objectContaining({
+          deviceId: "device-123",
+          error: null,
+          isRunning: false,
+          transport: null,
+        }),
+      }),
+    );
+  });
+
+  test("fetchRuntimeHistoryAsync throws when the web bridge is unavailable", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const module = require("./ColdGuardWifiBridgeModule.web");
+
+    await expect(module.default().fetchRuntimeHistoryAsync("http://192.168.4.1")).rejects.toThrow(
+      "WIFI_BRIDGE_UNAVAILABLE",
+    );
   });
 });

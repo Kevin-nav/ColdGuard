@@ -113,14 +113,17 @@ export function runMockConnectionTest(args: {
   const now = Date.now();
   return {
     payload: {
-      batteryLevel: 89,
       currentTempC: 4.7,
-      doorOpen: false,
       firmwareVersion: device.firmwareVersion,
+      latestSequence: 42,
       lastSeenAt: now,
       macAddress: `MOCK-${device.deviceId.slice(-4)}`,
       mktStatus: "safe",
+      recordedAt: now,
+      rtcIso: new Date(now).toISOString(),
+      sdCardMounted: true,
       statusText: "Mock BLE-to-WiFi handover completed.",
+      timeSource: "rtc",
     },
     ticket: {
       expiresAt: now + 60_000,

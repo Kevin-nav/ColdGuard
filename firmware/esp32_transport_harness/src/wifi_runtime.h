@@ -2,9 +2,9 @@
 
 #include <WebServer.h>
 
-#include "device_state.h"
-
 namespace coldguard {
+
+struct DeviceState;
 
 bool ensureSoftApStarted(WebServer& webServer, DeviceState* state, const char* firmwareVersion);
 bool provisionFacilityWifi(

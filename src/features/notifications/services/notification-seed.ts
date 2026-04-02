@@ -1,12 +1,8 @@
 import { type DeviceRecord } from "../../../lib/storage/sqlite/device-repository";
 import { type NotificationIncidentRecord } from "../types";
 
-const DOOR_WARNING_MS = 2 * 60_000;
-const DOOR_CRITICAL_MS = 5 * 60_000;
 const OFFLINE_WARNING_MS = 10 * 60_000;
 const OFFLINE_CRITICAL_MS = 30 * 60_000;
-const BATTERY_WARNING_LEVEL = 20;
-const BATTERY_CRITICAL_LEVEL = 10;
 
 function createIncidentBase(
   institutionName: string,
@@ -52,29 +48,6 @@ export function buildSeedNotificationsForDevices(institutionName: string, device
       );
     }
 
-    if (device.doorOpen && timeSinceLastSeen >= DOOR_WARNING_MS) {
-      const severity = timeSinceLastSeen >= DOOR_CRITICAL_MS ? "critical" : "warning";
-      incidents.push(
-        createIncidentBase(institutionName, device, {
-          incidentType: "door_open",
-          severity,
-          status: "open",
-          title: severity === "critical" ? "Door remains open" : "Door open warning",
-          body:
-            severity === "critical"
-              ? `${device.nickname} has been left open long enough to threaten cold-chain safety.`
-              : `${device.nickname} door is still open and should be checked.`,
-          firstTriggeredAt: device.lastSeenAt,
-          lastTriggeredAt: device.lastSeenAt,
-          acknowledgedAt: null,
-          resolvedAt: null,
-          readAt: null,
-          archivedAt: null,
-          lastViewedVersion: 0,
-        }),
-      );
-    }
-
     if (timeSinceLastSeen >= OFFLINE_WARNING_MS) {
       incidents.push(
         createIncidentBase(institutionName, device, {
@@ -97,27 +70,6 @@ export function buildSeedNotificationsForDevices(institutionName: string, device
       );
     }
 
-    if (device.batteryLevel < BATTERY_WARNING_LEVEL) {
-      incidents.push(
-        createIncidentBase(institutionName, device, {
-          incidentType: "battery_low",
-          severity: device.batteryLevel < BATTERY_CRITICAL_LEVEL ? "critical" : "warning",
-          status: "open",
-          title: device.batteryLevel < BATTERY_CRITICAL_LEVEL ? "Battery critically low" : "Battery low warning",
-          body:
-            device.batteryLevel < BATTERY_CRITICAL_LEVEL
-              ? `${device.nickname} battery is below 10%.`
-              : `${device.nickname} battery needs attention soon.`,
-          firstTriggeredAt: device.lastSeenAt,
-          lastTriggeredAt: device.lastSeenAt,
-          acknowledgedAt: null,
-          resolvedAt: null,
-          readAt: null,
-          archivedAt: null,
-          lastViewedVersion: 0,
-        }),
-      );
-    }
   }
 
   return incidents;

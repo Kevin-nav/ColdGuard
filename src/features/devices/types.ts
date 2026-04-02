@@ -73,6 +73,21 @@ export type MonitoringMode = "off" | "foreground_service";
 
 export type DeviceControlRole = "none" | "secondary" | "primary";
 
+export type TelemetryTimeSource = "rtc" | "fallback" | "unknown";
+
+export type DeviceTelemetryReadingRecord = {
+  currentTempC: number;
+  deviceId: string;
+  id: string;
+  institutionName: string;
+  mktStatus: "safe" | "warning" | "alert";
+  recordedAt: number;
+  rtcIso: string | null;
+  sdCardMounted?: boolean;
+  sequence: number;
+  timeSource: TelemetryTimeSource;
+};
+
 export type FacilityWifiProvisioning = {
   password: string;
   runtimeBaseUrl: string;
@@ -82,7 +97,7 @@ export type FacilityWifiProvisioning = {
 export type RuntimeAlertRecord = {
   body: string;
   cursor: string;
-  incidentType: "battery_low" | "device_offline" | "door_open" | "temperature";
+  incidentType: "device_offline" | "temperature";
   severity: "critical" | "warning";
   status: "open" | "resolved";
   title: string;
@@ -114,6 +129,8 @@ export type DeviceRuntimeConfig = {
   lastPingAt: number | null;
   lastRecoverAt: number | null;
   lastRuntimeError: string | null;
+  telemetryHistoryCursor: number | null;
+  telemetryUploadCursor: number | null;
   primaryControllerUserId: string | null;
   primaryLeaseExpiresAt: number | null;
   primaryLeaseSessionId: string | null;
@@ -124,25 +141,29 @@ export type DeviceRuntimeConfig = {
 
 export type ColdGuardConnectionPayload = {
   accessMode?: "bluetooth_primary" | "facility_runtime" | "runtime_recovery" | "temporary_shared_access";
-  batteryLevel: number;
   currentTempC: number;
-  doorOpen: boolean;
   firmwareVersion: string;
+  latestSequence: number;
   lastSeenAt: number;
   macAddress: string;
   mktStatus: "safe" | "warning" | "alert";
+  recordedAt: number;
+  rtcIso: string | null;
+  sdCardMounted?: boolean;
   primaryTransport?: "bluetooth";
   secondaryTransport?: "softap" | null;
   softApAvailable?: boolean;
   softApClientCount?: number;
   softApIdleTimeoutMs?: number;
   statusText: string;
+  timeSource: TelemetryTimeSource;
   transport?: RuntimeTransportMode;
 };
 
 export type RemoteManagedDevice = {
   assignmentRole?: "primary" | "viewer";
   bleName: string;
+  currentTempC?: number;
   deviceId: string;
   deviceStatus?: "enrolled" | "decommissioned";
   firmwareVersion: string;
@@ -152,12 +173,18 @@ export type RemoteManagedDevice = {
   lastConnectionTestAt: number | null;
   lastConnectionTestStatus?: "idle" | "failed" | "success" | null;
   lastSeenAt: number;
+  latestSequence?: number;
   macAddress?: string;
+  mktStatus?: "safe" | "warning" | "alert";
   nickname: string;
   primaryAssigneeName: string | null;
   primaryStaffId: string | null;
   protocolVersion?: number;
+  recordedAt?: number;
+  rtcIso?: string | null;
+  sdCardMounted?: boolean;
   status: "active" | "decommissioned";
+  timeSource?: TelemetryTimeSource;
   viewerAssignments: { displayName: string; staffId: string }[];
   viewerNames?: string[];
 };

@@ -27,6 +27,32 @@ type AuthenticatedUser = {
   displayName: string | null;
 };
 
+type TelemetryReadingInput = {
+  mktStatus: "safe" | "warning" | "alert";
+  recordedAt: number;
+  rtcIso: string;
+  sdCardMounted: boolean;
+  sequence: number;
+  sensorHealthJson?: string;
+  statusText?: string;
+  timeSource: string;
+  vaccineTempC: number;
+};
+
+function buildTelemetryReadingPatch(reading: TelemetryReadingInput, updatedAt: number) {
+  return {
+    currentTempC: reading.vaccineTempC,
+    lastSeenAt: reading.recordedAt,
+    mktStatus: reading.mktStatus,
+    recordedAt: reading.recordedAt,
+    rtcIso: reading.rtcIso,
+    sdCardMounted: reading.sdCardMounted,
+    statusText: reading.statusText,
+    timeSource: reading.timeSource,
+    updatedAt,
+  };
+}
+
 async function getAuthenticatedFirebaseUid(ctx: { auth: { getUserIdentity(): Promise<{ subject: string } | null> } }) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity?.subject) {
@@ -365,6 +391,7 @@ async function mapDeviceSummary(ctx: any, device: any) {
 
   return {
     bleName: device.bleName ?? `ColdGuard_${device.deviceId.slice(-4)}`,
+    currentTempC: device.currentTempC ?? 4.5,
     deviceId: device.deviceId,
     deviceStatus: device.status === "active" ? "enrolled" : "decommissioned",
     firmwareVersion: device.firmwareVersion,
@@ -372,13 +399,20 @@ async function mapDeviceSummary(ctx: any, device: any) {
     institutionId: device.institutionId,
     lastConnectionTestAt: device.lastConnectionTestAt ?? null,
     lastConnectionTestStatus: device.lastConnectionTestStatus ?? null,
-    lastSeenAt: device.lastSeenAt ?? device.updatedAt,
+    lastSeenAt: device.lastSeenAt ?? device.recordedAt ?? device.updatedAt,
+    latestSequence: device.latestSequence ?? null,
     macAddress: device.macAddress,
     nickname: device.nickname,
+    mktStatus: device.mktStatus ?? "safe",
     primaryAssigneeName: primaryAssignment?.displayName ?? null,
     primaryStaffId: primaryAssignment?.staffId ?? null,
     protocolVersion: device.protocolVersion,
+    recordedAt: device.recordedAt ?? null,
+    rtcIso: device.rtcIso ?? null,
+    sdCardMounted: device.sdCardMounted ?? null,
     status: device.status,
+    statusText: device.statusText ?? null,
+    timeSource: device.timeSource ?? null,
     viewerAssignments: viewerAssignments.map((assignment: any) => ({
       displayName: assignment.displayName,
       staffId: assignment.staffId,
@@ -775,10 +809,121 @@ export const recordConnectionTest = mutation({
   },
 });
 
+export const ingestDeviceTelemetryBatch = mutation({
+  args: {
+    deviceId: v.string(),
+    readings: v.array(
+      v.object({
+        mktStatus: v.union(v.literal("safe"), v.literal("warning"), v.literal("alert")),
+        recordedAt: v.number(),
+        rtcIso: v.string(),
+        sdCardMounted: v.boolean(),
+        sequence: v.number(),
+        sensorHealthJson: v.optional(v.string()),
+        statusText: v.optional(v.string()),
+        timeSource: v.string(),
+        vaccineTempC: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const device = await getActiveDeviceOrThrow(ctx, user.institutionId, args.deviceId);
+    await ensureUserCanAccessDevice(ctx, user, args.deviceId);
+
+    const now = Date.now();
+    const latestBySequence = new Map<number, TelemetryReadingInput>();
+    for (const reading of args.readings) {
+      latestBySequence.set(reading.sequence, reading);
+    }
+
+    const orderedReadings = Array.from(latestBySequence.values()).sort((left, right) => left.sequence - right.sequence);
+    let newestReading: TelemetryReadingInput | null = null;
+
+    for (const reading of orderedReadings) {
+      newestReading = reading;
+      const existing = await ctx.db
+        .query("deviceTelemetryReadings")
+        .withIndex("by_device_id_sequence", (q: any) =>
+          q.eq("deviceId", args.deviceId).eq("sequence", reading.sequence),
+        )
+        .unique();
+      const patch = buildTelemetryReadingPatch(reading, now);
+
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          ...patch,
+          deviceId: args.deviceId,
+          institutionId: device.institutionId,
+          sequence: reading.sequence,
+        });
+      } else {
+        await ctx.db.insert("deviceTelemetryReadings", {
+          ...patch,
+          createdAt: now,
+          deviceId: args.deviceId,
+          institutionId: device.institutionId,
+          sequence: reading.sequence,
+        });
+      }
+    }
+
+    if (newestReading && (device.latestSequence ?? -1) < newestReading.sequence) {
+      const latestPatch = buildTelemetryReadingPatch(newestReading, now);
+      await ctx.db.patch(device._id, {
+        ...latestPatch,
+        latestSequence: newestReading.sequence,
+        updatedAt: now,
+      });
+    }
+
+    return {
+      deviceId: args.deviceId,
+      latestSequence: newestReading?.sequence ?? device.latestSequence ?? null,
+      rowsProcessed: orderedReadings.length,
+    };
+  },
+});
+
+export const listDeviceTelemetryReadings = query({
+  args: {
+    deviceId: v.string(),
+    limit: v.optional(v.number()),
+    afterSequence: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    await ensureUserCanAccessDevice(ctx, user, args.deviceId);
+
+    const readings = ((await ctx.db
+      .query("deviceTelemetryReadings")
+      .withIndex("by_device_id", (q: any) => q.eq("deviceId", args.deviceId))
+      .collect()) as any[]).sort((left, right) => left.sequence - right.sequence);
+
+    const filtered = readings.filter((reading) => reading.sequence > (args.afterSequence ?? -1));
+    return filtered.slice(0, args.limit ?? 100).map((reading) => ({
+      deviceId: reading.deviceId,
+      institutionId: reading.institutionId,
+      mktStatus: reading.mktStatus,
+      recordedAt: reading.recordedAt,
+      rtcIso: reading.rtcIso,
+      sdCardMounted: reading.sdCardMounted,
+      sequence: reading.sequence,
+      sensorHealthJson: reading.sensorHealthJson ?? null,
+      statusText: reading.statusText ?? null,
+      timeSource: reading.timeSource,
+      vaccineTempC: reading.vaccineTempC,
+    }));
+  },
+});
+
 export const __testing = {
   ensureExistingEnrollmentOwnership,
   ensureSupervisorAdminGrantTargetOwnership,
   ensureUserCanAccessDeviceForTesting: ensureUserCanAccessDevice,
+  buildTelemetryReadingPatchForTesting(reading: TelemetryReadingInput, updatedAt: number) {
+    return buildTelemetryReadingPatch(reading, updatedAt);
+  },
   async buildActionTicketForTesting(args: {
     action: DeviceActionTicketAction;
     counter: number;

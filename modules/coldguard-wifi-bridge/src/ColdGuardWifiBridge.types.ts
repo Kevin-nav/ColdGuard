@@ -7,8 +7,16 @@ export type ColdGuardWifiConnectionResult = {
 
 export type ColdGuardRuntimeFetchResult = {
   alertsJson: string;
+  historyJson: string;
   runtimeBaseUrl: string;
   statusJson: string;
+};
+
+export type ColdGuardRuntimeHistoryPage = {
+  hasMore: boolean;
+  nextSequence: number;
+  runtimeBaseUrl: string;
+  rowsJson: string;
 };
 
 export type ColdGuardEnrollmentStage =
@@ -111,6 +119,11 @@ export type ColdGuardWifiBridgeModuleContract = {
   ): EventSubscription;
   connectToAccessPointAsync(ssid: string, password: string): Promise<ColdGuardWifiConnectionResult>;
   fetchRuntimeSnapshotAsync(runtimeBaseUrl: string): Promise<ColdGuardRuntimeFetchResult>;
+  fetchRuntimeHistoryAsync(
+    runtimeBaseUrl: string,
+    afterSequence?: number,
+    limit?: number,
+  ): Promise<ColdGuardRuntimeHistoryPage>;
   getMonitoringStatusesAsync(): Promise<ColdGuardMonitoringStatusMap>;
   releaseNetworkBindingAsync(): Promise<void>;
   startEnrollmentAsync(options: ColdGuardEnrollmentRequest): Promise<ColdGuardEnrollmentResult>;

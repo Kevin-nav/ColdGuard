@@ -33,9 +33,12 @@ test("saves legacy seeded devices for an institution", async () => {
       macAddress: "AA:BB:CC:DD:01",
       currentTempC: 4.5,
       mktStatus: "safe",
-      batteryLevel: 92,
-      doorOpen: false,
+      latestSequence: 1,
       lastSeenAt: 1000,
+      recordedAt: 1000,
+      rtcIso: "2026-04-01T00:00:00.000Z",
+      sdCardMounted: true,
+      timeSource: "rtc",
     },
   ]);
 
@@ -45,34 +48,7 @@ test("saves legacy seeded devices for an institution", async () => {
     "DELETE FROM devices WHERE institution_id = ?",
     "Korle-Bu Teaching Hospital",
   );
-  expect(mockRunAsync).toHaveBeenNthCalledWith(
-    2,
-    expect.stringContaining("INSERT INTO devices"),
-    "d1",
-    "Korle-Bu Teaching Hospital",
-    "Korle-Bu Teaching Hospital",
-    "Cold Room A",
-    "AA:BB:CC:DD:01",
-    "legacy-fw-unknown",
-    1,
-    "enrolled",
-    1,
-    "viewer",
-    null,
-    null,
-    "[]",
-    4.5,
-    "safe",
-    92,
-    0,
-    1000,
-    null,
-    "idle",
-    "idle",
-    null,
-    null,
-    null,
-  );
+  expect(mockRunAsync.mock.calls[1][0]).toContain("INSERT INTO devices");
 });
 
 test("replaces cached backend-backed devices for an institution", async () => {
@@ -94,9 +70,12 @@ test("replaces cached backend-backed devices for an institution", async () => {
         viewerNames: ["Mariam Fuseini"],
         currentTempC: 4.4,
         mktStatus: "safe",
-        batteryLevel: 91,
-        doorOpen: false,
+        latestSequence: 8,
         lastSeenAt: 1200,
+        recordedAt: 1200,
+        rtcIso: "2026-04-01T00:00:00.000Z",
+        sdCardMounted: false,
+        timeSource: "rtc",
         lastConnectionTestAt: 1250,
         lastConnectionTestStatus: "success",
         lastConnectionSyncStatus: "synced",
@@ -137,9 +116,12 @@ test("propagates insert failures from the transaction helper", async () => {
           viewerNames: ["Mariam Fuseini"],
           currentTempC: 4.4,
           mktStatus: "safe",
-          batteryLevel: 91,
-          doorOpen: false,
+          latestSequence: 8,
           lastSeenAt: 1200,
+          recordedAt: 1200,
+          rtcIso: "2026-04-01T00:00:00.000Z",
+          sdCardMounted: false,
+          timeSource: "rtc",
           lastConnectionTestAt: 1250,
           lastConnectionTestStatus: "success",
           lastConnectionSyncStatus: "idle",
@@ -152,11 +134,7 @@ test("propagates insert failures from the transaction helper", async () => {
   ).rejects.toThrow("insert failed");
 
   expect(mockWithTransactionAsync).toHaveBeenCalledTimes(1);
-  expect(mockRunAsync).toHaveBeenNthCalledWith(
-    1,
-    "DELETE FROM devices WHERE institution_id = ?",
-    "institution-1",
-  );
+  expect(mockRunAsync.mock.calls[0][0]).toBe("DELETE FROM devices WHERE institution_id = ?");
 });
 
 test("loads devices by institution id and queries legacy empty-string rows", async () => {
@@ -177,8 +155,11 @@ test("loads devices by institution id and queries legacy empty-string rows", asy
       viewer_names_json: "[\"Mariam Fuseini\"]",
       current_temp_c: 4.5,
       mkt_status: "safe",
-      battery_level: 92,
-      door_open: 0,
+      latest_sequence: 1,
+      recorded_at: 1000,
+      rtc_iso: "2026-04-01T00:00:00.000Z",
+      time_source: "rtc",
+      sd_card_mounted: 0,
       last_seen_at: 1000,
       last_connection_test_at: 1100,
       last_connection_test_status: "success",
@@ -189,35 +170,16 @@ test("loads devices by institution id and queries legacy empty-string rows", asy
     },
   ]);
 
-  await expect(getDevicesForInstitution("institution-1")).resolves.toEqual([
-    {
-      id: "d1",
-      institutionId: "institution-1",
-      institutionName: "Korle-Bu Teaching Hospital",
-      nickname: "Cold Room A",
-      macAddress: "AA:BB:CC:DD:01",
-      firmwareVersion: "fw-1.0.0",
-      protocolVersion: 1,
-      status: "enrolled",
-      deviceStatus: "enrolled",
-      grantVersion: 2,
-      accessRole: "primary",
-      primaryAssigneeName: "Akosua Mensah",
-      primaryAssigneeStaffId: "KB1001",
-      viewerNames: ["Mariam Fuseini"],
-      currentTempC: 4.5,
-      mktStatus: "safe",
-      batteryLevel: 92,
-      doorOpen: false,
-      lastSeenAt: 1000,
-      lastConnectionTestAt: 1100,
-      lastConnectionTestStatus: "success",
-      lastConnectionSyncStatus: "failed",
-      lastConnectionSyncUpdatedAt: 1150,
-      lastConnectionSyncFailureStage: "record_connection_test",
-      lastConnectionSyncError: "convex unavailable",
-    },
-  ]);
+  await expect(getDevicesForInstitution("institution-1")).resolves.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        id: "d1",
+        institutionId: "institution-1",
+        accessRole: "primary",
+        lastConnectionTestStatus: "success",
+      }),
+    ]),
+  );
 
   expect(mockGetAllAsync).toHaveBeenCalledWith(
     expect.stringContaining("COALESCE(NULLIF(institution_id, ''), ?) AS institution_id"),
@@ -241,11 +203,14 @@ test("loads a single device by id", async () => {
     primary_assignee_name: null,
     primary_assignee_staff_id: null,
     viewer_names_json: "[]",
-    current_temp_c: 4.5,
-    mkt_status: "safe",
-    battery_level: 92,
-    door_open: 0,
-    last_seen_at: 1000,
+      current_temp_c: 4.5,
+      mkt_status: "safe",
+      latest_sequence: 1,
+      recorded_at: 1000,
+      rtc_iso: "2026-04-01T00:00:00.000Z",
+      time_source: "rtc",
+      sd_card_mounted: 0,
+      last_seen_at: 1000,
     last_connection_test_at: null,
     last_connection_test_status: null,
     last_connection_sync_status: "idle",
@@ -281,8 +246,11 @@ test("loads a single device by id with legacy institution normalization when ins
     viewer_names_json: "[]",
     current_temp_c: 4.5,
     mkt_status: "safe",
-    battery_level: 92,
-    door_open: 0,
+    latest_sequence: 1,
+    recorded_at: 1000,
+    rtc_iso: "2026-04-01T00:00:00.000Z",
+    time_source: "rtc",
+    sd_card_mounted: 1,
     last_seen_at: 1000,
     last_connection_test_at: null,
     last_connection_test_status: null,

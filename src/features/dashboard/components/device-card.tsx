@@ -65,13 +65,8 @@ export function DeviceCard(props: { device: DeviceRecord; onPress?: () => void }
       </View>
       <View style={styles.metrics}>
         <MetricRow iconName="thermometer-outline" label="Temp" value={`${props.device.currentTempC.toFixed(1)} C`} />
-        <MetricRow iconName="battery-half" label="Battery" value={`${props.device.batteryLevel}%`} />
-        <MetricRow
-          iconName={props.device.doorOpen ? "lock-open-outline" : "lock-closed-outline"}
-          label="Door"
-          value={props.device.doorOpen ? "Open" : "Closed"}
-          valueColor={props.device.doorOpen ? colors.warning : undefined}
-        />
+        <MetricRow iconName="layers-outline" label="Sequence" value={`${props.device.latestSequence}`} />
+        <MetricRow iconName="time-outline" label="Clock" value={props.device.timeSource.toUpperCase()} />
       </View>
       <View style={styles.summary}>
         <Text style={[styles.meta, { color: colors.textPrimary }]}>{accessLabel}</Text>

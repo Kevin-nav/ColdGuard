@@ -30,9 +30,7 @@ type NotificationPreferenceRow = {
   warning_local_enabled: number;
   recovery_push_enabled: number;
   temperature_enabled: number | null;
-  door_open_enabled: number | null;
   device_offline_enabled: number | null;
-  battery_low_enabled: number | null;
   quiet_hours_start: string | null;
   quiet_hours_end: string | null;
   last_updated_at: number;
@@ -231,13 +229,11 @@ export async function saveNotificationPreferences(snapshot: Omit<NotificationPre
   await database.runAsync(
     `
       INSERT OR REPLACE INTO notification_preference_type_cache
-      (id, temperature_enabled, door_open_enabled, device_offline_enabled, battery_low_enabled)
-      VALUES (1, ?, ?, ?, ?)
+      (id, temperature_enabled, device_offline_enabled)
+      VALUES (1, ?, ?)
     `,
     snapshot.nonCriticalByType.temperature ? 1 : 0,
-    snapshot.nonCriticalByType.door_open ? 1 : 0,
     snapshot.nonCriticalByType.device_offline ? 1 : 0,
-    snapshot.nonCriticalByType.battery_low ? 1 : 0,
   );
 
   return {
@@ -255,9 +251,7 @@ export async function getNotificationPreferences() {
         warning_local_enabled,
         recovery_push_enabled,
         temperature_enabled,
-        door_open_enabled,
         device_offline_enabled,
-        battery_low_enabled,
         quiet_hours_start,
         quiet_hours_end,
         last_updated_at
@@ -278,18 +272,10 @@ export async function getNotificationPreferences() {
         row.temperature_enabled === null
           ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.temperature
           : row.temperature_enabled === 1,
-      door_open:
-        row.door_open_enabled === null
-          ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.door_open
-          : row.door_open_enabled === 1,
       device_offline:
         row.device_offline_enabled === null
           ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.device_offline
           : row.device_offline_enabled === 1,
-      battery_low:
-        row.battery_low_enabled === null
-          ? DEFAULT_NOTIFICATION_PREFERENCES.nonCriticalByType.battery_low
-          : row.battery_low_enabled === 1,
     },
     quietHoursStart: row.quiet_hours_start,
     quietHoursEnd: row.quiet_hours_end,

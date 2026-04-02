@@ -26,6 +26,8 @@ type DeviceRuntimeConfigRow = {
   last_ping_at: number | null;
   last_recover_at: number | null;
   last_runtime_error: string | null;
+  telemetry_history_cursor: number | null;
+  telemetry_upload_cursor: number | null;
   monitoring_mode: MonitoringMode;
   session_status: RuntimeSessionStatus;
   updated_at: number;
@@ -51,6 +53,8 @@ function mapRow(row: DeviceRuntimeConfigRow): DeviceRuntimeConfig {
     lastPingAt: row.last_ping_at,
     lastRecoverAt: row.last_recover_at,
     lastRuntimeError: row.last_runtime_error,
+    telemetryHistoryCursor: row.telemetry_history_cursor,
+    telemetryUploadCursor: row.telemetry_upload_cursor,
     monitoringMode: row.monitoring_mode,
     sessionStatus: row.session_status,
     updatedAt: row.updated_at,
@@ -65,7 +69,8 @@ export async function getDeviceRuntimeConfig(deviceId: string): Promise<DeviceRu
              facility_wifi_ssid, facility_wifi_password, facility_wifi_runtime_base_url,
              softap_ssid, softap_password, softap_runtime_base_url,
              primary_controller_user_id, primary_lease_expires_at, primary_lease_session_id,
-             last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
+             last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error,
+             telemetry_history_cursor, telemetry_upload_cursor, updated_at
       FROM device_runtime_config
       WHERE device_id = ?
     `,
@@ -89,9 +94,10 @@ export async function saveDeviceRuntimeConfig(
         facility_wifi_ssid, facility_wifi_password, facility_wifi_runtime_base_url,
         softap_ssid, softap_password, softap_runtime_base_url,
         primary_controller_user_id, primary_lease_expires_at, primary_lease_session_id,
-        last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
+        last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error,
+        telemetry_history_cursor, telemetry_upload_cursor, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     args.deviceId,
     args.activeTransport,
@@ -113,6 +119,8 @@ export async function saveDeviceRuntimeConfig(
     args.lastMonitorAt,
     args.lastRuntimeError,
     args.lastMonitorError,
+    args.telemetryHistoryCursor,
+    args.telemetryUploadCursor,
     updatedAt,
   );
 
@@ -148,6 +156,8 @@ export async function upsertDeviceRuntimeConfig(
     lastPingAt: patch.lastPingAt ?? existing?.lastPingAt ?? null,
     lastRecoverAt: patch.lastRecoverAt ?? existing?.lastRecoverAt ?? null,
     lastRuntimeError: patch.lastRuntimeError ?? existing?.lastRuntimeError ?? null,
+    telemetryHistoryCursor: patch.telemetryHistoryCursor ?? existing?.telemetryHistoryCursor ?? null,
+    telemetryUploadCursor: patch.telemetryUploadCursor ?? existing?.telemetryUploadCursor ?? null,
     monitoringMode: patch.monitoringMode ?? existing?.monitoringMode ?? "off",
     sessionStatus: patch.sessionStatus ?? existing?.sessionStatus ?? "idle",
   });
@@ -176,7 +186,8 @@ export async function listMonitoredDeviceRuntimeConfigs(
              facility_wifi_ssid, facility_wifi_password, facility_wifi_runtime_base_url,
              softap_ssid, softap_password, softap_runtime_base_url,
              primary_controller_user_id, primary_lease_expires_at, primary_lease_session_id,
-             last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error, updated_at
+             last_ping_at, last_recover_at, last_monitor_at, last_runtime_error, last_monitor_error,
+             telemetry_history_cursor, telemetry_upload_cursor, updated_at
       FROM device_runtime_config
       WHERE monitoring_mode = 'foreground_service'${exclusionClause}
       ORDER BY device_id ASC

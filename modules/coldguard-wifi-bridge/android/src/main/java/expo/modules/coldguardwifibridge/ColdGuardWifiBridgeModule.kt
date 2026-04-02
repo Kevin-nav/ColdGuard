@@ -7,12 +7,16 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
 class ColdGuardWifiBridgeModule : Module() {
   private var wifiSessionController: ColdGuardWifiSessionController? = null
+  private val wifiSessionMutex = Mutex()
 
   override fun definition() = ModuleDefinition {
     Name("ColdGuardWifiBridge")
@@ -24,6 +28,10 @@ class ColdGuardWifiBridgeModule : Module() {
 
     AsyncFunction("fetchRuntimeSnapshotAsync") Coroutine { runtimeBaseUrl: String ->
       fetchRuntimeSnapshot(runtimeBaseUrl)
+    }
+
+    AsyncFunction("fetchRuntimeHistoryAsync") Coroutine { runtimeBaseUrl: String, afterSequence: Double?, limit: Double? ->
+      fetchRuntimeHistory(runtimeBaseUrl, afterSequence?.toLong(), limit?.toInt())
     }
 
     AsyncFunction("startEnrollmentAsync") Coroutine { options: Map<String, Any?> ->
@@ -48,74 +56,120 @@ class ColdGuardWifiBridgeModule : Module() {
   }
 
   private suspend fun connectToAccessPoint(ssid: String, password: String): Map<String, String> {
-    val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
-    val controller = wifiSessionController ?: ColdGuardWifiSessionController(context).also {
-      wifiSessionController = it
+    return wifiSessionMutex.withLock {
+      val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
+      val controller = wifiSessionController ?: ColdGuardWifiSessionController(context).also {
+        wifiSessionController = it
+      }
+      val session = controller.connect(ssid, password, bindProcess = true)
+      mapOf(
+        "localIp" to session.localIp,
+        "ssid" to session.ssid
+      )
     }
-    val session = controller.connect(ssid, password, bindProcess = true)
-    return mapOf(
-      "localIp" to session.localIp,
-      "ssid" to session.ssid
-    )
   }
 
   private suspend fun fetchRuntimeSnapshot(runtimeBaseUrl: String): Map<String, String> {
-    val controller = wifiSessionController ?: throw IllegalStateException("WIFI_BRIDGE_SESSION_UNAVAILABLE")
-    val network = controller.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
-    val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
-    val failures = mutableListOf<String>()
-    val statusJson = try {
-      fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network)
-    } catch (error: IOException) {
-      failures += "/api/v1/runtime/status: ${error.message ?: "request failed"}"
-      null
+    return wifiSessionMutex.withLock {
+      val controller = wifiSessionController ?: throw IllegalStateException("WIFI_BRIDGE_SESSION_UNAVAILABLE")
+      val network = controller.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
+      val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
+      val failures = mutableListOf<String>()
+      val statusJson = try {
+        fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/status", network)
+      } catch (error: IOException) {
+        failures += "/api/v1/runtime/status: ${error.message ?: "request failed"}"
+        null
+      }
+
+      if (statusJson == null) {
+        throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
+      }
+
+      try {
+        val resolvedAlertsJson =
+          if (statusJson.contains("\"alerts\"")) {
+            statusJson
+          } else {
+            fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network)
+          }
+
+        return@withLock mapOf(
+          "alertsJson" to resolvedAlertsJson,
+          "historyJson" to "{\"hasMore\":false,\"nextSequence\":0,\"rows\":[]}",
+          "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
+          "statusJson" to statusJson,
+        )
+      } catch (error: IOException) {
+        failures += "/api/v1/runtime/alerts: ${error.message ?: "request failed"}"
+      }
+
+      if (failures.isNotEmpty()) {
+        throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
+      }
+
+      throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")
     }
+  }
 
-    if (statusJson == null) {
-      throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
-    }
+  private suspend fun fetchRuntimeHistory(
+    runtimeBaseUrl: String,
+    afterSequence: Long?,
+    limit: Int?,
+  ): Map<String, Any?> {
+    return wifiSessionMutex.withLock {
+      val controller = wifiSessionController ?: throw IllegalStateException("WIFI_BRIDGE_SESSION_UNAVAILABLE")
+      val network = controller.currentNetwork() ?: throw IllegalStateException("WIFI_BRIDGE_NETWORK_UNAVAILABLE")
+      val normalizedRuntimeBaseUrl = normalizeRuntimeBaseUrl(runtimeBaseUrl)
+      val urlBuilder = StringBuilder("$normalizedRuntimeBaseUrl/api/v1/runtime/history")
+      val queryParts = mutableListOf<String>()
+      if (afterSequence != null) {
+        queryParts += "afterSequence=$afterSequence"
+      }
+      if (limit != null) {
+        queryParts += "limit=$limit"
+      }
+      if (queryParts.isNotEmpty()) {
+        urlBuilder.append("?").append(queryParts.joinToString("&"))
+      }
 
-    try {
-      val resolvedAlertsJson =
-        if (statusJson.contains("\"alerts\"")) {
-          statusJson
-        } else {
-          fetchJson("$normalizedRuntimeBaseUrl/api/v1/runtime/alerts", network)
-        }
-
-      return mapOf(
-        "alertsJson" to resolvedAlertsJson,
+      val historyJson = fetchJson(urlBuilder.toString(), network)
+      val page = parseHistoryPage(historyJson)
+      mapOf(
+        "hasMore" to page.hasMore,
+        "nextSequence" to page.nextSequence,
+        "rowsJson" to page.rowsJson,
         "runtimeBaseUrl" to normalizedRuntimeBaseUrl,
-        "statusJson" to statusJson,
       )
-    } catch (error: IOException) {
-      failures += "/api/v1/runtime/alerts: ${error.message ?: "request failed"}"
     }
-
-    if (failures.isNotEmpty()) {
-      throw IOException("WIFI_BRIDGE_RUNTIME_SNAPSHOT_FAILED ${failures.joinToString("; ")}")
-    }
-
-    throw IOException("WIFI_BRIDGE_ALERTS_RESPONSE_MISSING")
   }
 
   private suspend fun startEnrollment(options: Map<String, Any?>): Map<String, Any?> {
-    val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
-    val request = coldGuardEnrollmentRequestFromMap(options)
-    val controller = ColdGuardBleEnrollmentController(
-      context = context,
-      wifiSessionController = wifiSessionController ?: ColdGuardWifiSessionController(context).also {
-        wifiSessionController = it
-      },
-      onStage = { progress ->
-        sendEvent("onEnrollmentStage", progress.toBridgeMap())
-      },
-    )
-    return controller.enroll(request).toBridgeMap()
+    return wifiSessionMutex.withLock {
+      val context = appContext.reactContext ?: throw IllegalStateException("WIFI_BRIDGE_CONTEXT_UNAVAILABLE")
+      val request = coldGuardEnrollmentRequestFromMap(options)
+      val controller = ColdGuardBleEnrollmentController(
+        context = context,
+        wifiSessionController = wifiSessionController ?: ColdGuardWifiSessionController(context).also {
+          wifiSessionController = it
+        },
+        onStage = { progress ->
+          sendEvent("onEnrollmentStage", progress.toBridgeMap())
+        },
+      )
+      controller.enroll(request).toBridgeMap()
+    }
   }
 
   private fun releaseNetworkBinding() {
-    wifiSessionController?.release(bindProcess = true)
+    if (wifiSessionMutex.tryLock()) {
+      try {
+        wifiSessionController?.release(bindProcess = true)
+      } finally {
+        wifiSessionMutex.unlock()
+      }
+      return
+    }
   }
 
   private fun startMonitoringDevice(options: Map<String, Any?>): Map<String, Any?> {
@@ -210,4 +264,31 @@ class ColdGuardWifiBridgeModule : Module() {
   private fun openConnection(url: String, network: android.net.Network): HttpURLConnection {
     return (network.openConnection(URL(url)) as HttpURLConnection)
   }
+
+  private fun parseHistoryPage(body: String): RuntimeHistoryPage {
+    val trimmed = body.trim()
+    if (trimmed.isEmpty()) {
+      return RuntimeHistoryPage("[]", false, 0L)
+    }
+
+    val parsed = JSONObject(trimmed)
+    val rowsJson = when {
+      parsed.has("rowsJson") -> parsed.optString("rowsJson", "[]")
+      parsed.has("rows") -> parsed.optJSONArray("rows")?.toString() ?: "[]"
+      else -> "[]"
+    }
+    val hasMore = parsed.optBoolean("hasMore", false)
+    val nextSequence = when {
+      parsed.has("nextSequence") -> parsed.optLong("nextSequence", 0L)
+      parsed.has("next_sequence") -> parsed.optLong("next_sequence", 0L)
+      else -> 0L
+    }
+    return RuntimeHistoryPage(rowsJson, hasMore, nextSequence)
+  }
+
+  private data class RuntimeHistoryPage(
+    val rowsJson: String,
+    val hasMore: Boolean,
+    val nextSequence: Long,
+  )
 }

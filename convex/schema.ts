@@ -57,6 +57,20 @@ export default defineSchema({
     createdByFirebaseUid: v.string(),
     updatedAt: v.number(),
     decommissionedAt: v.optional(v.number()),
+    currentTempC: v.optional(v.number()),
+    batteryLevel: v.optional(v.number()),
+    mktStatus: v.optional(v.union(v.literal("safe"), v.literal("warning"), v.literal("alert"))),
+    recordedAt: v.optional(v.number()),
+    rtcIso: v.optional(v.string()),
+    timeSource: v.optional(v.string()),
+    batteryVoltageV: v.optional(v.number()),
+    shuntVoltageMv: v.optional(v.number()),
+    currentMa: v.optional(v.number()),
+    powerMw: v.optional(v.number()),
+    batteryPercentEstimate: v.optional(v.number()),
+    latestSequence: v.optional(v.number()),
+    sdCardMounted: v.optional(v.boolean()),
+    statusText: v.optional(v.string()),
     lastConnectionTestAt: v.optional(v.number()),
     lastConnectionTestStatus: v.optional(
       v.union(v.literal("idle"), v.literal("failed"), v.literal("success")),
@@ -65,6 +79,30 @@ export default defineSchema({
   })
     .index("by_device_id", ["deviceId"])
     .index("by_institution_status", ["institutionId", "status"]),
+  deviceTelemetryReadings: defineTable({
+    institutionId: v.id("institutions"),
+    deviceId: v.string(),
+    sequence: v.number(),
+    recordedAt: v.number(),
+    rtcIso: v.string(),
+    timeSource: v.string(),
+    vaccineTempC: v.number(),
+    batteryVoltageV: v.number(),
+    shuntVoltageMv: v.number(),
+    currentMa: v.number(),
+    powerMw: v.number(),
+    batteryPercentEstimate: v.number(),
+    batteryLevel: v.optional(v.number()),
+    mktStatus: v.union(v.literal("safe"), v.literal("warning"), v.literal("alert")),
+    sdCardMounted: v.boolean(),
+    statusText: v.optional(v.string()),
+    sensorHealthJson: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_device_id", ["deviceId"])
+    .index("by_device_id_sequence", ["deviceId", "sequence"])
+    .index("by_institution_device_id", ["institutionId", "deviceId"]),
   deviceAssignments: defineTable({
     deviceId: v.string(),
     institutionId: v.id("institutions"),
@@ -162,9 +200,7 @@ export default defineSchema({
     nonCriticalByType: v.optional(
       v.object({
         temperature: v.boolean(),
-        door_open: v.boolean(),
         device_offline: v.boolean(),
-        battery_low: v.boolean(),
       }),
     ),
     quietHoursStart: v.optional(v.string()),

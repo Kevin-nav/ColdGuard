@@ -30,7 +30,16 @@ export const SQLITE_TABLE_DEFINITIONS = {
       current_temp_c REAL NOT NULL,
       mkt_status TEXT NOT NULL,
       battery_level INTEGER NOT NULL,
-      door_open INTEGER NOT NULL,
+      battery_voltage_v REAL NOT NULL DEFAULT 0,
+      current_ma REAL NOT NULL DEFAULT 0,
+      power_mw REAL NOT NULL DEFAULT 0,
+      battery_percent_estimate INTEGER NOT NULL DEFAULT 0,
+      latest_sequence INTEGER NOT NULL DEFAULT 0,
+      recorded_at INTEGER NOT NULL DEFAULT 0,
+      rtc_iso TEXT,
+      time_source TEXT NOT NULL DEFAULT 'unknown',
+      sd_card_mounted INTEGER NOT NULL DEFAULT 0,
+      shunt_voltage_mv REAL NOT NULL DEFAULT 0,
       last_seen_at INTEGER NOT NULL,
       last_connection_test_at INTEGER,
       last_connection_test_status TEXT,
@@ -45,11 +54,18 @@ export const SQLITE_TABLE_DEFINITIONS = {
       id TEXT PRIMARY KEY NOT NULL,
       institution_name TEXT NOT NULL,
       device_id TEXT NOT NULL,
-      temp_c REAL NOT NULL,
-      mkt_c REAL NOT NULL,
-      door_open INTEGER NOT NULL,
+      sequence INTEGER NOT NULL,
       recorded_at INTEGER NOT NULL,
-      session_id TEXT
+      rtc_iso TEXT,
+      time_source TEXT NOT NULL DEFAULT 'unknown',
+      current_temp_c REAL NOT NULL,
+      battery_voltage_v REAL NOT NULL DEFAULT 0,
+      shunt_voltage_mv REAL NOT NULL DEFAULT 0,
+      current_ma REAL NOT NULL DEFAULT 0,
+      power_mw REAL NOT NULL DEFAULT 0,
+      battery_percent_estimate INTEGER NOT NULL DEFAULT 0,
+      mkt_status TEXT NOT NULL,
+      sd_card_mounted INTEGER NOT NULL DEFAULT 0
     );
   `,
   syncJobs: `
@@ -105,6 +121,8 @@ export const SQLITE_TABLE_DEFINITIONS = {
       last_monitor_at INTEGER,
       last_runtime_error TEXT,
       last_monitor_error TEXT,
+      telemetry_history_cursor INTEGER,
+      telemetry_upload_cursor INTEGER,
       updated_at INTEGER NOT NULL
     );
   `,
@@ -149,7 +167,6 @@ export const SQLITE_TABLE_DEFINITIONS = {
     CREATE TABLE IF NOT EXISTS notification_preference_type_cache (
       id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
       temperature_enabled INTEGER NOT NULL,
-      door_open_enabled INTEGER NOT NULL,
       device_offline_enabled INTEGER NOT NULL,
       battery_low_enabled INTEGER NOT NULL
     );
@@ -178,6 +195,31 @@ export const SQLITE_LEGACY_COLUMN_MIGRATIONS = {
     last_connection_sync_failure_stage:
       "ALTER TABLE devices ADD COLUMN last_connection_sync_failure_stage TEXT",
     last_connection_sync_error: "ALTER TABLE devices ADD COLUMN last_connection_sync_error TEXT",
+    battery_voltage_v: "ALTER TABLE devices ADD COLUMN battery_voltage_v REAL NOT NULL DEFAULT 0",
+    current_ma: "ALTER TABLE devices ADD COLUMN current_ma REAL NOT NULL DEFAULT 0",
+    power_mw: "ALTER TABLE devices ADD COLUMN power_mw REAL NOT NULL DEFAULT 0",
+    battery_percent_estimate:
+      "ALTER TABLE devices ADD COLUMN battery_percent_estimate INTEGER NOT NULL DEFAULT 0",
+    latest_sequence: "ALTER TABLE devices ADD COLUMN latest_sequence INTEGER NOT NULL DEFAULT 0",
+    recorded_at: "ALTER TABLE devices ADD COLUMN recorded_at INTEGER NOT NULL DEFAULT 0",
+    rtc_iso: "ALTER TABLE devices ADD COLUMN rtc_iso TEXT",
+    time_source: "ALTER TABLE devices ADD COLUMN time_source TEXT NOT NULL DEFAULT 'unknown'",
+    sd_card_mounted: "ALTER TABLE devices ADD COLUMN sd_card_mounted INTEGER NOT NULL DEFAULT 0",
+    shunt_voltage_mv: "ALTER TABLE devices ADD COLUMN shunt_voltage_mv REAL NOT NULL DEFAULT 0",
+  },
+  readings: {
+    sequence: "ALTER TABLE readings ADD COLUMN sequence INTEGER NOT NULL DEFAULT 0",
+    rtc_iso: "ALTER TABLE readings ADD COLUMN rtc_iso TEXT",
+    time_source: "ALTER TABLE readings ADD COLUMN time_source TEXT NOT NULL DEFAULT 'unknown'",
+    current_temp_c: "ALTER TABLE readings ADD COLUMN current_temp_c REAL NOT NULL DEFAULT 0",
+    battery_voltage_v: "ALTER TABLE readings ADD COLUMN battery_voltage_v REAL NOT NULL DEFAULT 0",
+    shunt_voltage_mv: "ALTER TABLE readings ADD COLUMN shunt_voltage_mv REAL NOT NULL DEFAULT 0",
+    current_ma: "ALTER TABLE readings ADD COLUMN current_ma REAL NOT NULL DEFAULT 0",
+    power_mw: "ALTER TABLE readings ADD COLUMN power_mw REAL NOT NULL DEFAULT 0",
+    battery_percent_estimate:
+      "ALTER TABLE readings ADD COLUMN battery_percent_estimate INTEGER NOT NULL DEFAULT 0",
+    mkt_status: "ALTER TABLE readings ADD COLUMN mkt_status TEXT NOT NULL DEFAULT 'safe'",
+    sd_card_mounted: "ALTER TABLE readings ADD COLUMN sd_card_mounted INTEGER NOT NULL DEFAULT 0",
   },
   connection_grants: {
     expires_at: "ALTER TABLE connection_grants ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0",
@@ -194,6 +236,10 @@ export const SQLITE_LEGACY_COLUMN_MIGRATIONS = {
       "ALTER TABLE device_runtime_config ADD COLUMN primary_lease_expires_at INTEGER",
     primary_lease_session_id:
       "ALTER TABLE device_runtime_config ADD COLUMN primary_lease_session_id TEXT",
+    telemetry_history_cursor:
+      "ALTER TABLE device_runtime_config ADD COLUMN telemetry_history_cursor INTEGER",
+    telemetry_upload_cursor:
+      "ALTER TABLE device_runtime_config ADD COLUMN telemetry_upload_cursor INTEGER",
   },
 } as const;
 

@@ -21,9 +21,20 @@ Setup notes:
   - 1.3" SH1106 I2C OLED using `U8g2`
   - OLED driver `U8G2_SH1106_128X64_NONAME_F_HW_I2C`
   - OLED I2C wiring `SDA=21`, `SCL=22`
+  - RTC shares the I2C bus with the OLED
+  - DS18B20 vaccine probe on `GPIO17`
+  - passive buzzer on `GPIO16`
+  - internal flash backlog storage for unsent telemetry rows
   - capacitive touch navigation input on `T0`
   - capacitive touch select input on `T4`
   - built-in LED on `GPIO 2`
+
+Current telemetry behavior:
+
+- `/api/v1/runtime/status` returns the latest real telemetry snapshot
+- `/api/v1/runtime/history` pages the internal flash backlog by `sequence`
+- the app syncs all unsent rows into SQLite and Convex
+- the firmware no longer exposes reed-switch / door-open state
 
 Current local control behavior:
 
